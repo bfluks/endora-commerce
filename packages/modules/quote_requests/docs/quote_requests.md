@@ -1,9 +1,9 @@
 ---
-title: quote_requests
+title: Quote requests
 description: RFQ lifecycle (draft → quote → accept/reject)
 ---
 
-# `quote_requests`
+# Quote requests (`quote_requests`)
 
 The Quote Requests module implements the B2B negotiation loop.
 A customer (or sales representative on the
@@ -18,7 +18,9 @@ both render the same chronological history.
 
 Six values, replacing the foundation-era set:
 
-- `Created from admin` — drafted by a sales rep / admin, awaiting customer acceptance.
+- `Created from admin` — prepared by a sales rep / admin, awaiting customer acceptance. A quote
+  an operator creates stays **unshared** — invisible to the customer — until it is shared; see
+  *Unshared quotes and sharing*. Being shared is a flag beside the status, not a status of its own.
 - `Pending` — submitted by the customer, awaiting internal-side response.
 - `Approved` — green-lit by the responsible party.
 - `Completed` — an order has been placed from this Quote Request.
@@ -29,27 +31,32 @@ Six values, replacing the foundation-era set:
 
 ## Public surface
 
-Customer endpoints require a customer session; admin endpoints are
+Customer endpoints require a customer session, and the three that create a
+quote request or fill a basket also an organization permission of the
+member's role — see *Organization permissions*; admin endpoints are
 gated by `rfqs:handle`. PATCH-shaped endpoints accept `If-Match`
 versions for optimistic concurrency, and customer accept/reject
 revision additionally pin `expectedRevisionNumber`.
 
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
-| `GET /api/v1/quote-requests` | customer | List visible Quote Requests (org-admin role expands to whole-org visibility). |
+| `GET /api/v1/quote-requests` | customer | List visible Quote Requests (the *Administrator* role expands to whole-org visibility — see *Visibility model*), newest received first: by the moment an operator shared the quote, else by its creation. Unshared quotes are never listed. |
 | `GET /api/v1/quote-requests/:id` | customer | Detail with optional `comparisonAgainstLastSeen` block while awaiting acceptance. |
-| `POST /api/v1/quote-requests` | customer | Create + submit in one call. |
+| `POST /api/v1/quote-requests` | customer | Create + submit in one call. Needs `quote_requests.create`. |
 | `PATCH /api/v1/quote-requests/:id` | customer | Edit a Pending RFQ that the internal side has not yet revised — see *Customer draft edits*. |
 | `POST /api/v1/quote-requests/:id/accept-revision` | customer | Accept the seller's latest revision (also covers `Created from admin`). Needs an offer from the seller with every line priced — see *Agreed prices*. |
 | `POST /api/v1/quote-requests/:id/reject-revision` | customer | Reject the latest revision with optional reason. |
-| `POST /api/v1/quote-requests/:id/resubmit` | customer | Clone an old Quote Request into a new Pending one at the customer's current price list. |
-| `POST /api/v1/quote-requests/:id/convert-to-order` | customer | Seed the customer's cart from an Approved RFQ at the agreed unit prices and return the checkout URL. |
-| `GET /api/v1/admin/quote-requests` | admin | List, scoped by sales-rep assignment + filterable by status / organization. |
+| `POST /api/v1/quote-requests/:id/resubmit` | customer | Clone an old Quote Request into a new Pending one at the customer's current prices. Needs `quote_requests.create`. |
+| `POST /api/v1/quote-requests/:id/convert-to-order` | customer | Seed the customer's cart from an Approved RFQ at the agreed unit prices and return the checkout URL. Needs `carts.create`. |
+| `GET /api/v1/admin/quote-requests` | admin | One page of the list, scoped by sales-rep assignment. The server applies `assignmentScope`, `organizationId`, `status`, `q` (business id, organization or customer name, or a whole id), `sharing` (`unshared` or `shared`; absent = both), `sort` (`updatedAt` or `total`, `asc` / `desc`) and the page (`page`, `pageSize` up to 200, default 25); `pagination` carries `page`, `pageSize` and `total`. |
 | `GET /api/v1/admin/quote-requests/:id` | admin | Detail with full actor identity in the event log, and per line the reference price and the customer's proposal — see *Reference price*. |
 | `GET /api/v1/admin/quote-requests/:id/history` | admin | The request's history as readable entries — see *History*. |
-| `POST /api/v1/admin/quote-requests` | admin | Create on customer's behalf → status `Created from admin`. |
-| `PATCH /api/v1/admin/quote-requests/:id` | admin | Modify a Pending or Created from admin RFQ → triggers customer re-acceptance. |
+| `POST /api/v1/admin/quote-requests` | admin | Create on customer's behalf → status `Created from admin`, unshared. Lines may be left without a price. |
+| `GET /api/v1/admin/quote-requests/create-defaults` | admin | `{ validityDays }` — the default validity a new quote starts with (`null` = no deadline). |
+| `POST /api/v1/admin/quote-requests/:id/share` | admin | Share an unshared quote with its customer — see *Unshared quotes and sharing*. Optional `If-Match`. |
+| `PATCH /api/v1/admin/quote-requests/:id` | admin | Modify a Pending or Created from admin RFQ → triggers customer re-acceptance (an unshared quote: nobody is told). |
 | `POST /api/v1/admin/quote-requests/:id/approve` | admin | Approve a Pending RFQ whose every line has an agreed unit price. |
+| `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket` | admin | Seed the basket of the customer who owns an Approved RFQ at the agreed unit prices, replacing what it held, for that customer to check out. The basket is the one of the channel the request was raised on. The same rules as the customer's own conversion; audited as `quote_request.prepare_customer_basket`. |
 | `POST /api/v1/admin/quote-requests/:id/cancel` | admin | Cancel with optional reason. |
 | `POST /api/v1/admin/quote-requests/:id/assign` | admin | Set `assignedAdminUserId` (informational). |
 | `GET`, `POST /api/v1/admin/quote-requests/list-views`; `PATCH`, `DELETE …/list-views/:id` | admin | Saved views on the quote request list — see *Saved views*. |
@@ -73,6 +80,136 @@ by a module that can disappear. The one endpoint left above is the one that
 reads a quote request, and it is gated `rfqs:handle` precisely so that it
 disappears with this module.
 
+## Unshared quotes and sharing {#unshared-quotes-and-sharing}
+
+A quote an operator creates for a customer — on the *Create quote request*
+screen, whichever screen opened it, a CRM opportunity included — starts
+**unshared**: the customer cannot see it until an operator shares it. The
+operator can build it over several sittings and share it with one action when
+it is ready. A request a customer submits, an order's *Clone to quote* and the
+operator's quick-order build take the buyer's path and are visible to the
+customer at once, as before. Operator quotes that existed before this
+behaviour was installed stay visible: the migration marks every existing quote
+shared.
+
+The Admin UI marks an unshared quote with the **Not shared** badge on its
+screen and in the list, and its screen says under the header that only your
+team can see it and the customer is not notified until it is shared. The list's
+**Sharing** filter (`sharing=unshared` or `shared` on the API) narrows it to
+unshared or shared quotes.
+
+### While a quote is unshared {#while-a-quote-is-unshared}
+
+- **No customer can see it.** It is left out of every customer read: the
+  requester's own list, an Organization *Administrator*'s, a roll-up login's,
+  and the lists the `customers` module reads, the quote requests tab of a
+  customer's screen in the Admin UI included — operators find unshared quotes in the quote request list. Its
+  address and every customer action on it (edit, accept, reject, resubmit,
+  convert to a basket, and the `carts` module's
+  `POST /api/v1/cart/from-quote-request/:id`) answer `404`, exactly as for a
+  quote that does not exist, and change nothing.
+- **Nobody on the buyer side is told.** Creating, modifying and cancelling it
+  record no customer notification on any channel.
+- **It never expires**, by inactivity (`expiry_days`) or otherwise.
+- **Every edit the Admin UI allows is allowed**, and each is recorded in the
+  History. Its lines may stay without a price.
+- **Its validity is a number of days, not a date.** The date is written when
+  it is shared — see *Validity date*.
+- **Its PDF can be exported, not sent.** *Send PDF to customer* is not offered,
+  and the send route answers `409 RFQ_NOT_SHARED` — see *Quote PDF*.
+- **Cancelling it** tells nobody, and it stays invisible to the customer.
+
+### Sharing {#sharing}
+
+**Share with customer** is the primary action on an unshared quote's screen.
+It asks first — naming the customer and the validity the share will write —
+and calls `POST /api/v1/admin/quote-requests/:id/share`. Anyone holding
+`rfqs:handle` who can see the quote's Organization may share it. A share:
+
+- makes the quote visible to the customer, who can accept or reject it like
+  any quote an operator prepared;
+- writes the validity date: the moment of sharing plus the quote's days, or no
+  date;
+- records a *Shared with the customer* entry in the History — who shared it
+  and when — and sends the *quote prepared* notification
+  (`quote_request_customer_prepared`) to the buyer side, once, on the channels
+  under *Notifications*;
+- is final. A shared quote does not return to unshared; later changes of its
+  lines or prices are revisions the customer is told about, as before.
+
+The customer's own history of the quote starts at the share. The admin History
+keeps the edits made before it.
+
+A share is refused, with nothing written and nobody told, when:
+
+| Situation | Answer |
+| --- | --- |
+| The quote is already shared — a quote a customer submitted and an operator quote from before this behaviour included | `409 RFQ_ALREADY_SHARED` |
+| The quote is no longer `Created from admin` (it was cancelled or expired) | `409 RFQ_NOT_QUOTED` |
+| `If-Match` names an older version | `409 VERSION_CONFLICT` |
+| A line has no agreed unit price | `409 QUOTE_INCOMPLETE`; `details.code` is `share` and `details.lines` names each such line (`id`, `position`, `productName`, `variantLabel`, `groupName`) in display order |
+| The customer account no longer belongs to the quote's Organization, was deleted or anonymised, or is blocked | `409 RFQ_SHARE_CUSTOMER_UNAVAILABLE`; `details.code` is `not_member`, `inactive` or `blocked` |
+| A module's hook refuses it | the hook's own status, code and `details` — see [Hookable action](#hookable-action) |
+
+A quote of an Organization the caller may not see answers `404`. Two shares of
+the same quote at the same moment are serialised: the second answers
+`409 RFQ_ALREADY_SHARED`, and the customer is told once.
+
+**Create and share.** The *Create quote request* screen has two buttons.
+**Save without sharing** creates the quote unshared. **Create and share** creates it
+and shares it in one step, after the same question; it is disabled while a
+line has no price. When the share part is refused, the quote stays unshared
+and the operator lands on it with the refusal shown. When the create answers
+warnings — products the customer cannot buy on the chosen channel — nothing is
+shared: the screen lists the warnings and offers **Share with customer** for
+the quote just created.
+
+### Hookable action {#hookable-action}
+
+Sharing is declared hookable, so another module — a deployment's overlay
+module or an installed package — can refuse a share, for example while an
+internal approval is still pending. Register a command hook against the ref in
+`QUOTE_REQUEST_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`) and list
+`quote_requests` in your manifest `dependencies`. How hooks run, are ordered
+and are refused is on the *Command Bus* architecture page. The admin's
+*Command hooks* screen lists the action and the hooks registered on it.
+
+| Action | Ref | Written by | Hook data |
+| --- | --- | --- | --- |
+| `quote_request.share` | `QUOTE_REQUEST_HOOKABLE_ACTIONS.share` | `POST /api/v1/admin/quote-requests/:id/share`, which *Create and share* calls too | `quoteRequestId`, `organizationId`, `customerAccountId`, `salesChannelId`, `currentRevisionNumber`, `expiresAt` |
+
+Only `beforeCommit` is offered, so a share writes no outbox row. The data type
+is `QuoteRequestShareHookData`: ids, a revision number and a date, nothing of
+the lines or prices. `expiresAt` is the validity date the share is writing, or
+`null`; `salesChannelId` is `null` for a quote with no channel. A hook that
+needs the lines reads them through `quoteRequestReadPort.listItems` — a share
+changes no line.
+
+- **When it runs.** Inside the share's transaction, after the built-in
+  refusals above have passed and the quote has been written shared, before the
+  audit entry and the commit.
+- **Refusing.** Throw a `CommandHookRefusal`
+  (`@endora-commerce/platform/commands`) with a code your own module declares
+  in its manifest `errorCodes`, and a sentence for it in your own bundle. The
+  whole share is rolled back — the quote, the History entry and the
+  notification records — so the quote stays unshared and nobody is told. The
+  caller receives your status, code and `details` unchanged, and the Admin UI
+  shows your translated sentence.
+- **Refusals reach an administrator.** The message and `details` go to the
+  administrator who pressed *Share* as they are thrown: no secrets,
+  credentials, tokens or internal URLs, no stack traces, and no data of any
+  Organization but the quote's own.
+- **One second at most.** The hook runs while the share holds a lock on the
+  quote and an open transaction, so every other write to that quote waits for
+  it. Keep it well under 100 ms; one second is the budget for all of it. Do no
+  external I/O (HTTP, a mail server, a queue) without a timeout that fits
+  inside that budget, and prefer reading your own tables. A hook that cannot
+  decide in time refuses with its own code rather than holding the lock.
+- **Writing.** Only your own module's tables, on `ctx.em`, naming what you
+  wrote with `ctx.noteAuditChanges`.
+
+No other write of this module is hookable.
+
 ## Agreed prices
 
 A Quote Request becomes an order only at unit prices the seller agreed. A
@@ -91,6 +228,7 @@ met:
 | `accept-revision` | The seller's offer leaves a line without an agreed unit price. | `QUOTE_INCOMPLETE` |
 | admin `approve` | Any line has no agreed unit price. | `QUOTE_INCOMPLETE` |
 | `convert-to-order` | Any line has no agreed unit price. | `QUOTE_INCOMPLETE` |
+| admin `share` | Any line has no agreed unit price (`details.code` `share`, the lines named). | `QUOTE_INCOMPLETE` |
 
 What this means in practice:
 
@@ -100,12 +238,106 @@ What this means in practice:
 - The rules are about a **missing** price. An agreed unit price of exactly
   `0` that an operator entered — a free sample line — is an agreed price like
   any other, and such a request can be accepted, approved and ordered.
+- **A unit price has up to four decimal places.** An agreed or a desired unit
+  price may be typed as `0.0125`; a fifth place is refused with
+  `400 UNIT_PRICE_PRECISION_EXCEEDED` (*A unit price may have at most four
+  decimal places.*), never rounded. The price is stored as typed
+  (`numeric(14,4)`), reaches the basket and the order unrounded, and only a
+  line's value — the unit price × the quantity — is rounded to two places,
+  once: 0.0125 for 10 000 pieces is 125.00. The screens and the PDF show a
+  unit price with its significant places, up to four.
+- **Every price on a request is in one currency: the default currency of the
+  sales channel the request was raised on.** It is decided once, when the
+  request is created — by the customer or by an operator on their behalf — and
+  every later write of its lines (a draft edit, a seller revision, a
+  resubmission) keeps it, so one request never mixes currencies. Each line
+  stores it as `lineCurrency`. A resubmission copies the source request's
+  lines, prices included, so it keeps their currency even when it is raised on
+  a channel whose default currency differs: relabelling the currency would
+  change what those prices mean. A request with no channel, raised before
+  requests recorded one, is in PLN. Requests created before this rule stay in
+  the currency they were stored with (PLN), whatever their channel's currency.
+- An operator may **create** a quote with lines that have no price yet, and
+  finish it later: it stays unshared, and sharing it is refused until every
+  line is priced. A request a customer submits keeps the rules above.
 - `reject-revision` is not affected: a customer can still withdraw a request
   the seller has not answered yet.
 - A request that reached `Approved` with an unpriced line before these rules
   existed cannot be converted into an order. Its lines can no longer be
   edited, so the way forward is `resubmit`, which raises a new request for the
   seller to price.
+
+## Validity date
+
+An operator can date an offer — *Valid for N days* when revising a request or
+creating one on a customer's behalf (`expiresInDays`, a whole number from 0 to
+3650, stored as `expiresAt`). **0 days means no deadline** on every write — on
+a new quote, on an unshared one and on a revision of a shared one — and so does
+`null`. A revision with 0 days removes the date, and the customer can still
+accept the quote; to close an offer, cancel it. (Earlier releases read 0 days
+on a revision as "expires now".) Leaving `expiresInDays` out is different: a
+revision keeps the current date — the Modify tab's empty field on a shared
+quote — and a new quote takes the store's default. On an unshared quote's
+Modify tab, emptying the field sends `null` and removes its days.
+
+- **On a quote an operator creates, the days count from the share**, not from
+  the create. The unshared quote keeps the number of days, and the share writes
+  the date: the moment of sharing plus those days. A quote prepared over a
+  month still gives the customer its full period.
+- **A new quote starts with the store's default**, the setting
+  `quote_requests.default_validity_days` (see *Settings*). The *Create quote
+  request* screen fills it in, and the operator may change or clear it for that
+  quote. Changing the setting does not change quotes already created. Out of
+  the box it is 0: no deadline.
+- **On a revision of a shared quote**, or of a customer's request, the days
+  count from the revision, as before.
+
+Both parties are shown *expires &lt;date&gt;*, and the date is **the last moment
+an order can be placed at the agreed prices**, not only the last moment the
+basket can be prepared. Without a date the agreed prices have no deadline.
+
+| When | After the date | Code |
+| --- | --- | --- |
+| The buyer accepts the offer (`accept-revision`) | Refused | `410 RFQ_EXPIRED` |
+| The buyer converts the accepted quote into a basket (`convert-to-order`) | Refused | `410 QUOTE_VALIDITY_ENDED` |
+| The order is placed from that basket | Refused | `410 QUOTE_VALIDITY_ENDED` |
+
+**The basket is checked again at placement.** Each basket line filled by
+`convert-to-order` remembers the quote its agreed price came from. When the
+order is placed from that basket — at the storefront checkout or by any
+other path that places the buyer's basket — every line still priced at
+its agreement (still at the agreed quantity) is checked against that quote as
+it is *now*. A basket converted on the last valid day therefore cannot be
+ordered at the agreed prices the day after: a new quote must be issued. The
+refusal changes nothing — the basket stays as the buyer left it, and the quote
+stays `Approved`.
+
+The refusal's `details.code` says why, and the buyer reads a sentence in their
+language for each:
+
+| `details.code` | Meaning |
+| --- | --- |
+| `lapsed` | The quote's validity date has passed. |
+| `withdrawn` | The quote no longer applies: the seller re-opened it with a new revision, it was cancelled or expired, or it no longer exists. |
+| `unavailable` | The Quote Requests module is switched off, so nothing can confirm the agreed prices. |
+
+The storefront checkout asks the same question before the buyer presses
+*Place order*: the order-total preview (`POST /api/v1/orders/preview-total`)
+answers `quoteCommitmentRefusal` with one of the three values, or `null`, and
+the checkout shows a notice and disables the button. For a lapsed or withdrawn
+quote it leads to the buyer's quote requests, where they ask for a new quote.
+
+What still places:
+
+- **A line moved off its agreed quantity.** It is priced from the price list,
+  like any basket line, so it consumes nothing the seller agreed and the
+  quote's date does not bind it.
+- **A basket with the quoted lines removed.** The buyer can always order the
+  rest at current prices.
+- **A second basket of the same quote after the first was ordered** (two
+  colleagues who each converted it). The quote is then `Completed`; the second
+  order names no quote, and while the validity date has not passed its lines
+  keep the agreed prices.
 
 ## Reference price
 
@@ -115,8 +347,11 @@ what the seller compares the customer's proposal with.
 
 - **Net, per base unit.** The price is the net unit price of one base piece —
   the unit every line quantity is counted in — whatever packaging unit the
-  customer chose. The customer's price lists, the quantity bracket and an
-  active sale price apply.
+  customer chose. It is what the price books charge this customer for the
+  line's product, variant and quantity — the base price, a catalogue price for
+  everyone on the channel, the customer's organization or customer-group price,
+  and a sale when it is lower (see the `price_lists` module's page) — in the
+  request's currency when it names one, else in the channel's default currency.
 - **Resolved on the server, for the request's owner, on the request's sales
   channel.** The owner is the customer account that raised the request and its
   organization — also when an organization administrator edits a colleague's
@@ -132,6 +367,14 @@ what the seller compares the customer's proposal with.
 - **A cart is its own reference.** A request converted from a cart stores each
   cart line's unit price as that line's reference price. It does **not** record
   it as the customer's proposal: such lines carry no proposed price.
+
+For developers: the stored reference is resolved through `price_lists`'
+`buyerLinePricePort` (`BuyerLinePricePort.resolveForBuyer` in
+`@endora-commerce/contracts`), which prices every line of a request in batches
+through the same resolution as the cart; the port performs no authority check,
+so this module passes the request's owner it has already authorised. The admin
+screens' *current price* comes from `POST /api/v1/admin/price-books/resolve`,
+gated by `price_lists:read`.
 
 The admin detail shows, per line, the reference price, the customer's proposed
 unit price, their difference as a signed amount and a percentage of the
@@ -157,13 +400,37 @@ read the cart price from `referenceUnitPrice`.
 
 **Totals.** The reference price is never used as a fallback for a total. The
 customer list's `totalAtCustomerPrice` is `null` — shown as `—` — unless
-**every** line carries a proposal, the rule the admin list already applied; a
-cart-converted request therefore has none until it is priced. The admin list's
+**every** line carries a proposal; a cart-converted request therefore has none
+until it is priced. The admin list carries the same two totals, and its
 customer-price total survives the seller's revisions, because a revision keeps
-each line's proposal. The CRM opportunity value of a request with no proposal
-and no agreed price is `0`; a revised line the customer left unpriced is valued
-at the proposal carried from the customer's last draft edit until the seller
-sets an agreed price.
+each line's proposal.
+
+**The amount of a quote request** is one figure, computed by this module and
+shown by the admin list, by a CRM opportunity's linked quote requests and by a
+project's linked records alike. Each line counts at its quantity × its agreed
+unit price, or — while it has none — the unit price the customer asked for.
+Each line's value is rounded half up to two places, and the line values are
+added. A line with neither price adds nothing. The amount is net of tax and in
+the first line's currency. A revised line the customer left unpriced counts at
+the proposal carried from the customer's last draft edit until the seller sets
+an agreed price.
+
+| The lines | Shown |
+| --- | --- |
+| every line has an agreed price | the amount |
+| some lines have an agreed price | the amount, marked **Partially agreed** |
+| no line has an agreed price, at least one has an asked price | the amount, marked **Not yet agreed** |
+| no line has any price, or the request has no lines | `—` |
+
+The admin list answers `amount` (`null` when no line has a price) and
+`agreement` (`agreed`, `partial` or `none`) on each row. Other modules read
+both through `quoteRequestReadPort.amountOf(id)`, which answers `{ amount,
+currency, agreement }`, or `null` for a request the caller cannot see.
+
+Each row of the admin list also answers `statusName`, the status's name in the
+response language beside its `status` code, and other modules name a status
+through `quoteRequestReadPort.statusName(status, language)` — the same wording
+global search uses, so no module keeps a copy of it.
 
 ## History
 
@@ -186,15 +453,48 @@ English and Polish:
   added (with quantity and agreed price) and removed, quantity, agreed price,
   the customer's proposed price, line note, header note and validity date, each
   as old → new. Lines are named by product and variant. Packaging-unit and
-  custom-field changes are not listed. A revision with no listed change reads
-  *offer re-sent without changes*. A reason or note given with a cancellation,
+  custom-field changes are not listed. Changes to the line groups are listed
+  too — *group added*, *group removed*, *group renamed* (from → to), a line
+  *moved* from one group to another (*Ungrouped* standing for no group), and
+  *order changed* when lines or groups were only reordered — see *Line groups*.
+  A revision with no listed change reads *offer re-sent without changes*. A reason or note given with a cancellation,
   rejection or approval is shown.
+- **Sharing.** A share is one entry, *Shared with the customer*, naming the
+  administrator who shared, with the deliveries of the *quote prepared*
+  notification under it. A change to an unshared quote's days is listed as
+  *Validity after sharing*, old → new (*no deadline* for none). The customer's
+  history of a quote an operator shared starts at that entry: what was done
+  before it is shown on the admin surface only. See *Unshared quotes and
+  sharing*.
+- **Values not carried from a sales opportunity.** When a request created from
+  a sales opportunity could not take some of the opportunity's custom-field
+  values (see *Custom fields*), the history holds one entry by *System*,
+  *Custom field values not carried from a sales opportunity*, naming the
+  opportunity by its number and listing each skipped field — by the name of the
+  opportunity's field, as it read when it was skipped — with the reason. It shows no value, and anybody who
+  can open the request reads it. The entry is **admin-only**: the customer's view
+  of the request never shows it. Values that were carried are not an entry of
+  their own.
+- **Who was told.** Under an entry that notified anybody, the deliveries are
+  listed — recipient, channel and outcome; see *Notifications*. Admin-only,
+  like the names.
 - **Bounded.** The history reads the **most recent 100 events**. When older
   events exist, the reply carries `truncated: true` and the tab says that older
   entries are not shown.
 
 Requests raised before this history existed are described from the data
 already stored; nothing is backfilled.
+
+**The history, not the audit log, holds the values.** The platform audit log is
+read by everybody holding `audit_log:read`, whichever organizations they may
+see, so a request's audit entries carry names and structure only. A
+cancellation records `hasReason`, never the reason. A grouping records each
+group's line count, never its name. A PDF send records how many addresses it
+went to, never the addresses. A preparation of the customer's basket records
+the basket and its size, not the customer. A carry from a sales opportunity
+names the carried fields as `changedCustomFields`, without their values. The
+values stay on the request, its revisions and this history, which is read
+under the request's own visibility.
 
 ## Customer draft edits
 
@@ -215,6 +515,177 @@ stored reference price, unless the seller changed them. The stored reference
 price stays even when the seller changes the line's quantity: a seller's
 revision never resolves it again. A line the seller adds carries the variant
 and note chosen and no packaging unit.
+
+## Line groups
+
+An operator can sort a quote's lines into **named groups** — *Ground floor*,
+*First floor*, *Options* — so that a long offer reads the way the customer
+thinks about the job. Groups are **presentation only**: they change no price,
+discount, quantity or total, and a grouped quote totals exactly what the same
+lines total ungrouped.
+
+**Where.** The **Modify** tab of a quote and the **Create quote request**
+screen, while the quote's lines can be edited — *Created from admin* and
+*Pending*. In every other state the grouping is shown read-only, and a write
+that sends one is refused like any other line edit (`409 RFQ_NOT_QUOTED`). No
+new permission is involved: grouping needs `rfqs:handle` and the quote's
+organisation in the representative's reach, as editing its lines does.
+
+**What an operator can do.**
+
+- **Add group** creates a group and puts the focus in its name. A name is
+  trimmed and holds 1 to 120 characters; two groups may share a name. A quote
+  holds at most **50** groups — *Add group* is then disabled and says so. An
+  empty name reads *Enter a group name.* and blocks the save.
+- **Rename** a group in its name field; **delete** it with its delete button.
+  Deleting a group never deletes a line: its lines move to the **Ungrouped**
+  section, in their order.
+- **Move a line** to another group, or to a chosen place in its own, by
+  dragging its handle, from the keyboard — focus the handle, press Space or
+  Enter, move with the arrow keys (past a group's last line the line enters the
+  next section), Space or Enter to drop, Escape to cancel — or with the line's
+  **Move to group** menu, which needs no dragging. Every move is announced to
+  screen readers.
+- **Reorder groups** by dragging, from the keyboard, or with the *Move group
+  up* / *Move group down* buttons. **Ungrouped** is always last and cannot be
+  moved, renamed or deleted.
+- A product added with a group's own **Add product** joins that group; any
+  other added line joins *Ungrouped*.
+- A group emptied of its lines **stays** until it is deleted, shown as an empty
+  drop area (*Drag lines here or use Move to group.*). Empty groups are never
+  shown to the customer, printed or carried to an order.
+- **One product on several lines.** The same product may sit on several lines —
+  in different groups, or twice in one: *5 pieces in Hall A, 3 in Hall B*. On
+  the *Modify* tab, **Split line** (the button beside *Move to group*, on a line
+  of quantity 2 or more) asks for the quantity to move to a new line (from 1 to
+  the line's quantity minus 1) and the new line's group — the line's own by
+  default — and adds a line of the same product, variant, packaging unit, agreed
+  price and customer's proposal, reducing the original. On *Create quote
+  request* a product already on the request can simply be added again.
+
+**Summaries.** Every section shows its item count and its net, VAT and gross,
+by the same rule the quote's own totals use, and its discount against the list
+price where the screen shows list prices. They are recomputed as lines are
+edited and moved. The create screen shows no VAT, so its sections show the
+item count and the net.
+
+**Saving.** The grouping is saved by the button that saves the lines — **Save
+revision** or **Create** — in the same write, under the same concurrency check,
+and recorded in that write's audit entry (`quote_request.modify` or
+`quote_request.create_on_behalf`, with each group's line count before and
+after; the names are in the revisions, not the audit log). **A save that changes only the grouping is a revision like
+any other**: the customer is notified and asked to accept it. The **History**
+tab lists the grouping changes of each revision (see *History*).
+
+**What the customer sees.** The storefront quote shows each group that holds a
+line as a headed section, in order, with its lines and its summary, then the
+lines without a group under **Other items**; a quote with no group looks
+exactly as before. The customer cannot create, rename, delete or reorder a
+group, and no customer request accepts a grouping. The comparison with the last
+revision the customer saw says, in one entry, that *the arrangement of the
+lines changed*, and names nothing else. Each line is compared with its own: for
+a product on several lines, an entry names the group of the line it is about —
+*Bolt (Hall B): quantity 3 → 2* — and the admin *History* does the same. Accepting and rejecting a revision work
+as before: the grouping is never a reason to refuse an acceptance.
+
+**What keeps a line's group.** A customer's own draft edit keeps every line it
+keeps in its group. An API client that saves a quote's lines without sending
+`groups` keeps every line it keeps in its group and puts new lines in
+*Ungrouped*. Where a line carries no id, it is matched to a stored line of the
+same product by its group first, then by its quantity, then by position — so
+removing one of two lines of a product keeps the other in its group. A **resubmission** starts ungrouped: it is a new request, re-priced,
+for the representative to group again. **Convert to order** fills the basket
+in the quote's order, and the order placed from it keeps the groups — see the
+Orders module's page.
+
+**The PDF** prints the groups — see *Quote PDF*.
+
+**API.** `PATCH /api/v1/admin/quote-requests/:id` and
+`POST /api/v1/admin/quote-requests` accept an optional `groups` list — the
+whole grouping, in display order, each `{ key, id?, name }` (`id` keeps an
+existing group, a group without one is created, a stored group left out is
+deleted) — and per line an optional `groupKey` (`null` = ungrouped); lines are
+sent in display order. `groups` without `items` answers `400`; an `id` that is
+not a group of this quote answers `422 VALIDATION_FAILED`. A new line split off
+a stored one carries `splitFromId` (the stored line's id): it then keeps that
+line's packaging unit, customer's proposal, note and reference price; a
+`splitFromId` that names no line of this quote is ignored. Every reply carries
+`itemGroups` (`{ id, name, position }`) and, per line, `groupId` and
+`position`, with lines in display order — the admin reply lists empty groups
+too, the customer reply only the groups that hold a line. The published read
+port `quoteRequestReadPort.listItems` answers each line's `group` and
+`position`, in display order.
+
+## Order minimums and packaging units
+
+Quote requests apply the catalogue's minimum order quantities — the product's
+minimum in pieces and each packaging unit's minimum in units, counted over every
+line of the product in the request (the Catalog module's page defines both).
+**The rule follows who is writing, not the route.**
+
+**Packaging units are named by id.** A customer's line (create, draft edit,
+cart → quote request) may carry `packagingUnitId`. It must be a current unit of
+the line's product; the server stores that unit's catalogue name and base
+quantity and ignores any name or base quantity the line also sent. A line that
+sends a packaging name and base quantity without an id is accepted only when
+both match one of the product's units. Anything else is refused whole with
+`422 PACKAGING_UNIT_MISMATCH`, nothing written; `details.lines[]` gives each
+failing line's `index` and a `reason`. Every failure of an id — unknown,
+deleted, or another product's unit — has the same reason, `unknown_unit`, so
+the answer reveals nothing about other products; a name has `name_unknown` or
+`base_quantity_mismatch`. This also refuses a draft edit that sends back a
+line whose stored packaging label no longer matches a catalogue unit.
+`packagingUnitId` is returned on the admin and the customer read, and an
+administrator's revision keeps it on the lines it keeps.
+
+**A customer's write is refused below a minimum.** Create
+(`POST /api/v1/quote-requests` — directly, from the cart, from quick order,
+from a shopping list or by cloning one of their orders), draft edit
+(`PATCH /api/v1/quote-requests/:id`) and resubmit
+(`POST /api/v1/quote-requests/:id/resubmit`) answer
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+`422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]` for every
+offending line, and write nothing; the sentence and the product names are in
+the language the response is answered in (the request's `Accept-Language`,
+q-weights honoured, otherwise the channel's default language). The order of
+checks: a product the customer
+may not see or the channel does not publish is refused as unknown first, so
+nothing about it is disclosed; then packaging, then minimums — all before any
+reference price is resolved.
+
+- **Draft edit.** A line the customer left unchanged — same product, variant,
+  packaging and quantity as a stored line — is not refused, even below its
+  minimum; its pieces still count toward the product's total when another line
+  of that product is checked. A line names its packaging unit by the unit's id,
+  so a unit renamed in the catalogue since the line was stored is still the
+  same unit, and the line stays unchanged (and keeps its stored reference
+  price).
+- **Resubmit** is judged as a new request, with no exemption, in pieces (it
+  carries no packaging). A request whose product no longer exists is refused
+  with `404`.
+- **Accepting or rejecting a revision** is never refused for minimums.
+
+**An administrator's write is never refused for a minimum.** Create on behalf,
+**Modify** (including negotiated quantities), cloning an order to a quote
+request from the admin and the admin's quick-order build to a quote request
+write below-minimum lines. The admin read (`GET /api/v1/admin/quote-requests/:id`)
+gives each such line a `minimumWarning` (`{ kind, minimum, packagingUnitName? }`),
+judged over the request's current lines, and the quote request screen shows it
+as a *Below minimum* badge on the line, on **Overview** and in **Modify**. The
+warning informs and blocks nothing; it never reaches the customer's read.
+The admin's clone-to-quote and quick-order build still validate packaging.
+
+**Ordering the accepted quote keeps its quantities.**
+`convert-to-order` fills the basket at the agreed quantities without checking
+minimums; in the basket each line seeded from the quote is exempt while its
+quantity equals the quote's, and checkout honours that only while this request
+is still valid (the Carts and Orders modules' pages). With this module switched
+off nothing can vouch for the quote, so such a basket loses its exemptions at
+checkout.
+
+Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds
+`quote_request_items.packaging_unit_id` (nullable, no foreign key — the unit's
+name and base quantity stay snapshotted on the line).
 
 ## Price negotiation lock
 
@@ -263,15 +734,17 @@ every request, uncached, so a change applies to the next request.
 
 **Who sees and changes it.** Both controls are panels on the organization and
 customer screens, shown to roles with `customers:read`; changing a value needs
-`customers:manage`, and the panel's control is disabled without it. A role that
+`customers:manage`, and the panel's control is disabled without it. The panels
+have no save of their own: choosing a value stages it, and the screen's one Save writes it, after
+the organization's or the customer's own changes. Leaving the page with it unsaved asks first. On
+the customer screen the "Effective: …" line is hidden while a change is unsaved, because it describes
+the stored value. A role that
 holds `customers:manage` but **not** `customers:read` sees no panel. A sales
 representative reaches only the organizations they may see; any other id
 answers `404`. An organization with no assigned sales representative is visible
 to every representative (see *Visibility model*), so any representative may
-change its lock; issue #305 tracks that rule itself. Its customer accounts are
-not reachable that way: they sit behind the assigned-organization filter, so a
-representative's request for an account's panel — read or change — answers
-`404`, and its overrides stay with a platform administrator. Every change is an audited write that records the
+change its lock — and, since issue #305, its customer accounts' overrides too:
+the accounts are reached by the same rule as their organization. Every change is an audited write that records the
 administrator, the organization or account and the old and new value.
 
 **Switched off.** While this module is off, the panels, the four admin routes,
@@ -285,19 +758,128 @@ A sales representative is a platform administrator with the
 `SalesRepAssignmentService.canSeeOrganization(adminUserId, organizationId)`
 predicate centralises the visibility rule:
 
-1. `platform_admin` role → sees every organization.
-2. Otherwise the admin sees an organization iff a row in
+1. Any role other than `sales_representative` (`platform_admin`, or a custom
+   role holding `rfqs:handle`) → sees every organization (issue #957).
+2. A `sales_representative` sees an organization iff a row in
    `organization_sales_rep_assignments` ties them together, OR the
    organization has zero rows in that table (the "unassigned-org
-   fallback" — visible to every sales rep).
+   fallback" — visible to every sales rep). With `organizations:rollup`
+   the nearest ancestor-or-self carrying any row decides instead.
+
+It is the one rule on every surface (issue #305): the tenant filter every
+admin quote-request read runs under is that rule — every organization except
+those governed by another representative — so the list, the detail, the
+history and the global search all agree, and an unassigned organization's
+requests are listed and readable by every representative.
 
 A sales representative who names a quote request of an organization they may
 not see gets the same `404` as for an id that does not exist, on every admin
 quote-request route — the detail, the history and every action. (Earlier releases answered
 `403` on some of those routes, which told the caller the request existed.)
 
-A customer with the `org_admin` role on their own organization sees
-every Quote Request in the organization, not just their own.
+A member holding their organization's *Administrator* role sees every Quote
+Request in the organization, not just their own — on the list, the detail and
+every action that names one. Every other member sees only their own; a
+colleague's answers `404`. The rule reads the role the member holds, never the
+legacy `role` column, and no organization permission widens it: a custom role
+granting every code still sees only its own requests. (When internal approval
+of quote requests ships, this visibility moves to a permission of its own.)
+
+`RfqCustomerPort.listForCustomer` — what `customers` reads for a buyer's own
+list and for one customer's list in the Admin UI — always answers the requests
+that account itself raised, whatever role it holds, and never an unshared
+quote.
+
+## Organization permissions
+
+`quote_requests` declares one organization permission — a code an
+Organization's administrator grants to a role on the storefront role screens
+(see the `organizations` module):
+
+| Code | Label | Member role holds it by default | Gates |
+| --- | --- | --- | --- |
+| `quote_requests.create` | Create quote requests | yes | `POST /api/v1/quote-requests` and `POST /api/v1/quote-requests/:id/resubmit`; the modules that create a quote request for the buyer — from a cart, a shopping list, a quick-order build — check it too |
+
+`POST /api/v1/quote-requests/:id/convert-to-order` fills the buyer's basket, so
+it is gated by the `carts` module's `carts.create` instead.
+
+A member whose role lacks the code is refused `403
+ORGANIZATION_PERMISSION_REQUIRED`, naming the permission, before the body is
+validated or the quote request is looked up. An anonymous visitor still gets
+`401`. While `quote_requests` is switched off, its code leaves the permission
+catalogue and every member's effective permissions; a role's stored grant is
+kept, and is effective again when the module is switched back on.
+
+On the storefront a member without `quote_requests.create` is offered no
+add-to-quote button on the product page or the product cards and no *Convert to quote
+request* on the cart. The quote-request draft stays reviewable, but its submit
+button is disabled with the reason beside it: *"Your role does not allow
+sending quote requests."* On a quote request's page, resubmitting is offered
+only with `quote_requests.create`, and placing the order from an approved
+request only with `carts.create`.
+
+## Custom fields
+
+Quote requests take custom fields, defined on **Custom fields**. They follow this module: while
+`quote_requests` is switched off its fields are not listed there, cannot be created or edited and
+are not offered by the definitions API; the fields, their options and the stored values are kept
+and come back unchanged when the module is switched on again.
+
+**On the Create quote request screen** an operator holding `custom_fields:read` fills the request's
+custom fields, sent as `customFieldValues` on `POST /api/v1/admin/quote-requests`. They are checked
+with the administrator's rules before the request is numbered or anything is written, and every
+`required` quote-request field is enforced even when the request sends no values; a refusal is
+`422 CUSTOM_FIELD_VALUE_INVALID` (`details` entries `{ path, issue }`), shown at the field it names,
+and nothing is created. The `quote_request.create_on_behalf` audit entry names the stored keys
+(`changedCustomFields`), never their values. A buyer's own submission is unchanged.
+
+### Values carried into and out of a request
+
+A quote request field can carry its value on, and an opportunity field can carry its value into a
+quote request — set per field with **Carry value to …** on **Custom fields**, whose page has the
+rules (same key, compatible type and options, the audience rule). Only an empty field is filled,
+and only once:
+
+- **Into the order** placed from an accepted request, at placement — see the Orders module's page.
+- **Into a sales opportunity** the CRM module opens for the request, or that an order placed from
+  the request joins — see the CRM module's page.
+- **From a sales opportunity**, into a request an administrator creates with **Create quote
+  request** on the opportunity's *Links* tab. The values arrive once the CRM module has linked the
+  request to the opportunity, in a change attributed to the **system** (`quote_request.custom_fields.carry`
+  in the audit log); the request's creation stays attributed to the administrator. A value that
+  cannot be carried is skipped and named in the request's *History* (see *History*), and the
+  request is created all the same. A request linked to an opportunity by hand receives nothing, and
+  neither does a request a customer cloned from an order.
+
+  **The version moves right after the create.** A carry that fills a field is a change to the
+  request like any other and raises its `version`, and it runs just after the create request has
+  answered. A client that edits the new request with the version the create response returned is
+  therefore refused with `409 VERSION_CONFLICT` once values have been carried: read the request
+  again and send the version it reports now. A carry that fills nothing leaves the version alone.
+  The carry holds the request's row while it reads and writes it, so it never overwrites an
+  administrator's edit made at the same moment.
+
+While this module is switched off nothing is carried into or out of a quote request, and nothing is
+replayed when it returns. For integrators: the stored event is of type
+`custom-field-carry-skipped`; on `GET /api/v1/admin/quote-requests/:id/history` it is an entry of
+`kind` `custom_field_carry_skipped` whose `customFieldCarry` holds `source` (`entityType:
+"opportunity"`, `recordId`, `reference`) and `skipped` (`key`, `reason`, `label`).
+
+### Custom-field filters on the list
+
+A quote request field whose **Use as list filter** option is on is offered as a filter on the
+quote request list, labelled in your language: the text it contains, a number or date range, yes
+or no, or one or more options. A request without a value for the field never matches. The filter
+is applied by the server, so it narrows the whole list — the total and every page — not only the
+requests already loaded; status, search, sorting and paging keep working beside it. Each filter is
+shown as a removable chip, is kept in the page address and in saved views, and returns the list to
+its first page when it changes.
+
+If the address names a filter that is no longer available, the list says so by the field's name
+and offers **Remove this filter**. A saved view holding such a filter drops it on load, with a
+notice naming it. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/quote-requests` and read the offered fields from
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 ## Saved views
 
@@ -310,13 +892,14 @@ The quote request list's toolbar carries a **Saved views** selector, whose
 first entry is **— Select a view —**, and two buttons beside it: **Save view**
 and **Delete view**.
 
-- **What a view remembers.** Six things: the **Visibility** scope, the
-  organization, the status selection, the search text, the sort and the
-  visible columns. Choosing a view replaces all six with the view's values,
-  discards anything you had changed and not saved, and goes back to the first
-  page. A status or column the list no longer knows is dropped; a view with no
-  columns shows the default ones; a view with no usable scope opens on your own
-  default scope.
+- **What a view remembers.** Seven things: the **Visibility** scope, the
+  organization, the status selection, the search text, the custom-field
+  filters, the sort and the visible columns. Choosing a view replaces all seven
+  with the view's values, discards anything you had changed and not saved, and
+  goes back to the first page. A status or column the list no longer knows is
+  dropped; a custom-field filter that is no longer available is dropped with a
+  notice naming it; a view with no columns shows the default ones; a view with
+  no usable scope opens on your own default scope.
 - **A view never widens what you can see.** It stores filter values, never
   results. After you load a view, the list is read with *your* permissions and
   *your* organizations, whoever saved it. *My organizations* means the
@@ -354,10 +937,10 @@ and **Delete view**.
   representative can delete only their own views, and nobody can see or delete
   another admin's private view.
 - **Two meanings of "platform admin" on this list.** The rule above is not the
-  one *Visibility model* applies: the list's default scope and its
-  every-organization visibility still key on the literal `platform_admin` role.
-  So an admin with a custom role may delete a colleague's shared view yet opens
-  the list on *My organizations*.
+  one the list's default scope applies: that still keys on the literal
+  `platform_admin` role. So an admin with a custom role may delete a colleague's
+  shared view, and sees every organization's requests (*Visibility model*), yet
+  opens the list on *My organizations*.
 - **Only save, load and delete.** The Admin UI does not rename a view, change
   whether it is shared, or overwrite it with the current setup; save a new view
   and delete the old one instead. There is no limit on the number of views.
@@ -409,7 +992,7 @@ and **Delete view**.
   product and quote request lists derive it the same way, and it fails closed:
   an admin whose reach cannot be resolved is not a platform admin.
   It is deliberately not the module's own `role.code === 'platform_admin'`
-  test, which the list's visibility uses.
+  test, which the list's default scope uses.
 - **Refusals.** An absent view, or another admin's private view, is
   `404 NOT_FOUND` — the two are indistinguishable. A shared view the caller
   neither owns nor may modify as a platform admin is `403 FORBIDDEN`. A name
@@ -432,8 +1015,8 @@ and **Delete view**.
 ## Quote PDF: export and send to the customer
 
 A sales representative turns a quote request into a PDF from its admin screen,
-in **every state** of the quote. Two buttons in the page header open the same
-dialog:
+in **every state** of the quote — except that an unshared quote can be
+exported but not sent. Two buttons in the page header open the same dialog:
 
 - **Export PDF** downloads the PDF, named after the quote's number.
 - **Send PDF to customer** e-mails it.
@@ -466,8 +1049,10 @@ and date follows it, and so does the e-mail.
 
 **What the PDF prints.** The quote's **current** lines and prices, built for
 the requesting representative: the header (number, date, validity date,
-revision), the buyer organisation with its tax ID and address, the requesting
-customer and the assigned representative, the quote's note, the line items
+revision), the buyer organisation with its tax ID and address (for a personal
+(B2C) Organization, only the person's name: its tax ID is an internal
+placeholder and it has no head office), the requesting customer and the
+assigned representative, the quote's note, the line items
 table, the quote's custom fields that customers may see, and any text and logo
 the template adds. Lines without an agreed price print an empty price, and the
 totals that need every price are left out — the same rule as the quote
@@ -477,9 +1062,9 @@ The line items table offers these fields per line: position, product name,
 variant, SKU, quantity, packaging unit, quantity in packaging units, **list
 price**, the customer's proposed price, price after discount, gross unit price,
 **discount %**, **unit discount**, **line discount**, **value at list price**,
-net value, VAT rate, VAT, gross value, the line note, and one field per product
-attribute shown on the product page (a shop's *lead time* attribute, for
-example). Totals: total at list prices, discounts, total net, VAT rate, VAT,
+net value, VAT rate, VAT, gross value, the line note, the **product page URL**,
+and one field per product attribute shown on the product page (a shop's *lead
+time* attribute, for example). Totals: total at list prices, discounts, total net, VAT rate, VAT,
 total gross.
 
 - **List price** is the price recorded when the line was requested (see
@@ -493,13 +1078,38 @@ total gross.
 - **VAT** is computed from the net total at the quote's one VAT rate and
   `gross = net + VAT`, as on the quote screens; a line's own VAT column is
   rounded per line and may differ from the VAT total by a cent.
-- SKU and attributes are read from the catalogue when the PDF is produced; a
-  product deleted since prints its stored name and no SKU or attributes.
+- The product name, SKU and attributes are read from the catalogue when the
+  PDF is produced. The name is the product's name in the layout's language on
+  the quote's sales channel (the system default channel's for a quote without
+  one) — so an English layout of a quote made in Polish prints the English
+  names. The name stored on the line is printed instead when the channel does
+  not offer the layout's language, when the catalogue has no name, or when the
+  product was deleted since; a deleted product also prints no SKU or
+  attributes. The variant label is printed as stored.
+- The **product page URL** is the product's page on the storefront of the
+  quote's sales channel, in the layout's language: the channel's *Storefront
+  URL* setting, else the `STOREFRONT_BASE_URL` environment variable, followed
+  by the product's storefront path (`/en/p/drill`). It is empty for a product
+  deleted since the quote was made or one the channel does not carry, and when
+  neither address is configured.
+  Print it as a column, or tick *Print as a link* on the product name column
+  to make each name a link to its page (off by default).
 
 The built-in layout prints position, product, SKU, quantity, packaging unit,
 list price and discount % (both only when a line is discounted), price after
 discount, VAT rate, net and gross, the line note under its line, and the
 totals, in English and Polish.
+
+**Groups on the PDF.** A grouped quote prints each group that holds a line as
+a heading row — its name and item count — then its lines, then a subtotal row
+for each of the table's totals computed over the group; the lines without a
+group follow under **Other items** (*Pozostałe pozycje*), then the quote's
+totals as before. Positions run 1…n across the groups. The built-in layout and
+every template saved before groups existed print them with no change; a
+template can print the quote flat or group it by a field instead (the Line
+items table's *Grouping* setting, on the Document templates page). A quote with
+no group prints exactly as before. While **Document templates** is switched
+off there is no PDF, as above, and the grouping on every screen is unaffected.
 
 **Sending.** *Send PDF to customer* preselects the requesting customer's e-mail
 address. The representative may remove it and add other addresses — any
@@ -514,7 +1124,7 @@ e-mail switched off, under **E-mail templates**; its variables are
 A successful send adds a **PDF sent** entry to the quote's **History** (who
 sent it, to which addresses, with which template, in which language, and the
 message) and one `quote_request.send_document` row to the audit log — never the
-PDF itself. Customers do not see it in their own history. When the mail server
+PDF itself, and only how many addresses it went to, not which. Customers do not see it in their own history. When the mail server
 refuses one address and accepts another, the PDF stays sent to the accepted
 ones, the dialog names the refused ones, and only the accepted ones are
 recorded. A send is refused, with nothing recorded, when:
@@ -525,6 +1135,7 @@ recorded. A send is refused, with nothing recorded, when:
 | The PDF is larger than 10 MiB | `422 QUOTE_REQUEST_PDF_TOO_LARGE` |
 | The mail server refused every address | `502 QUOTE_REQUEST_PDF_SEND_FAILED` |
 | More than 10 sends by one administrator within a minute | `429 RATE_LIMITED` |
+| The quote is not shared with the customer yet (*Send PDF to customer* is not offered on it) | `409 RFQ_NOT_SHARED` |
 
 **API** (all behind `rfqs:handle` and the quote's visibility; `503
 MODULE_DISABLED` while document templates are off):
@@ -541,12 +1152,13 @@ page for the editor and the line items table.
 
 ## Settings
 
-Three settings drive the module — all live under the `quote_requests`
+These settings drive the module — all live under the `quote_requests`
 group and are configured through the existing settings module.
 
 | Code | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `quote_requests.expiry_days` | integer | `0` | Expire Pending / Created from admin requests after N days without activity, unless they carry an offer that is still valid. Per sales channel: each request is held to its own channel's value, and `0` exempts a channel. Setting it expires the existing backlog — see *Background jobs*. |
+| `quote_requests.default_validity_days` | integer | `0` | *Default validity of operator quotes (days)*: the days a quote an operator creates stays valid, counted from sharing it — see *Validity date*. `0` = no deadline. From `0` to `3650`; a stored value outside that range is read as `0` and logged as a warning. One value for the whole store, not per sales channel. Applies to quotes created after the change. |
 | `quote_requests.show_add_to_quote_on_card` | boolean | `true` | Toggle the "Add to quote" button on storefront product cards. |
 | `quote_requests.show_add_to_quote_on_pdp` | boolean | `true` | Toggle the "Add to quote" button on product detail pages. |
 
@@ -557,13 +1169,17 @@ queues (`BACKEND_ROLE=worker` or `all`): a BullMQ Job Scheduler on the queue
 `quote_requests.expiry.sweep`, installed by the module itself. While the module
 is switched off, no tick runs.
 
+The notification delivery worker runs beside it, on the queue
+`quote_requests.notifications.deliver`: every minute, and within seconds of
+every change that recorded a notification. See *Notifications*.
+
 ### Which requests it expires
 
 Each tick reads `quote_requests.expiry_days` **for every sales channel**, and
 holds each request to the value of its own channel — see
 [Per sales channel](#per-sales-channel). `0` — the default — exempts a channel;
 set to `0` everywhere, the sweep does nothing. Otherwise a request is moved to
-`Expired` when **all three** hold:
+`Expired` when **all four** hold:
 
 1. **It is still open** — `Pending` or `Created from admin`. That covers a
    request waiting for the seller's first answer and an offer waiting for the
@@ -579,10 +1195,12 @@ set to `0` everywhere, the sweep does nothing. Otherwise a request is moved to
    `expiry_days`: the request is never expired by this sweep while the date is
    ahead, however long it has been quiet. Once the date has passed, or where
    the seller set none, the inactivity rule applies as to any other request.
+4. **Its customer can see it.** An unshared operator quote is never expired —
+   see *Unshared quotes and sharing*.
 
 The sweep does not expire a request *because* its validity date passed. That
-date is enforced when the buyer accepts or converts (`410`); it does not, on
-its own, close the request.
+date is enforced when the buyer accepts, converts and places the order (`410`,
+see *Validity date*); it does not, on its own, close the request.
 
 ### What one tick does
 
@@ -598,11 +1216,13 @@ its own, close the request.
   exactly one of the two happens.
 - **A bounded batch.** A tick expires at most 500 requests, oldest first. A
   larger backlog is worked off over the following ticks.
-- **No notification record for an expiry that is old news.** A request that
+- **Nobody is notified about an expiry that is old news.** A request that
   became due more than 24 hours before the tick that reaches it is expired,
   gets its history entry and is announced as `rfq.expired.v1` like any other,
-  but no notification record is written for it. See *Notifications* below for
-  what a notification record is today.
+  but no notification is recorded for it, so neither side is told — the same
+  24 hours after which no notification is sent at all (see *Notifications*).
+  A tick that recorded notifications wakes the delivery worker once, after its
+  commits.
 - **An idle tick is silent.** When nothing is due, the tick enters no system
   scope and writes no `tenant.escape_hatch` audit row.
 
@@ -613,8 +1233,8 @@ everything that is open. **Changing it from `0` to `N` expires, over the next
 ticks, every open request that has been quiet for more than `N` days** — on an
 instance that has run with `0` for a year, that can be most of the open
 requests. The same holds for lowering it. Requests with an offer that is still
-valid are not touched (rule 3), and no notification record is written for the
-ones that became due more than 24 hours earlier.
+valid are not touched (rule 3), nor are unshared quotes (rule 4), and nobody is notified about the ones that
+became due more than 24 hours earlier.
 
 Releases up to and including 0.104.0 documented this sweep and never ran it, so
 an instance that already has `expiry_days` set meets the same backlog on the
@@ -646,9 +1266,24 @@ Three tables on top of the foundation `quote_requests` and
 - `quote_request_revisions` — full snapshot per modify event.
 - `quote_request_events` — append-only history (one row per state
   transition or modification, with discriminated-union payload).
-- `quote_request_notification_events` — one row per recipient ×
-  channel; unique on `(quote_request_id, source_event_id, recipient*,
-  channel)` so retries are idempotent.
+- `quote_request_notifications` — one delivery record per history entry ×
+  recipient × channel (unique on `(source_event_id, recipient_kind,
+  recipient_id, channel)`), with its status, attempts, next attempt, last
+  error, the time of the change it announces and when it closed. It is
+  organization-scoped, deleted with the request, and holds no foreign key to
+  the recipient's table. It replaced `quote_request_notification_events`, which
+  the migration `20261113T081826_quote_requests_notifications_redesign.ts`
+  dropped with its rows — nothing had ever delivered them.
+
+`quote_requests.shared_with_customer` (not null, default `true`, so every
+quote that existed before sharing did is shared), `shared_at`,
+`shared_by_admin_user_id` and `share_validity_days` (the days an unshared quote
+applies when it is shared; `null` = no deadline) record the sharing — see
+*Unshared quotes and sharing*. Admin replies carry them as
+`sharedWithCustomer`, `sharedAt`, `sharedByAdminUserId` and
+`shareValidityDays`; customer replies never do. Other modules read
+`sharedWithCustomer` on `quoteRequestReadPort`'s records: `carts` refuses to
+fill a basket from an unshared quote.
 
 `quote_request_items` carries the stored reference price in
 `reference_unit_price`, `reference_currency` and `reference_captured_at` — all
@@ -669,6 +1304,14 @@ place, so the export falls back to the default and says so. Writing it moves
 `pdf-sent` records each delivered *Send PDF to customer*; it is shown on the
 admin History only.
 
+`quote_request_item_groups` holds a quote's line groups — `name` and
+`position` per group, deleted with the quote request. `quote_request_items`
+carries each line's `group_id` (`null` = ungrouped; deleting a group sets it to
+`null`) and its `position` within its section. Each revision's line snapshot
+also records the line's group and position, so the history and the customer's
+comparison describe the grouping as the customer was shown it. A quote created
+before groups existed reads as ungrouped, its lines in their original order.
+
 `quote_request_list_saved_views` holds the list's saved views (see *Saved
 views*). It is platform-global, not organization-scoped: it stores filter
 values, never quote requests, and is not removed when the module is switched
@@ -679,6 +1322,18 @@ organizations and admin users that the visibility model above reads —
 is **not** one of them: it is owned by the `organizations` module,
 which qualifies the organization with it, and this module reaches it
 through that module's `organizationSalesRepScopePort`.
+
+This module's `20260503T141344_quote_requests_workflow.ts` migration
+still creates the table, for historical reasons: it was the first
+migration to need it. Since issue #1033 the statement is
+`create table if not exists`, and the owner's own
+`20261109T144721_organizations_reach_governor.ts` creates the table
+with the same shape. The table's two indexes are created only by the
+owner's migration. So a platform can migrate `organizations` without
+this module, and installing this module later leaves the table and its
+rows as they are. A database that has already applied the migration
+does not run it again. `module:uninstall quote_requests --hard` never
+drops the table, its rows or the triggers `organizations` puts on it.
 
 The canonical `quote_requests` row carries the current state plus
 `current_revision_number`, `last_customer_seen_revision_number`, and
@@ -712,19 +1367,268 @@ will be one.
 
 ## Notifications
 
-Every state transition **records** who should be told: `RfqNotificationService`
-writes one row per recipient and channel (`email`, `in_app`) into
-`quote_request_notification_events`, with status `queued` — the customer for
-admin-side actions, sales reps and platform admins for customer-side actions,
-both parties on expiry. The unique constraint on that table keeps it to one
-row per (transition, recipient, channel).
+Every change of a quote request that the other side should hear about is
+**delivered**: the buyer side is e-mailed, gets an entry in the storefront
+notification centre and, if they opted in, a push on their device; the operators
+who handle the request get an entry on the admin bell and, for a new request, an
+e-mail. Who was told, how, and whether it went out is shown on the request's
+**History**.
 
-**Nothing delivers these rows yet.** No worker reads the table, so no e-mail
-and no in-account notification is sent for any quote-request transition; the
-rows stay `queued`. They are the record a delivery worker would work from. The
-one e-mail this module does send is the explicit *Send PDF to customer* (see
-*Quote PDF*), delivered while the representative waits and recorded on the
-quote's History.
+### Who is told, and when
+
+There are two sides.
+
+- **The buyer side** is the customer account that raised the request **plus**
+  every member of its organization who may open it on the storefront — today
+  the holders of the organization's *Administrator* role. A member who holds
+  only *Member* rights and did not raise the request is not told, because they
+  cannot open it. Deleted, blocked and anonymised accounts are left out. In a
+  personal (B2C) organization the buyer side is the requester alone. A
+  requester who is also an *Administrator* is told once per channel.
+- **The operator side** is the administrator the request is assigned to plus
+  the sales representatives assigned to the organization, each only while
+  active and holding `rfqs:handle`. When none of them remains — nobody is
+  assigned, or nobody assigned may handle quote requests — **every active
+  administrator holding `rfqs:handle`** is told instead, and nobody without it.
+
+| Change | Buyer side | Operator side |
+| --- | --- | --- |
+| A buyer submits a request | e-mail; centre entry and push for everybody but the buyer who submitted | bell and e-mail |
+| A buyer re-submits a request (a new request) | as above | bell and e-mail |
+| A buyer accepts the offer | as above | bell |
+| A buyer rejects the offer | as above | bell |
+| The request expires | e-mail, centre entry, push | bell |
+| An operator shares a quote prepared on the buyer's behalf | e-mail, centre entry, push | — |
+| An operator saves a new offer (revision) | e-mail, centre entry, push | — |
+| An operator approves the request | e-mail, centre entry, push | — |
+| An operator cancels the request | e-mail, centre entry, push | — |
+| An order completes the request | nothing — the order confirmation covers it | — |
+
+The buyer whose own action caused a change gets the **e-mail** as a
+confirmation but no centre entry and no push: they are looking at the result.
+The buyer's own draft edits, notes, *Send PDF to customer* and the other
+history entries tell nobody. Nor does anything that happens to an operator's
+quote before it is shared: its creation, its changes and its cancellation.
+
+**Who is told is fixed when the change is saved.** At delivery each person is
+checked again: an account that has since been deleted, blocked or anonymised,
+has left the organization or may no longer open the request, and an
+administrator who is no longer active or has lost `rfqs:handle`, is skipped. A
+role change after the change was saved adds nobody.
+
+### What each channel carries
+
+- **Buyer e-mail** — one of nine e-mails in the *Quote requests* group of
+  **E-mail templates**, in the default language of the request's sales channel
+  (English for a request raised with no channel). It names the request number
+  and links to the request on the storefront when the channel has a storefront
+  address: the `sales_channels.storefront_url` setting (*Storefront URL*), or,
+  when the channel leaves it empty, the `STOREFRONT_BASE_URL` environment
+  variable. With neither set it names the number and carries no link. The
+  approval e-mail carries the link and **no PDF** — *Send PDF to customer* stays
+  a separate action.
+- **Centre entry** — one sentence naming the request by number, linking to the
+  request, shown in the language the buyer is browsing in, on the request's own
+  sales channel only (on every channel for a request raised with none). See the
+  *Customer notifications* module's page.
+- **Push** — the same sentence, under the title *Quote request update*, written
+  in the default language of the request's sales channel (Polish or English;
+  English for any other language), opening the request. It needs push switched
+  on for the channel, quote pushes switched on (*Notify on quote status
+  changes*), the buyer's own *Quote updates* choice left on, and a device the
+  buyer subscribed on that channel. See the *PWA* module's page.
+- **Bell entry** — one entry per administrator, naming the request by number
+  only, linking to the request's admin screen.
+- **Operator e-mail** — for a submitted or re-submitted request only, in the
+  administrator's Admin UI language (Polish for Polish, English otherwise),
+  naming the request number, the organization, the buyer who acted and the
+  number of lines. With `ADMIN_BASE_URL` set (the address the admin panel is
+  served at), it carries an **Open the quote request** button to the request's
+  admin screen, where the bell entry leads. Without it the e-mail carries no
+  link and no button and still names the request number. A relative or guessed
+  address is never sent.
+
+No centre entry, push or bell entry names a product, a price or an
+organization: they are read outside the request's own screen, so they say the
+number and nothing more.
+
+### The e-mails
+
+All eleven are switched on by default. Their subject and content are edited
+per language and sales channel, or each e-mail is switched off, under
+**E-mail templates**; each ships English and Polish defaults.
+
+| Code | Sent to | When |
+| --- | --- | --- |
+| `quote_request_customer_submitted` | buyer side | a request is submitted |
+| `quote_request_customer_resubmitted` | buyer side | a request is re-submitted as a new one |
+| `quote_request_customer_offer_accepted` | buyer side | a buyer accepts the offer |
+| `quote_request_customer_offer_rejected` | buyer side | a buyer rejects the offer |
+| `quote_request_customer_expired` | buyer side | the request expires |
+| `quote_request_customer_prepared` | buyer side | an operator shares a quote prepared on the buyer's behalf |
+| `quote_request_customer_revised` | buyer side | an operator saves an offer awaiting the buyer |
+| `quote_request_customer_approved` | buyer side | an operator approves the request |
+| `quote_request_customer_canceled` | buyer side | an operator cancels the request |
+| `quote_request_operator_submitted` | operator side | a buyer submits a request |
+| `quote_request_operator_resubmitted` | operator side | a buyer re-submits a request |
+
+Every e-mail can use `quote.number`, `customer.name` (the recipient),
+`organization.name` and `channel.name`; the buyer e-mails also `quote.url`
+(empty when there is no link, and the button is then left out). Per e-mail:
+`actor.name` (the buyer who acted) for submitted, re-submitted, accepted,
+rejected and both operator e-mails; `quote.previousNumber` for both
+re-submitted e-mails; `reason` for rejected and canceled; `quote.validUntil` for
+prepared (the date the share wrote), revised and approved; `quote.revisionNumber` for revised;
+`quote.lineCount` and `quote.adminUrl` (the link to the request in the admin
+panel) for both operator e-mails. `quote.adminUrl` is empty when
+`ADMIN_BASE_URL` is not set, and the button is then left out. A template edited
+before the link existed does not name it and renders as before.
+
+### Late, failed and switched-off deliveries
+
+- **24 hours at most.** A notification that could not go out within 24 hours of
+  its change — a stopped worker, Redis down — is skipped as stale and never
+  sent, on every channel. An expiry that became due more than 24 hours before
+  the expiry sweep reached it notifies nobody (see *Background jobs*).
+- **Retries.** A delivery that fails (the mail server refuses, an error) is
+  tried again after 1 minute, 5 minutes, 30 minutes and 2 hours; the fifth
+  failure records it as failed, with the last error. A retry never sends a
+  second e-mail or push for an attempt that was already accepted.
+- **An e-mail switched off** on **E-mail templates**, a buyer's *Quote updates*
+  choice turned off, push switched off for the channel, no subscribed device,
+  no mail server configured, or a recipient with no e-mail address: that one
+  delivery is skipped, with the reason, and the other channels go out.
+- **A receiving module switched off** — *Admin notifications* (the bell),
+  *Customer notifications* (the centre) or *PWA* (push): its deliveries are
+  skipped as *module off* when the worker reaches them, and are **not** sent
+  later when the module comes back. Every other channel still delivers, and no
+  quote request change ever fails because a channel is unavailable.
+- **Quote requests itself switched off**: no change can happen, so nothing new
+  is recorded, and the delivery worker stops. When the module is switched back
+  on, the waiting deliveries go out — those still within their 24 hours.
+
+### On the History
+
+Under each **History** entry that notified anybody, the admin detail lists the
+deliveries: the recipient (operator or customer, by name), the channel
+(*Admin notification*, *E-mail*, *Account notification*, *Push notification*),
+the outcome — *Pending*, *Sent*, *Failed*, or *Skipped* with the reason (older
+than 24 hours, module off, switched off, no mail server configured, written to
+the log only, no address or account, turned off by the recipient, no subscribed
+device) — and the number of attempts. A failed delivery shows its last error
+behind *Show error*. A person who can no longer be read is shown as an unknown
+user. It needs `rfqs:handle`, like the rest of the History; the buyer's view of
+the request never shows any of it.
+
+### For developers
+
+**Recording.** `RfqNotificationService.record(em, { change, sourceEvent, rfq, actor })`
+(`src/backend/services/rfq-notification-service.ts`) writes one row of
+`quote_request_notifications` per recipient and channel, **in the transaction of
+the change** and its history entry: a transition that rolls back leaves no
+record, and one that commits always has them. Who is told is data —
+`src/backend/services/notifications/notification-matrix.ts`, the table under
+*Who is told, and when* as code, and the only place recipients are decided —
+and the two sides are resolved by
+`notifications/recipients.ts` through published ports only
+(`customerAccountReadPort`, `organizationRoleReadPort`,
+`organizationSalesRepScopePort`, `adminUserReadPort`, `permissionService`). The
+customer side's rule is `orgWideViewerRoleIds`, the same function the
+storefront's visibility check uses, so a person is never told about a request
+they would get a `404` for. A record is unique per (history entry, recipient,
+channel). The `prepared` change is recorded from the `shared` history entry the
+share writes; records written before sharing existed name the `created` entry
+and stay as they are. While a quote is unshared, `revised` and `canceled`
+record nothing for the buyer side.
+
+**Delivery.** After each committing change the writer adds one job to the BullMQ
+queue `quote_requests.notifications.deliver` (fixed job id
+`quote_requests.notifications.kick`, not awaited; a failure is logged at `warn`
+and never fails the transition), and a Job Scheduler on the same queue ticks
+every minute. The table is the queue: a tick first asks, outside any tenant
+scope, whether anything is due, and only then enters the system scope; it
+delivers up to 200 due records, oldest first, each in a transaction of its own
+locked `for update skip locked`, so several worker processes share the table.
+The consumer is registered through `ctx.worker`, so nothing runs while the
+module is off. `RfqNotificationDeliveryService`
+(`notifications/delivery-service.ts`) closes each record in this order:
+
+1. its change is more than 24 hours old → `skipped_stale`;
+2. the channel's owner is not present → `skipped_module_off` (decided in front
+   of the port; a `ModuleDisabledError` raised by the port all the same closes
+   it the same way);
+3. otherwise the channel's adapter (`notifications/channel-adapters.ts`)
+   delivers it.
+
+| Channel | Owner | Delivered through | Closing |
+| --- | --- | --- | --- |
+| `admin_in_app` | `admin_notifications` | `adminNotificationRecordPort.recordWithin(em, …)`, on the record's transaction | `sent` |
+| `admin_email` | `transactional_emails` | `TransactionalEmailSender.send`, `salesChannelId: null` | by the sender's answer |
+| `customer_email` | `transactional_emails` | `TransactionalEmailSender.send`, the request's channel | by the sender's answer |
+| `customer_in_app` | `customer_notifications` | `customerNotificationRecordPort.recordWithin(em, …)`, `sourceModule 'quote_requests'`, `sourceKey` = record id, on the record's transaction | `sent` |
+| `customer_push` | `pwa` | `customerPushPort.push(…)`, `category 'quote'`, `sourceKey` = record id; `pwa` commits on its own | by `pwa`'s answer |
+
+The bell and centre entries commit with the record's closing, so each is
+delivered exactly once. Every e-mail is sent with
+`messageId = quote_request_notification:<record id>` and every push with the
+record id as its key, so a retry after a crash between the transport's
+acceptance and the commit produces no second message. The sender's answer maps
+`sent` → `sent`, `logged` → `skipped_logged`, `deactivated` →
+`skipped_deactivated`, `no_transport` (or no sender) → `skipped_no_transport`,
+and `no_definition` → `failed` at once. `pwa`'s answer maps `enqueued` → `sent`,
+`skipped:customer_preference` → `skipped_preference`, `skipped:no_subscription`
+→ `skipped_no_subscription`, `skipped:no_account` → `skipped_no_recipient`, and
+`skipped:switched_off` → `skipped_deactivated`. A recipient who no longer
+qualifies, or has no e-mail address for an e-mail, closes
+`skipped_no_recipient`. Any thrown error is a failed attempt: the attempt's
+transaction rolls back, and the attempt is counted in a second one with the
+next try backed off 1 min / 5 min / 30 min / 2 h; the fifth failure closes the
+record `failed`, with the error (at most 2 000 characters, the recipient's
+address replaced by `<recipient>`) in `last_error`.
+
+The bell titles are `notifications.<change>.title`, the centre and push
+sentences `customerNotifications.<change>.title` and the push title
+`customerPush.title`, all in this module's `i18n/{en,pl}.json`. The e-mail
+defaults are `src/backend/email-templates/quote-notification-defaults.ts`,
+pushed through `emailDefaultsPort` at boot; the definitions are the
+`transactionalEmails` of `src/manifest.ts`. The module declares
+`degrades-without` edges on `admin_notifications`, `customer_notifications` and
+`pwa`.
+
+**History.** `GET /api/v1/admin/quote-requests/:id/history` adds an optional
+`deliveries` array (`quoteRequestDeliverySchema` in
+`@endora-commerce/contracts`) to every entry whose `eventIds` contain the
+records' history entry: `id`, `channel`, `recipient` (`kind`, `id`,
+`displayName`, `''` once the person is gone), `status`, `attempts`, `lastError`
+and `closedAt`. An entry with no records has no `deliveries` key. The customer
+`GET /api/v1/quote-requests/:id` never carries it.
+
+The *Send PDF to customer* e-mail (see *Quote PDF*) is separate from all of
+this: it is sent while the representative waits and recorded as its own
+History entry.
+
+## Archived products are never quote lines
+
+A product archived with the Catalog module's **Archive** action cannot be put
+on a quote request by any path; restore it first. What each path answers:
+
+- **A customer** — creating a request, editing a draft and resubmitting it,
+  and so converting a basket, a quick-order list or a shopping list into a
+  request, or cloning an order into one — gets `404 PRODUCT_NOT_FOUND`,
+  exactly what a product that does not exist gets, so nothing about the
+  product is disclosed.
+- **An operator** — `POST /api/v1/admin/quote-requests` (create on a
+  customer's behalf) and `PATCH /api/v1/admin/quote-requests/:id` (modify) —
+  gets `409 PRODUCT_ARCHIVED` ("Product is archived."), with the archived
+  products' ids in `details.productIds`, and nothing is written. A product id
+  that does not exist still answers `404 PRODUCT_NOT_FOUND`. A line that is
+  unavailable for any other reason — switched off in the request's sales
+  channel or language, outside its publication window or its audience — is
+  still accepted there with the `PRODUCT_UNAVAILABLE_IN_SCOPE` warning.
+- **Converting an approved quote** whose product was archived after approval
+  answers `409` before the customer's basket is touched.
+
+Price lists are not affected: an archived product can still be priced.
 
 ## Conversion to order
 
@@ -737,8 +1641,8 @@ basket at the agreed price; the Orders module's page says what drops the mark.
 
 When an order is created with a populated `source_quote_request_id`,
 an event subscriber inside the module flips the originating Quote
-Request to `Completed`, populates `converted_order_id`, and fires the
-`completed` notification. A completed quote request cannot be ordered a second
+Request to `Completed` and populates `converted_order_id`, and nobody is
+notified: the order confirmation covers it. A completed quote request cannot be ordered a second
 time, and the conversion is refused while any line has no agreed unit price
 (see *Agreed prices*). The subscriber waits for the order to be committed — a little over two
 seconds at most — and completes nothing for an order of another organization.
@@ -757,8 +1661,12 @@ A quote request an administrator creates through
 | --- | --- |
 | `rfqId` | The new quote request. |
 | `organizationId` | The organization it was created for. |
-| `adminUserId` | The administrator who created it. |
+| `adminUserId` | The administrator who created it, or `null` when server code created it with no administrator present — see *Server-side writes*. |
 | `origin` | What the create request carried as `origin`, or `null`. |
+
+It is emitted when the quote is created, while it is still unshared: it is the
+operator-side announcement and reaches no customer. Sharing emits no event on
+the bus.
 
 `rfq.created.v1` remains the event of a customer's own submission and is
 **not** emitted on this path, so nothing that listens to it starts seeing
@@ -777,6 +1685,189 @@ The create screen (`/quote-requests/new`) reads the same from its query string
 when another screen opens it: `originType` and `originId`, `organizationId` and
 `customerAccountId` to preselect the customer, and `returnTo`, a path inside
 the Admin UI to go back to once the quote request exists.
+
+## Server-side writes
+
+Another module, an overlay module or an integration worker (an ERP or CRM
+connector) writes a quote request through **`quoteRequestCommandPort`**, the
+QuoteRequest aggregate's write port, declared as `QuoteRequestCommandPort` in
+`@endora-commerce/contracts`. It never writes this module's tables itself.
+
+| Method | Audit action | What the admin does the same way |
+| --- | --- | --- |
+| `create(input, options?)` | `quote_request.create_on_behalf` | `POST /api/v1/admin/quote-requests` |
+| `update(id, patch, options?)` | `quote_request.modify` | `PATCH /api/v1/admin/quote-requests/:id` |
+| `setCustomFieldValues(id, merge, options?)` | `quote_request.custom_fields.update` | — (the admin sends values with `PATCH`) |
+| `assign(id, { adminUserId }, options?)` | `quote_request.assign` | `POST /api/v1/admin/quote-requests/:id/assign` |
+| `approve(id, { note? }, options?)` | `quote_request.approve` | `POST /api/v1/admin/quote-requests/:id/approve` |
+| `cancel(id, { reason }, options?)` | `quote_request.cancel` | `POST /api/v1/admin/quote-requests/:id/cancel` |
+| `sendDocument(id, input, options?)` | `quote_request.send_document` | `POST /api/v1/admin/quote-requests/:id/pdf/send` |
+
+**One write path.** Each method runs the same Command the admin endpoint runs,
+built by the same factory and run by the same runner, so the two cannot write
+differently: one audit entry with the same state, the same history entries and
+revision, the same notifications to the buyer and the team — delivered once —
+and the same event (`rfq.created_by_admin.v1`, `rfq.modified.v1`,
+`rfq.approved.v1`, `rfq.canceled.v1`). Inputs are the endpoints' request
+bodies, validated with the same schemas, and refusals are the endpoints' errors
+with their codes.
+
+**Who wrote it.** The actor is the ambient one, never a parameter: an
+administrator inside an admin request, or under `withSystemScopeActingFor`;
+the **system** actor under `withSystemScope` in a worker. A write with no
+administrator shows as *System* in the quote request's history and keeps the
+current assignee, and a quote created that way has no creating or assigned
+administrator. The port checks no permission — the caller is the gate — so
+never resolve it for a customer-facing route.
+
+**Options** (the last parameter of every method):
+
+- `source` — a lower-case code naming the integration (`erp`, `pim.sync`, at
+  most 64 characters), recorded as `source` in the audit entry beside the
+  actor. It is what tells two integrations apart when both write as the
+  system. Any other value is refused with `422 VALIDATION_FAILED` before
+  anything is written.
+- `expectedVersion` — the `version` you read; a request that has moved on is
+  refused with `409 VERSION_CONFLICT`, as an `If-Match` is. `create` and
+  `sendDocument` ignore it.
+- `extensions` — input for command hooks on the action. None of the port's
+  actions is hookable (the module's one hookable action is the buyer's
+  submission, below), so any key is refused with
+  `422 COMMAND_EXTENSION_UNCLAIMED` before anything is written.
+
+**From a worker, name the channel.** `create` raises the request on
+`salesChannelId`, else on the channel of the current request; a worker has no
+request, so without `salesChannelId` the create is refused with
+`422 RFQ_SALES_CHANNEL_NOT_ALLOWED` (`no_channel`).
+
+**A quote the port creates starts unshared**, exactly as one an operator
+creates in the Admin UI (see [Unshared quotes and sharing](#unshared-quotes-and-sharing)): the customer
+cannot see it and no notification goes out. Its validity is kept in days —
+`expiresInDays`, else the default validity setting — and becomes a date only
+when the quote is shared. An `update` of an unshared quote stores the days and
+tells the customer nothing, and a `cancel` of one is silent too; the events are
+still emitted, with `sharedWithCustomer` on the record for a subscriber to
+check. **The port cannot share a quote:** an operator shares it in the Admin
+UI, and only then is the customer notified.
+
+**Custom-field values alone.** `setCustomFieldValues` takes a `merge` — a
+function from the current values to the new ones — and runs it inside its
+Command. The module does not validate: call `CustomFieldValuePort.validateAndMerge`
+inside the merge. Unlike `update`, it records no revision and notifies nobody;
+the audit entry names the changed keys, never their values, and a merge that
+changes nothing writes nothing.
+
+**Deliberately not offered:** resubmitting, accepting or rejecting a revision,
+and converting to an order. They are the buyer's own decisions, taken in the
+storefront. Nor is sharing, which is the operator's decision in the Admin UI.
+
+**When the module is off**, resolving the port fails closed with
+`503 MODULE_DISABLED` and nothing is written. A module that uses it declares
+`quote_requests` in its manifest's `dependencies`, or as a
+`nonBindingDependencies` edge `refuses-without`, and resolves the port per use.
+
+## Hookable actions
+
+The buyer's two submissions are declared hookable, so another module — a
+deployment's overlay module or an installed package — can take part in them. A
+buyer's create **is** the submission: one write raises the request as *Pending*,
+with its lines, revision 1, the *Created* and *Submitted* history entries and
+the notifications of a new quote request. There is no draft submitted later.
+*Submit again* is the same write over an earlier request's lines: a **new**
+request, with a *Re-submitted* entry, that leaves the earlier one as it was.
+
+Register a command hook against the ref in `QUOTE_REQUEST_HOOKABLE_ACTIONS`
+(`@endora-commerce/contracts`) and list `quote_requests` in your manifest
+`dependencies`. A `beforeCommit` hook runs inside the write's transaction: it
+may write its own tables or run a command through `ctx.run`, and it may refuse
+the write with a code of its own, which rolls the write back. An `afterCommit`
+handler is delivered through the platform's outbox after the commit, at least
+once. How hooks run, are ordered and are refused is on the *Command Bus*
+architecture page. The admin's *Command hooks* screen lists every action, the
+hooks registered on it and the outbox rows waiting or failed.
+
+| Action | Ref | Written by | Hook data |
+| --- | --- | --- | --- |
+| `quote_request.create` | `QUOTE_REQUEST_HOOKABLE_ACTIONS.create` | `POST /api/v1/quote-requests`, and every in-process `RfqCustomerPort.createForCustomer` (a basket, a shopping list or a quick order turned into a quote, an order cloned into one) | `quoteRequestId`, `organizationId`, `customerAccountId`, `salesChannelId`, `assignedAdminUserId`, `itemCount`, and `assign(adminUserId)` in `beforeCommit` |
+| `quote_request.resubmit` | `QUOTE_REQUEST_HOOKABLE_ACTIONS.resubmit` | `POST /api/v1/quote-requests/:id/resubmit` | the same, `quoteRequestId` being the new request, plus `sourceQuoteRequestId` |
+
+Both offer both phases. `quote_request.create` announces `rfq.created.v1` on
+its commit; `quote_request.resubmit` announces no domain event, as before. The outbox row carries the same ids as the hook data,
+with `assignedAdminUserId` as it was when the write committed, and is routed to
+the request's Organization: its handler runs in a context pinned to it. Both
+carry **ids, codes and counts only**: never the header note, the lines, the
+products or the prices. A buyer's create stores no custom-field values, so
+neither names any. A hook that needs more reads the request through
+`quoteRequestReadPort` — after the commit, since that port does not see the open
+transaction. No route or port passes `extensions` to these actions yet.
+
+### Routing a submitted request to a representative
+
+A `beforeCommit` hook sets the request's assignee **inside the submission** by
+calling `assign(adminUserId)` on its data — not through the admin endpoint, and
+not by a second write after the commit, when the new-request notification would
+already have been fixed for whoever was assigned then, which is nobody.
+
+```ts
+import { ERROR_CODES, QUOTE_REQUEST_HOOKABLE_ACTIONS as QR } from '@endora-commerce/contracts';
+
+ctx.commandHooks([
+  {
+    id: 'route-to-representative',
+    on: QR.create,
+    phase: 'beforeCommit',
+    handler: async ({ data }) => {
+      for (const candidate of await myRoutingRule(data.customerAccountId, data.organizationId)) {
+        try {
+          await data.assign(candidate);
+          return;
+        } catch (error) {
+          if ((error as { code?: string }).code !== ERROR_CODES.RFQ_ASSIGNEE_NOT_ELIGIBLE) throw error;
+        }
+      }
+    },
+  },
+]);
+```
+
+- **Who may be assigned.** The same rule as everywhere else (see *Who may be
+  assigned to a quote request* below). Anyone else is refused with
+  `422 RFQ_ASSIGNEE_NOT_ELIGIBLE` and nothing is written, so a hook may catch it
+  and try its next candidate. Uncaught, it refuses the buyer's submission, and
+  the buyer reads a sentence worded for them (token `submission`).
+- **It is audited in the same write.** `assign` runs this module's own
+  `quote_request.assign` command as a child of the submission: its own audit
+  entry, with the hook's module id as `source`, beside the unchanged
+  `quote_request.create` or `quote_request.resubmit` entry. Assigning the
+  current assignee again writes nothing.
+- **The notifications go to the assignee.** The operators told about a new
+  request are the assignee and the Organization's representatives (see
+  *Notifications*). After `assign` they are recorded again, so the assignee is
+  told, in the same transaction.
+- **Only while the hook runs.** `assign` throws when called from anywhere but a
+  running `beforeCommit` hook on the action whose data carries it. A hook
+  ordered after another sees the other's choice in `assignedAdminUserId`.
+
+The buyer's draft edit, their answer to an offer, the conversion to an order
+and every operator write are not hookable.
+
+### Who may be assigned to a quote request
+
+One rule, wherever an administrator is named as a request's assignee — the
+admin endpoint `POST /api/v1/admin/quote-requests/:id/assign`,
+`quoteRequestCommandPort.assign` and a hook's `assign`. The administrator must:
+
+- be **active** (not deactivated or deleted);
+- hold **`rfqs:handle`** (or the wildcard role);
+- **reach the request's Organization** — their own admin scope includes it,
+  which for a sales representative is the representative rule (assigned, roll-up
+  or an Organization nobody is assigned to).
+
+Anyone else is refused with `422 RFQ_ASSIGNEE_NOT_ELIGIBLE` before anything is
+written. Clearing the assignee (`null`, on the port) is always allowed. Saving
+an offer, approving and cancelling still make the administrator who does it the
+assignee, without asking the rule: on the admin endpoints that administrator
+already meets it.
 
 ## Events offered to outbound webhooks
 
@@ -816,20 +1907,22 @@ products in two ways:
   **Active** tab: the catalogue in pages, with status tabs and their counts, a
   type filter and a search by SKU, slug or name. The selection survives page,
   page-size and filter changes, and **Add N** adds every ticked product as a
-  line of quantity 1 — at most 200 in one step. Draft and inactive products
-  may be added; grouped and bundle parents are listed with their reason and
-  cannot be ticked; a product already on the request is marked as already
-  added.
+  line of quantity 1 — at most 200 in one step. Inactive products may be
+  added. Archived products are not offered: the browser has no Archived tab
+  and its **All** tab leaves them out. Grouped and bundle parents are listed
+  with their reason and cannot be ticked. A product already on the request can be added again, as a
+  line of its own — for instance to put it in a second group.
 - **Quick add by name or SKU**, beside it, appends one product under the same
-  rules.
+  rules. An archived product is listed in its results, disabled, with the
+  reason *archived*, as on the order create screen.
 
 Both are disabled, each with a hint, for an operator without `catalog:read`.
 
 Each line shows the product's name and SKU, an editable whole-number quantity,
 an editable agreed unit price and a remove action.
 
-**The agreed unit price is prefilled from the customer's price lists**, through
-`GET /api/v1/admin/products/:id/resolved-price` for the chosen customer and the
+**The agreed unit price is prefilled from the customer's current price**, through
+`POST /api/v1/admin/price-books/resolve` for the chosen customer and the
 line's quantity, with at most four requests in flight. A price is prefilled
 only once a customer with an organization is chosen — lines added before that
 are prefilled then — and an answer is applied only while it still matches the
@@ -842,12 +1935,57 @@ quantity — then resolved again once the quantity is valid. Changing the
 customer clears every price that was not typed by hand and resolves it again
 for the new customer, so such a price may become empty.
 
-**An incomplete line blocks the request instead of being dropped.** A line with
-no agreed price, or with a quantity that is not a whole number of 1 or more, is
-marked, and **Create quote request** stays disabled until it is fixed or
-removed; every line on screen is sent. The running total counts the lines that
-have both a valid quantity and a price. A customer without an organization
-still shows the existing warning, since a quote request needs one.
+**Two buttons create the quote**: **Save without sharing** creates it unshared, and
+**Create and share** creates it and shares it with the customer — see
+*Unshared quotes and sharing*.
+
+**An incomplete line is marked, never dropped**; every line on screen is sent.
+A line with a quantity that is not a whole number of 1 or more, or a price that
+is not a number of 0 or more, keeps both buttons disabled until it is fixed or
+removed. A line with **no price yet** may be saved: **Save without sharing** stays
+available, and only **Create and share** waits until every line is priced. The
+running total counts the lines that have both a valid quantity and a price. A
+customer without an organization still shows the existing warning, since a
+quote request needs one.
+
+**Validity.** The *Valid for (days from sharing)* field is filled with the
+store's default (`quote_requests.default_validity_days`, read from
+`GET /api/v1/admin/quote-requests/create-defaults`). Empty or 0 means no
+deadline. While the default is being read, or when it cannot be read, the
+field stays empty with the placeholder *Store default*, and the server gives
+the quote the default. While the default is still loading and no days were
+typed, **Create and share** waits.
+
+**The sales channel the request is raised on** is chosen under the customer,
+among the active sales channels of the customer's organization. When the
+organization has exactly one, it is preselected; when it has several, choose one —
+both buttons stay disabled until you do. When the organization has no
+active sales channel, the screen says so and both buttons stay disabled
+until the organization is assigned to one. The channel is sent as
+`salesChannelId`: the request is stored on it, its line names are taken in that
+channel's default language, and its availability is judged there. The agreed
+prices are prefilled on that channel too, and choosing another channel clears
+every price not typed by hand and resolves it again. Without the field the
+request is raised on the channel the admin request itself resolves to — the
+system default, unless the request names another with `X-Sales-Channel`. Either
+way the server checks the channel: one that is not one of the organization's
+active sales channels — unknown, assigned only to other organizations, or
+inactive — is refused with `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything
+is written, also when no channel was chosen and the fallback is not one of
+them. When the organization's channels cannot be read — the read fails or is
+refused, for instance on a network error — the screen says so with a **Retry**
+button, and both buttons stay disabled until they have been read;
+while a retry is under way the button is inactive. Agreed prices are prefilled
+only once a channel is settled.
+
+When a line's product is not available to the customer on that channel —
+switched off there, outside its publication window or outside its audience —
+the request is still created and the answer names the line in `warnings` with
+`PRODUCT_UNAVAILABLE_IN_SCOPE`. The screen then stays open and lists those
+products under **Quote request created with warnings**, and **Open quote** goes
+on to it; the request cannot be sent a second time from there. The quote is
+unshared, also after **Create and share**: nothing is shared, and the screen
+offers **Share with customer** beside **Open quote**.
 
 ## Panels on the quote request screen
 
@@ -858,8 +1996,16 @@ contribution `{ quoteRequestId }`. A module adds a panel by declaring
 contributions; this module names no contributor and imports none. With nothing
 contributed — no such module, the module switched off, or a person without the
 panel's permission — the zone renders nothing and the screen is exactly the one
-without it. The CRM module contributes the opportunity a quote request is
-linked to.
+without it.
+
+The admin zone `quote_request.detail.sidebar` is mounted once, in a sidebar
+card beside the tabs, and hands a contribution the same `{ quoteRequestId }`.
+Each contribution is a section of that one card. The sidebar is drawn only
+while something fills it, so with nothing contributed the screen has one
+column, exactly as without the zone. The CRM, Projects and Tasks modules
+contribute the opportunity a quote request is linked to, its project and its
+tasks here; contributions to `quote_request.detail.after` keep working
+unchanged.
 
 ## Global search
 
@@ -867,7 +2013,7 @@ The admin's global search (the command palette, ⌘K / Ctrl+K) finds quote reque
 
 | Field | Searched by default |
 | --- | --- |
-| Quote Request number | yes |
+| Quote request number | yes |
 | Organization name | yes |
 | Customer name or e-mail | yes |
 | Customer's note | no |

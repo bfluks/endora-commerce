@@ -1,0 +1,107 @@
+import { describe, expect, it } from 'vitest';
+import { parseAcceptLanguage, weightedAcceptLanguage } from './accept-language.js';
+
+/**
+ * The q-weighted `Accept-Language` parse (feature 083, R9; moved here by issue #397
+ * so the platform's prose-language ladder and the channel content-language rule
+ * read the header through one parse). The header is attacker-controlled on every
+ * request, so the bounds are asserted here rather than only through a route.
+ */
+describe('parseAcceptLanguage — a q-weighted list, bounded (R9)', () => {
+  it('sorts by descending q rather than taking the first tag', () => {
+    // `split(',')[0]` answers `en` here, which is the wrong language by the
+    // client's own statement (issue #397).
+    expect(parseAcceptLanguage('en;q=0.2,pl;q=0.9')).toEqual(['pl', 'en']);
+  });
+
+  it('treats a tag with no q as weight 1 and keeps the written order among equals', () => {
+    expect(parseAcceptLanguage('en-US,pl;q=0.9')).toEqual(['en-US', 'pl']);
+    expect(parseAcceptLanguage('pl,en')).toEqual(['pl', 'en']);
+  });
+
+  it('drops a tag whose q is malformed rather than guessing a weight', () => {
+    expect(parseAcceptLanguage('de;q=abc,pl')).toEqual(['pl']);
+    expect(parseAcceptLanguage('de;q=,pl')).toEqual(['pl']);
+  });
+
+  it('keeps * as a tag (no consumer treats it as a language)', () => {
+    expect(parseAcceptLanguage('*')).toEqual(['*']);
+  });
+
+  /**
+   * Issue #1315 — RFC 9110 § 12.4.2: `q=0` means "not acceptable". A refused tag is not a
+   * candidate at all, however the zero is spelled, and neither is a refused `*`.
+   */
+  it('drops a tag at q=0 (and below), a refused * included', () => {
+    expect(parseAcceptLanguage('pl;q=0, en;q=0.5')).toEqual(['en']);
+    expect(parseAcceptLanguage('pl;q=0')).toEqual([]);
+    expect(parseAcceptLanguage('pl;q=0.000, en;q=-1, de')).toEqual(['de']);
+    expect(parseAcceptLanguage('en, *;q=0')).toEqual(['en']);
+  });
+
+  it('does not let refused tags use up the ten-tag bound', () => {
+    const refused = Array.from({ length: 12 }, (_unused, i) => `r${i};q=0`).join(',');
+    expect(parseAcceptLanguage(`${refused},pl;q=0.1`)).toEqual(['pl']);
+  });
+
+  it('reads the first element of a duplicated header', () => {
+    // Fastify hands duplicate headers over as an array.
+    expect(parseAcceptLanguage(['pl', 'en'])).toEqual(['pl']);
+  });
+
+  it('answers an absent header with no tags at all', () => {
+    expect(parseAcceptLanguage(undefined)).toEqual([]);
+    expect(parseAcceptLanguage('')).toEqual([]);
+    expect(parseAcceptLanguage('   ')).toEqual([]);
+  });
+
+  it('truncates the header at 512 characters and ignores the remainder', () => {
+    // A tag beyond the bound is not an error — the parse simply does not reach
+    // it. `pl` sits past character 512 and must not appear.
+    const header = `en,${'q'.repeat(520)},pl`;
+    const tags = parseAcceptLanguage(header);
+    expect(tags).toHaveLength(2);
+    expect(tags[0]).toBe('en');
+    expect(tags).not.toContain('pl');
+    expect((tags[1] as string).length).toBe(512 - 'en,'.length);
+  });
+
+  it('keeps the ten heaviest tags and no more', () => {
+    const header = Array.from(
+      { length: 20 },
+      (_unused, i) => `t${i};q=${(1 - i * 0.05).toFixed(2)}`,
+    ).join(',');
+    expect(header.length).toBeLessThan(512);
+    const tags = parseAcceptLanguage(header);
+    expect(tags).toHaveLength(10);
+    expect(tags).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9']);
+  });
+
+  it('caps after weighting, so a heavy tag written last survives the cap', () => {
+    const filler = Array.from({ length: 15 }, (_unused, i) => `t${i};q=0.1`).join(',');
+    expect(parseAcceptLanguage(`${filler},pl;q=0.9`)[0]).toBe('pl');
+  });
+});
+
+/**
+ * Issue #1011 — the same parse with its weights. Issue #1315 — under the same exclusion of
+ * refused (`q=0`) tags, so every weight it answers is above zero.
+ */
+describe('weightedAcceptLanguage — the parse with its weights', () => {
+  it('answers each tag with its q, in the order parseAcceptLanguage answers the tags', () => {
+    const header = 'en;q=0.2, pl;q=0.9, de;q=0, *';
+    expect(weightedAcceptLanguage(header)).toEqual([
+      { tag: '*', q: 1 },
+      { tag: 'pl', q: 0.9 },
+      { tag: 'en', q: 0.2 },
+    ]);
+    expect(weightedAcceptLanguage(header).map((entry) => entry.tag)).toEqual(parseAcceptLanguage(header));
+  });
+
+  it('applies the same bounds and drops a malformed q', () => {
+    expect(weightedAcceptLanguage('de;q=,pl')).toEqual([{ tag: 'pl', q: 1 }]);
+    const filler = Array.from({ length: 15 }, (_unused, i) => `t${i};q=0.1`).join(',');
+    expect(weightedAcceptLanguage(filler)).toHaveLength(10);
+    expect(weightedAcceptLanguage(undefined)).toEqual([]);
+  });
+});

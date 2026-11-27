@@ -14,6 +14,7 @@ import type {
   CreateCmsHookRequest,
   CreateCmsPageRequest,
   CreateCmsTemplateRequest,
+  DuplicateCmsRecordRequest,
   PatchCmsBlockRequest,
   PatchCmsHookRequest,
   PatchCmsPageRequest,
@@ -25,9 +26,15 @@ import type {
   CmsPageBuilderTranslateRequest,
   CmsPageBuilderTranslateResponse,
   CmsPageBuilderTranslationCapability,
+  CmsBrandTokensAdminRead,
+  ContrastFinding,
+  PutCmsBrandTokensRequest,
 } from '@endora-commerce/contracts';
 
 export type {
+  CmsBrandTokensAdminRead,
+  ContrastFinding,
+  PutCmsBrandTokensRequest,
   CmsPageBuilderTranslateRequest,
   CmsPageBuilderTranslateResponse,
   CmsPageBuilderTranslationCapability,
@@ -45,6 +52,7 @@ export type {
   CreateCmsHookRequest,
   CreateCmsPageRequest,
   CreateCmsTemplateRequest,
+  DuplicateCmsRecordRequest,
   PatchCmsBlockRequest,
   PatchCmsHookRequest,
   PatchCmsPageRequest,
@@ -184,6 +192,15 @@ export const cmsClient = {
     await apiClient.delete(`/api/v1/admin/cms/pages/${encodeURIComponent(id)}`);
   },
 
+  /** Issue #1495 (DEC-17) — a draft copy under a derived slug; the admin sends the localized name. */
+  async duplicatePage(id: string, body: DuplicateCmsRecordRequest): Promise<CmsPageDetail> {
+    const out = await apiClient.post<{ data: CmsPageDetail }>(
+      `/api/v1/admin/cms/pages/${encodeURIComponent(id)}/duplicate`,
+      body,
+    );
+    return out.data;
+  },
+
   /**
    * The deployment's reserved first path segments (feature 105, FR-033).
    *
@@ -199,9 +216,37 @@ export const cmsClient = {
     return out.data.segments;
   },
 
-  async getPageBuilderConfig(): Promise<CmsPageBuilderDescriptor> {
+  /**
+   * The page-builder descriptor. With a sales channel, its `brandTokens` are
+   * that channel's effective set, which the preview is styled with (feature
+   * 163, research R-4); without one, the global set.
+   */
+  async getPageBuilderConfig(salesChannelId?: string | null): Promise<CmsPageBuilderDescriptor> {
+    const query = salesChannelId ? `?salesChannelId=${encodeURIComponent(salesChannelId)}` : '';
     const out = await apiClient.get<{ data: CmsPageBuilderDescriptor }>(
-      '/api/v1/admin/cms/page-builder/config',
+      `/api/v1/admin/cms/page-builder/config${query}`,
+    );
+    return out.data;
+  },
+
+  /**
+   * Feature 163 — the brand tokens (`contracts/storefront-and-admin-api.md`
+   * §1). With a sales channel, the read carries that channel's stored
+   * override beside the global set; `effective` is what the storefront uses.
+   */
+  async getBrandTokens(salesChannelId?: string | null): Promise<CmsBrandTokensAdminRead> {
+    const query = salesChannelId ? `?salesChannelId=${encodeURIComponent(salesChannelId)}` : '';
+    const out = await apiClient.get<{ data: CmsBrandTokensAdminRead }>(`/api/v1/admin/cms/brand-tokens${query}`);
+    return out.data;
+  },
+
+  /** Saves one scope's set, or with `tokens: null` removes it; 409 on a stale `expectedVersion`. */
+  async putBrandTokens(
+    body: PutCmsBrandTokensRequest,
+  ): Promise<{ version: number; warnings: ContrastFinding[] }> {
+    const out = await apiClient.put<{ data: { version: number; warnings: ContrastFinding[] } }>(
+      '/api/v1/admin/cms/brand-tokens',
+      body,
     );
     return out.data;
   },
@@ -254,6 +299,15 @@ export const cmsClient = {
     await apiClient.delete(`/api/v1/admin/cms/blocks/${encodeURIComponent(id)}`);
   },
 
+  /** Issue #1495 (DEC-17) — a copy under a derived code; the admin sends the localized name. */
+  async duplicateBlock(id: string, body: DuplicateCmsRecordRequest): Promise<CmsBlockDetail> {
+    const out = await apiClient.post<{ data: CmsBlockDetail }>(
+      `/api/v1/admin/cms/blocks/${encodeURIComponent(id)}/duplicate`,
+      body,
+    );
+    return out.data;
+  },
+
   listTemplates(query: { salesChannelId?: string } = {}): Promise<ListTemplatesResponse> {
     const params = new URLSearchParams();
     if (query.salesChannelId) params.set('salesChannelId', query.salesChannelId);
@@ -300,6 +354,15 @@ export const cmsClient = {
 
   async deleteTemplate(id: string): Promise<void> {
     await apiClient.delete(`/api/v1/admin/cms/templates/${encodeURIComponent(id)}`);
+  },
+
+  /** Issue #1495 (DEC-17) — a copy under a derived code; the admin sends the localized name. */
+  async duplicateTemplate(id: string, body: DuplicateCmsRecordRequest): Promise<CmsTemplateDetail> {
+    const out = await apiClient.post<{ data: CmsTemplateDetail }>(
+      `/api/v1/admin/cms/templates/${encodeURIComponent(id)}/duplicate`,
+      body,
+    );
+    return out.data;
   },
 
   listHooks(query: { salesChannelId?: string } = {}): Promise<ListHooksResponse> {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { Product } from '../entities/product.entity.js';
@@ -180,6 +180,13 @@ export class BundleService {
   ): Promise<BundleSlotRow> {
     const slot = await this.#audited('bundle_slot.update', slotId, async (em) => {
       await this.assertBundleParent(em, parentProductId);
+      if (!isUuidShape(slotId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.BUNDLE_SLOT_NOT_FOUND,
+          `Bundle slot "${slotId}" not found on parent ${parentProductId}.`,
+        );
+      }
       const s = await em.findOne(BundleSlot, { id: slotId, parentProductId });
       if (!s) {
         throw new HttpError(
@@ -226,6 +233,13 @@ export class BundleService {
   async deleteSlot(parentProductId: string, slotId: string): Promise<void> {
     await this.#audited('bundle_slot.delete', slotId, async (em) => {
       await this.assertBundleParent(em, parentProductId);
+      if (!isUuidShape(slotId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.BUNDLE_SLOT_NOT_FOUND,
+          `Bundle slot "${slotId}" not found.`,
+        );
+      }
       const slot = await em.findOne(BundleSlot, { id: slotId, parentProductId });
       if (!slot) {
         throw new HttpError(
@@ -251,12 +265,26 @@ export class BundleService {
   ): Promise<BundleSlotOptionRow> {
     const em = this.emFactory();
     await this.assertBundleParent(em, parentProductId);
+    if (!isUuidShape(slotId) || !isUuidShape(parentProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.BUNDLE_SLOT_NOT_FOUND,
+        `Bundle slot "${slotId}" not found.`,
+      );
+    }
     const slot = await em.findOne(BundleSlot, { id: slotId, parentProductId });
     if (!slot) {
       throw new HttpError(
         404,
         ERROR_CODES.BUNDLE_SLOT_NOT_FOUND,
         `Bundle slot "${slotId}" not found.`,
+      );
+    }
+    if (!isUuidShape(input.optionProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Option product "${input.optionProductId}" not found.`,
       );
     }
     const option = await em.findOne(Product, { id: input.optionProductId });
@@ -318,6 +346,13 @@ export class BundleService {
   ): Promise<void> {
     await this.#audited('bundle_option.remove', optionId, async (em) => {
       await this.assertBundleParent(em, parentProductId);
+      if (!isUuidShape(optionId) || !isUuidShape(slotId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.BUNDLE_SLOT_OPTION_NOT_FOUND,
+          `Bundle slot option "${optionId}" not found.`,
+        );
+      }
       const opt = await em.findOne(BundleSlotOption, { id: optionId, slotId });
       if (!opt) {
         throw new HttpError(
@@ -343,6 +378,14 @@ export class BundleService {
   async validateConfiguration(
     parentProductId: string,
     selections: ConfigurationSelection[],
+    /**
+     * Feature 163 — the storefront's availability filter for the request
+     * (channel, language, audience, now). An option whose product is not
+     * available is answered as an unknown option, the same answer an absent
+     * one gets, so the reason is never disclosed (edge case *child off*).
+     * Required: a storefront validation without it would offer every option.
+     */
+    availableProductIds: (productIds: readonly string[]) => Promise<ReadonlySet<string>>,
   ): Promise<BundleValidationResult> {
     const em = this.emFactory();
     await this.assertBundleParent(em, parentProductId);
@@ -352,8 +395,10 @@ export class BundleService {
       slotIds.length > 0
         ? await em.find(BundleSlotOption, { slotId: { $in: slotIds } })
         : [];
+    const available = await availableProductIds([...new Set(options.map((o) => o.optionProductId))]);
+    const offered = options.filter((o) => available.has(o.optionProductId));
     const slotsById = new Map(slots.map((s) => [s.id, s]));
-    const optionsById = new Map(options.map((o) => [o.id, o]));
+    const optionsById = new Map(offered.map((o) => [o.id, o]));
 
     const errors: BundleValidationError[] = [];
     const resolvedSelections: BundleValidationResult['resolvedSelections'] = [];
@@ -411,6 +456,13 @@ export class BundleService {
     em: EntityManager,
     parentProductId: string,
   ): Promise<Product> {
+    if (!isUuidShape(parentProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Product "${parentProductId}" not found.`,
+      );
+    }
     const parent = await em.findOne(Product, { id: parentProductId });
     if (!parent || parent.deletedAt) {
       throw new HttpError(

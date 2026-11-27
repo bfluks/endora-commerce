@@ -11,6 +11,7 @@ import {
   type EmailTemplateSummary,
   type PatchEmailTemplateRequest,
   type PutEmailBlockContentRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { PuckDataTree } from '@endora-commerce/email-components/schema/envelope';
 import {
@@ -21,6 +22,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { assertEmailAssetsLinkable, type EmailAssetVisibility } from './linkable-assets.js';
 import { EmailTemplate } from '../entities/email-template.entity.js';
 import { EmailTemplateSalesChannel } from '../entities/email-template-sales-channel.entity.js';
 
@@ -37,6 +39,8 @@ export class EmailTemplateService {
     private readonly auditLog?: AuditPort,
     /** The block names saved content may hold; the first-party set when not composed. */
     private readonly emailSafeNames: EmailSafeNames = FIRST_PARTY_EMAIL_NAMES,
+    /** Issue #1354 — asked before a save stores an asset id the template did not already hold. */
+    private readonly assets?: EmailAssetVisibility,
   ) {}
 
   #audit(
@@ -91,6 +95,7 @@ export class EmailTemplateService {
   }
 
   private async loadOrThrow(em: EntityManager, id: string): Promise<EmailTemplate> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Email template ${id} not found.`);
     const t = await em.findOne(EmailTemplate, { id });
     if (!t) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Email template ${id} not found.`);
     return t;
@@ -121,7 +126,7 @@ export class EmailTemplateService {
       isSystem: false,
       version: 1,
     });
-    await em.persistAndFlush(tpl);
+    await em.persist(tpl).flush();
     for (const scId of req.salesChannelIds ?? []) {
       em.persist(em.create(EmailTemplateSalesChannel, { templateId: tpl.id, salesChannelId: scId, code: tpl.code }));
     }
@@ -140,7 +145,7 @@ export class EmailTemplateService {
     if (req.description !== undefined) t.description = req.description;
     if (req.salesChannelIds !== undefined && !t.isSystem) {
       const current = await em.find(EmailTemplateSalesChannel, { templateId: t.id });
-      await em.removeAndFlush(current);
+      await em.remove(current).flush();
       for (const scId of req.salesChannelIds) {
         em.persist(em.create(EmailTemplateSalesChannel, { templateId: t.id, salesChannelId: scId, code: t.code }));
       }
@@ -157,6 +162,7 @@ export class EmailTemplateService {
     if (req.expectedVersion !== t.version) {
       throw new HttpError(409, ERROR_CODES.VERSION_CONFLICT, 'Template was modified by someone else.');
     }
+    await assertEmailAssetsLinkable(this.assets, req.content, [t.content]);
     const env = (t.content as { schema_version?: number; languages?: Record<string, unknown> }) ?? {};
     const languages = { ...(env.languages ?? {}), [language]: req.content };
     t.content = { schema_version: env.schema_version ?? 1, languages };
@@ -170,9 +176,18 @@ export class EmailTemplateService {
   async delete(id: string): Promise<void> {
     const em = this.emFactory();
     const t = await this.loadOrThrow(em, id);
-    if (t.isSystem) throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'System templates cannot be deleted.');
+    // `templateCode`, not `code`: the error envelope reads `details.code` as
+    // the refusal token that picks the sentence (issue #638).
+    if (t.isSystem) {
+      throw new HttpError(
+        409,
+        ERROR_CODES.TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE,
+        'System templates cannot be deleted.',
+        { templateId: t.id, templateCode: t.code },
+      );
+    }
     const bridges = await em.find(EmailTemplateSalesChannel, { templateId: t.id });
     this.#audit(em, 'email_template.delete', t.id, { code: t.code }, null);
-    await em.removeAndFlush([...bridges, t]);
+    await em.remove([...bridges, t]).flush();
   }
 }

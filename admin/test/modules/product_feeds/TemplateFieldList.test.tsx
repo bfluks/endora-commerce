@@ -49,9 +49,15 @@ const KEYS = passthroughBundle('product_feeds', [
   'builder.empty.title',
   'builder.empty.subtitle',
   'builder.preview.empty.omitted',
+  'builder.field.duplicate',
+  'builder.field.moveTo',
+  'builder.field.moveToLabel',
+  'builder.field.moveToApply',
+  'builder.field.moveToCancel',
+  'builder.field.remove',
 ]);
 
-const CORE = passthroughBundle('core', ['reorder.moveUp', 'reorder.moveDown', 'reorder.groupLabel']);
+const CORE = passthroughBundle('core', ['reorder.moveUp', 'reorder.moveDown', 'reorder.groupLabel', 'common.emptyState.clearFilters']);
 
 const bundle = {
   ...CORE,
@@ -91,6 +97,7 @@ function renderList(over: Partial<Parameters<typeof TemplateFieldList>[0]> = {})
       onRemove={vi.fn()}
       onDuplicate={vi.fn()}
       search=""
+      onClearSearch={vi.fn()}
       preview={null}
       problems={{}}
       disabled={false}
@@ -178,6 +185,7 @@ describe('TemplateFieldList', () => {
         onRemove={vi.fn()}
         onDuplicate={vi.fn()}
         search=""
+        onClearSearch={vi.fn()}
         preview={null}
         problems={{}}
         disabled={false}
@@ -192,5 +200,47 @@ describe('TemplateFieldList', () => {
     for (const button of screen.getAllByRole('button', { name: /reorder\.move/ })) {
       expect(button).toBeDisabled();
     }
+  });
+  // Issue #1448 (DS-15): a search that hides every field is the kit's
+  // no-results state, with the one way back — not a bare grey sentence.
+  it('tells a search that matches no field apart from an empty template, and clears it', async () => {
+    const user = userEvent.setup();
+    const onClearSearch = vi.fn();
+    renderList({ search: 'zzz', onClearSearch });
+    const block = document.querySelector('[data-empty-state]');
+    expect(block?.getAttribute('data-empty-state')).toBe('no-results');
+    expect(screen.getByText('builder.empty.filtered')).toBeInTheDocument();
+    expect(screen.queryByText('builder.empty.title')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'common.emptyState.clearFilters' }));
+    expect(onClearSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('says an empty template has no fields yet, with no Clear filters', () => {
+    renderList({ fields: [] });
+    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-empty-state')).toBe('no-data');
+    expect(screen.queryByRole('button', { name: 'common.emptyState.clearFilters' })).toBeNull();
+  });
+
+  // DS-03 (#1437, #1530): the row menu and its "Move to" were hand-drawn floating boxes.
+  it('opens the row actions as a kit menu, and "Move to" as a dialog that moves the field', async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderList();
+    await user.click(screen.getByRole('button', { name: 'More actions for id' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'builder.field.duplicate',
+      'builder.field.moveTo',
+      'builder.field.remove',
+    ]);
+    await user.click(within(menu).getByRole('menuitem', { name: 'builder.field.moveTo' }));
+    const dialog = await screen.findByRole('dialog', { name: 'builder.field.moveTo' });
+    const position = within(dialog).getByRole('spinbutton', { name: 'builder.field.moveToLabel' });
+    await user.clear(position);
+    await user.type(position, '3');
+    await user.click(within(dialog).getByRole('button', { name: 'builder.field.moveToApply' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(onChange).toHaveBeenCalled();
+    const moved = onChange.mock.calls.at(-1)![0] as DraftField[];
+    expect(moved.map((f) => f.outputName)).toEqual(['title', 'price', 'id']);
   });
 });

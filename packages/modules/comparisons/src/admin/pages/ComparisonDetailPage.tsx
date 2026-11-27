@@ -1,13 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import type { ComparisonAdminDetail } from '@endora-commerce/contracts';
-import { ApiError } from '@endora-commerce/admin-kit/lib';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useParams } from 'react-router-dom';
+import { unitPriceDisplayText, type ComparisonAdminDetail } from '@endora-commerce/contracts';
+import { ApiError, formatDateTime } from '@endora-commerce/admin-kit/lib';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import {
   Alert,
   AlertDescription,
   Badge,
-  Button,
   Card,
   CardContent,
   PageHeader,
@@ -38,7 +37,9 @@ import { getComparisonDetail } from '../api/comparisons-client.js';
  */
 export default function ComparisonDetailPage(): ReactNode {
   const t = useTranslation('comparisons');
+  const { language } = useTranslationContext();
   const { id } = useParams<{ id: string }>();
+  const back = { label: t('list.page.title'), to: '/comparisons' };
   const [detail, setDetail] = useState<ComparisonAdminDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,22 +64,17 @@ export default function ComparisonDetailPage(): ReactNode {
   if (error) {
     return (
       <>
-        <PageHeader title={t('detail.page.title')} />
+        <PageHeader title={t('detail.page.title')} back={back} />
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-        <div className="mt-4">
-          <Button asChild variant="outline">
-            <Link to="/comparisons">{t('detail.backToList')}</Link>
-          </Button>
-        </div>
       </>
     );
   }
   if (!detail) {
     return (
       <>
-        <PageHeader title={t('detail.page.title')} />
+        <PageHeader title={t('detail.page.title')} back={back} />
         <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
       </>
     );
@@ -86,17 +82,14 @@ export default function ComparisonDetailPage(): ReactNode {
 
   return (
     <>
-      <PageHeader
-        title={t('detail.page.title')}
-        description={t('detail.page.description')}
-      />
+      <PageHeader title={t('detail.page.title')} back={back} />
 
       <Alert className="mb-4">
         <AlertDescription>{t('detail.pricesNote')}</AlertDescription>
       </Alert>
 
       <Card className="mb-4">
-        <CardContent className="pt-6 space-y-2">
+        <CardContent className="space-y-2">
           <div>
             <strong>{t('detail.owner')}:</strong>{' '}
             {detail.owner.kind === 'customer'
@@ -116,23 +109,23 @@ export default function ComparisonDetailPage(): ReactNode {
             <code className="font-mono text-xs">{detail.shareToken}</code>
           </div>
           <div className="text-muted-foreground">
-            {t('detail.created')} {new Date(detail.createdAt).toLocaleString()} · {t('detail.updated')}{' '}
-            {new Date(detail.updatedAt).toLocaleString()}
+            {t('detail.created')} {formatDateTime(detail.createdAt, language)} · {t('detail.updated')}{' '}
+            {formatDateTime(detail.updatedAt, language)}
           </div>
         </CardContent>
       </Card>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{t('detail.attribute')}</TableHead>
                 {detail.products.map((p) => (
                   <TableHead key={p.id}>
-                    <div>{localised(p.name)}</div>
+                    <div>{p.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {p.price ? `${p.price.amount} ${p.price.currency}` : '—'}
+                      {p.price ? `${unitPriceDisplayText(p.price.amount)} ${p.price.currency}` : '—'}
                     </div>
                   </TableHead>
                 ))}
@@ -167,12 +160,6 @@ export default function ComparisonDetailPage(): ReactNode {
           </Table>
         </CardContent>
       </Card>
-
-      <div className="mt-4">
-        <Button asChild variant="outline">
-            <Link to="/comparisons">{t('detail.backToList')}</Link>
-        </Button>
-      </div>
     </>
   );
 }

@@ -238,7 +238,7 @@ export class PushSubscriptionService {
       userAgent: input.userAgent ?? null,
       lastSeenAt: new Date(),
     });
-    await em.persistAndFlush(sub);
+    await em.persist(sub).flush();
     return { id: sub.id, status: 'active', created: true };
   }
 
@@ -257,7 +257,7 @@ export class PushSubscriptionService {
     if (!existing) return false;
     const authorised = provesOwnership(existing, proof);
     if (!authorised) return false;
-    await em.removeAndFlush(existing);
+    await em.remove(existing).flush();
     return true;
   }
 
@@ -268,7 +268,22 @@ export class PushSubscriptionService {
     const em = this.emFactory();
     const existing = await em.findOne(PushSubscription, { id: subscriptionId });
     if (!existing) return;
-    await em.removeAndFlush(existing);
+    await em.remove(existing).flush();
+  }
+
+  /**
+   * Whether the account has an active device on the channel — the last gate of
+   * `customerPushPort` before it writes a message
+   * (`specs/179-rfq-and-customer-notifications/` FR-060). The same predicate
+   * the message service expands a `customers` audience with.
+   */
+  async hasActive(customerAccountId: string, salesChannelId: string): Promise<boolean> {
+    const count = await this.emFactory().count(PushSubscription, {
+      salesChannelId,
+      status: 'active',
+      customerAccountId,
+    });
+    return count > 0;
   }
 
   /**

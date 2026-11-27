@@ -1,10 +1,15 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   EmailMailerPort,
 } from '@endora-commerce/contracts';
 import { AvailabilityNotification } from '../entities/availability-notification.entity.js';
+import { restockDisposition } from './restock-product-state.js';
+import { backInStockNames } from './back-in-stock-names.js';
+import { sendBackInStockEmail } from './back-in-stock-email.js';
+import type { InventoryTemplateEmailPort } from './low-stock-alert-service.js';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
 
 export interface AdjustedPayload {
@@ -24,11 +29,15 @@ export interface AdjustedPayload {
  *
  *   1. Loads every AvailabilityNotification for that (productId, variantId)
  *      that hasn't yet been notified.
- *   2. For each subscriber, sends a back-in-stock email via the injected
- *      Mailer.
- *   3. Marks the notification consumed (`notifiedAt = now`) inside one
- *      flush so a worker crash mid-batch doesn't double-send (the next
- *      run re-loads only un-notified rows).
+ *   2. For each subscriber, sends the `availability_back_in_stock`
+ *      template in the subscription's channel and language (issue #1256),
+ *      through `transactional_emails`' `templateEmailPort`.
+ *   3. Marks the notification consumed (`status = 'notified'`, `notifiedAt = now`)
+ *      inside one flush so a worker crash mid-batch doesn't double-send (the
+ *      next run re-loads only un-notified rows). A subscriber with no address
+ *      left is closed as `cancelled` instead — what
+ *      `AvailabilityNotificationService.processRestockedFanOut` writes too
+ *      (issue #1291).
  *
  * Production composition can swap synchronous dispatch for a BullMQ job
  * by binding a queue producer to the same method signature.
@@ -41,23 +50,48 @@ export class AvailabilityWorker {
     private readonly catalogProducts: CatalogProductReadPort,
     /** `customerAccountReadPort`, owned by `customer_accounts` (feature 075). */
     private readonly customerAccounts: CustomerAccountReadPort,
+    /**
+     * `catalogProductAvailabilityPort`, owned by `catalog` — the effective product name at each
+     * subscription's (channel, language) (issue #696). Required: `catalog` is non-deactivatable
+     * and a declared dependency, and an optional reader is a composition that silently falls
+     * back to the Global name.
+     */
+    private readonly catalogTexts: Pick<CatalogProductAvailabilityPort, 'effectiveTexts'>,
+    /**
+     * `templateEmailPort`, owned by `transactional_emails` — the operator-editable
+     * back-in-stock template, rendered in each subscription's channel and language (issue
+     * #1256). Required for the reason `catalogTexts` is: the owner is non-deactivatable and a
+     * declared dependency, and an optional sender is a composition that silently sends the
+     * fixed English text. {@link mailer} carries that text only when the template path answers
+     * that no definition exists.
+     */
+    private readonly templateEmail: InventoryTemplateEmailPort,
   ) {}
 
   async dispatchForStockIncrease(input: {
     productId: string;
     variantId?: string | null;
   }): Promise<{ notified: number }> {
-    // command-coverage-ignore: background restock fan-out — stamps notifiedAt on
-    // subscriptions as it sends, delivery bookkeeping (not an audited domain write).
+    // command-coverage-ignore: background restock fan-out — flips subscriptions to
+    // 'notified' as it sends, delivery bookkeeping (not an audited domain write).
     // Feature 050 — triggered off a stock-increase event; may run detached, so
     // scope the AvailabilityNotification reads under a system context.
     return withSystemScope('availability stock-increase', async () => {
     const em = this.emFactory();
+    // The wider read (no `liveOnly`), so a deleted product resolves and is told apart from an
+    // archived or switched-off one.
     const product = await this.catalogProducts.findById(input.productId);
-    if (!product) return { notified: 0 };
+    const now = new Date();
+    // Issue #468 — asked once, before any subscriber is mailed. `hold` leaves every row as it
+    // is, for a later restock to send once the product is for sale again.
+    const disposition = restockDisposition(product, now);
+    if (disposition === 'hold') return { notified: 0 };
 
     const where: Record<string, unknown> = {
       productId: input.productId,
+      // A row the customer or an admin cancelled keeps `notifiedAt` null, so the status is what
+      // keeps it from being mailed (issue #468).
+      status: 'queued',
       notifiedAt: null,
     };
     if (input.variantId === undefined || input.variantId === null) {
@@ -67,6 +101,17 @@ export class AvailabilityWorker {
     }
     const subscriptions = await em.find(AvailabilityNotification, where);
     if (subscriptions.length === 0) return { notified: 0 };
+
+    if (disposition === 'cancel' || product === null) {
+      // A deleted or missing product is not coming back: close the subscriptions, the same
+      // treatment `AvailabilityNotificationService.processRestockedFanOut` gives them.
+      for (const sub of subscriptions) {
+        sub.status = 'cancelled';
+        sub.notifiedAt = now;
+      }
+      await em.flush();
+      return { notified: 0 };
+    }
 
     const customerIds = Array.from(
       new Set(
@@ -79,44 +124,41 @@ export class AvailabilityWorker {
       customerIds.length > 0 ? await this.customerAccounts.findByIds(customerIds) : [];
     const emailById = new Map(customers.map((c) => [c.id, c.email]));
 
-    const productName = product.name['en-US'] ?? Object.values(product.name)[0] ?? product.sku;
-    const now = new Date();
+    // Issue #696 — each subscriber is told the product's effective name at the scope they
+    // subscribed in; a subscription with none (written before #696) keeps the Global name.
+    const productNames = await backInStockNames(subscriptions, product, this.catalogTexts);
 
     for (const sub of subscriptions) {
+      const productName = productNames.get(sub.id) ?? (product.name || product.sku);
       // Feature 010: subscriptions can carry an `email` directly
       // (anonymous path). Prefer that; otherwise fall back to the
       // customer-account email.
       const to = sub.email ?? (sub.customerAccountId ? emailById.get(sub.customerAccountId) : null);
       if (!to) {
-        // Customer was deleted; mark consumed anyway so we stop retrying.
+        // Customer was deleted; close it so we stop retrying, as the fan-out does (#1291).
+        sub.status = 'cancelled';
         sub.notifiedAt = now;
         continue;
       }
-      const outcome = await this.mailer.send({
-        messageId: `availability:${sub.id}`,
-        to,
-        subject: `Back in stock: ${productName}`,
-        text: `Good news — "${productName}" is available again.`,
-        kind: 'availability_back_in_stock',
-        meta: {
-          productId: input.productId,
-          variantId: input.variantId ?? null,
+      await sendBackInStockEmail(
+        { templateEmail: this.templateEmail, mailer: this.mailer },
+        {
           notificationId: sub.id,
+          to,
+          productName,
+          salesChannelId: sub.salesChannelId ?? null,
+          languageCode: sub.languageCode ?? null,
+          meta: {
+            productId: input.productId,
+            variantId: input.variantId ?? null,
+            notificationId: sub.id,
+          },
         },
-      });
-      // Only the transport's refusal is named here. `logged` (issue #186) is the
-      // console driver saying no mail server is configured: it has already
-      // written the message to the log itself, and the delivery record says so.
-      if (outcome.status === 'suppressed') {
-        // The subscription is still consumed: the one suppression a transport
-        // performs is an already-accepted `messageId`, which means this
-        // subscriber was notified by an earlier run. Re-sending it is the
-        // duplicate the idempotency key exists to prevent.
-        console.warn('[inventory] the back-in-stock e-mail was not sent', {
-          notificationId: sub.id,
-          reason: outcome.reason,
-        });
-      }
+      );
+      // Issue #1291 — consumed is `notified`, whether a mail left or the operator switched the
+      // e-mail off (`sendBackInStockEmail` returns either way); `notifiedAt` alone left the row
+      // reading `queued` in the admin list and its status filter.
+      sub.status = 'notified';
       sub.notifiedAt = now;
     }
     await em.flush();

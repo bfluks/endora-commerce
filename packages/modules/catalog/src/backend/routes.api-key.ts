@@ -60,9 +60,14 @@ export async function registerCatalogApiKeyRoutes(
       const payload = { ...body, sku };
 
       const em = deps.emFactory();
-      const existing = await em.findOne(Product, { sku });
+      // Issue #693 — a deleted product does not hold its SKU: the call creates a new one.
+      const existing = await em.findOne(Product, { sku, deletedAt: null });
       if (existing) {
-        const updated = await deps.adminService.updateProduct(existing.id, payload);
+        // Feature 163 (S-W3, Constitution XIII) — the audited Command, naming the key
+        // in its entry. No completeness mode is passed: an integration is never gated (A-6).
+        const updated = await deps.adminService.updateProductAudited(existing.id, payload, {
+          apiKeyId: apiKeyIdOf(request),
+        });
         reply.status(200);
         return { data: updated };
       }
@@ -92,9 +97,22 @@ export async function registerCatalogApiKeyRoutes(
       '/api/v1/catalog/attribute-sets/:id',
       { preHandler: requireApiKey('catalog:read') },
       async (request) => {
-        const detail = await attrSetService.getSetDetail(request.params.id);
+        // Feature 172 (FR-042) — content attributes are not offered for mapping.
+        const detail = await attrSetService.getSetDetail(request.params.id, { includeContent: false });
         return { data: detail };
       },
     );
   }
+}
+
+/**
+ * The API key the request authenticated with, or `null`. `request.actor` is a
+ * `declare module 'fastify'` augmentation owned by `auth` / `api_keys`; it is
+ * narrowed locally for the same reason `routes.external.ts` does.
+ */
+function apiKeyIdOf(request: FastifyRequest): string | null {
+  const actor = (request as FastifyRequest & { actor?: unknown }).actor as
+    | { kind: string; apiKeyId?: string | null }
+    | undefined;
+  return actor?.kind === 'api_key' ? (actor.apiKeyId ?? null) : null;
 }

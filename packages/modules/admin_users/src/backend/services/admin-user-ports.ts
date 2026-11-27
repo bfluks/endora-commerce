@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { normalizeEmailAddress } from '@endora-commerce/contracts';
+import { normalizeEmailAddress, isUuidShape } from '@endora-commerce/contracts';
 import type {
   AdminAuthenticationThrottlePort,
   AdminPasswordVerificationPort,
@@ -73,6 +73,16 @@ export class AdminUserReadService implements AdminUserReadPort {
     return toAdminUserRecords(this.twoFactorEnrolments, admins);
   }
 
+  /** Feature 171 (US6) — whose avatar is one of these assets; deleted admins hold none. */
+  async findByAvatarAssetIds(assetIds: readonly string[]): Promise<AdminUserRecord[]> {
+    if (assetIds.length === 0) return [];
+    const admins = await this.emFactory().find(AdminUser, {
+      avatarAssetId: { $in: [...assetIds] },
+      deletedAt: null,
+    });
+    return toAdminUserRecords(this.twoFactorEnrolments, admins);
+  }
+
   async listByRoleId(adminRoleId: string): Promise<AdminUserRecord[]> {
     const admins = await this.emFactory().find(
       AdminUser,
@@ -106,6 +116,7 @@ export function createAdminPasswordVerificationPort(
 ): AdminPasswordVerificationPort {
   return {
     async verifyPassword(adminUserId, password, context) {
+      if (!isUuidShape(adminUserId)) return false;
       const admin = await emFactory().findOne(AdminUser, { id: adminUserId });
       if (!admin) return false;
       // Counted under the account's e-mail address, the key sign-in uses, so a
@@ -196,6 +207,8 @@ export function toAdminUserRecord(admin: AdminUser, twoFactorEnabled: boolean): 
     twoFactorEnabled,
     lastLoginAt: admin.lastLoginAt ?? null,
     preferredLanguage: admin.preferredLanguage ?? null,
+    avatarAssetId: admin.avatarAssetId ?? null,
+    bio: admin.bio ?? null,
     createdAt: admin.createdAt,
     updatedAt: admin.updatedAt,
     deletedAt: admin.deletedAt ?? null,

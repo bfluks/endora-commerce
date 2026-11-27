@@ -9,6 +9,7 @@ import type {
 } from '@endora-commerce/contracts';
 import {
   KanbanBoard,
+  MoveToMenu,
   type KanbanBoardLabels,
   type KanbanCardRenderState,
 } from '@endora-commerce/admin-kit/components';
@@ -16,7 +17,6 @@ import { Button } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { BoardCardFields } from './BoardCardFields.js';
 import { errorMessage, moneyLabel } from '../lib/labels.js';
-import { MoveToMenu } from './MoveToMenu.js';
 
 /** One lane as the page holds it: the server's column, plus what the screen knows about it. */
 export interface BoardColumnView {

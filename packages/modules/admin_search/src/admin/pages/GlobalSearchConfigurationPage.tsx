@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { RotateCcw } from 'lucide-react';
+import { ArrowRight, RotateCcw } from 'lucide-react';
 import type {
   AdminSearchConfigurationEntityView,
   AdminSearchConfigurationView,
@@ -16,6 +16,7 @@ import {
   CardHeader,
   CardTitle,
   Checkbox,
+  InlineStatus,
   Label,
   PageHeader,
 } from '@endora-commerce/admin-kit/ui';
@@ -143,23 +144,16 @@ export function GlobalSearchConfigurationPage(): ReactNode {
     <>
       <PageHeader
         title={t('page.configuration.title')}
-        description={t('page.configuration.description')}
       />
-      <p className="mb-4 text-sm text-muted-foreground">
-        {t('page.configuration.settingsNote')}{' '}
-        <Link className="underline underline-offset-2" to="/settings">
+      {/* UX audit text-to-cut (#1567): the length and result limits live in
+          Settings; one link says so, without a sentence restating it. */}
+      <p className="mb-4 text-sm">
+        <Link className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline" to="/settings">
           {t('page.configuration.settingsLink')}
+          <ArrowRight className="size-3.5" aria-hidden="true" />
         </Link>
       </p>
 
-      <div role="status" aria-live="polite" className="sr-only">
-        {saved ? t('page.configuration.saved') : ''}
-      </div>
-      {saved ? (
-        <Alert variant="success" className="mb-4">
-          <AlertDescription>{t('page.configuration.saved')}</AlertDescription>
-        </Alert>
-      ) : null}
       {saveError ? (
         <Alert variant="destructive" className="mb-4">
           <AlertDescription>{saveError}</AlertDescription>
@@ -201,7 +195,9 @@ export function GlobalSearchConfigurationPage(): ReactNode {
               />
             ))}
           </div>
-          <div className="sticky bottom-0 mt-6 flex justify-end gap-2 border-t bg-background py-4">
+          <div className="sticky bottom-0 mt-6 flex items-center justify-end gap-2 border-t bg-background py-4">
+            {/* "Saved" beside Save, mounted before it has text (issue #1499, DEC-12 a). */}
+            <InlineStatus className="mr-2">{saved ? t('page.configuration.saved') : null}</InlineStatus>
             <Button
               type="button"
               variant="outline"
@@ -264,7 +260,7 @@ function EntityCard(props: {
   return (
     <Card data-testid={`configuration-${entity.entityType}`}>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-        <CardTitle className="text-base">{entity.label}</CardTitle>
+        <CardTitle>{entity.label}</CardTitle>
         <div className="flex items-center gap-2">
           <Checkbox
             id={`${id}-enabled`}

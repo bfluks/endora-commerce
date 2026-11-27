@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   quoteRequestHistoryEntrySchema,
   type AdminUserRecord,
+  type QuoteRequestDelivery,
   type CatalogProductVariantRecord,
   type CustomerAccountRecord,
 } from '@endora-commerce/contracts';
@@ -95,6 +96,8 @@ function adminRecord(id: string, extra: Partial<AdminUserRecord> = {}): AdminUse
     twoFactorEnabled: true,
     lastLoginAt: new Date(),
     preferredLanguage: null,
+    avatarAssetId: null,
+    bio: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     deletedAt: null,
@@ -109,7 +112,7 @@ function customerRecord(id: string, firstName: string, lastName: string, email: 
     email,
     firstName,
     lastName,
-    role: 'admin',
+    organizationRoleId: '00000000-0000-4000-8000-0000000170b2',
     emailVerifiedAt: null,
     twoFactorEnabled: true,
     lastLoginAt: new Date(),
@@ -126,6 +129,7 @@ function customerRecord(id: string, firstName: string, lastName: string, email: 
     blockedByCustomerAccountId: null,
     deletionRequestedByAdminUserId: null,
     anonymizedAt: null,
+    preferredLanguage: null,
   } as CustomerAccountRecord;
 }
 
@@ -334,6 +338,24 @@ describe('projectHistory — modifications (FR-012, FR-013, R7)', () => {
     expect(entries[0]?.changes).toEqual([]);
   });
 
+  // `specs/192-quote-request-draft-share/` (R-10, FR-008) — the days of an
+  // unshared quote, recorded on its `modified` event.
+  it('lists the validity days an unshared quote will carry once shared', () => {
+    const entries = project(
+      [event('modified', { admin: ADMIN }, { diff: [], validityDays: { before: null, after: 30 } }, REV2)],
+      [revision(REV1, 1, [line()]), revision(REV2, 2, [line()], REV1)],
+    );
+    expect(entries[0]?.changes).toEqual([{ kind: 'validity_days', before: null, after: 30 }]);
+  });
+
+  it('a malformed validity-days payload is ignored rather than passed through', () => {
+    const entries = project(
+      [event('modified', { admin: ADMIN }, { diff: [], validityDays: { before: 'x', after: -1 } }, REV2)],
+      [revision(REV1, 1, [line()]), revision(REV2, 2, [line()], REV1)],
+    );
+    expect(entries[0]?.changes).toEqual([]);
+  });
+
   it('non-modification entries carry `changes: null`', () => {
     expect(project([event('expired', { role: 'System' })])[0]?.changes).toBeNull();
   });
@@ -436,5 +458,105 @@ describe('feature 153 — the quote PDF sent by e-mail (owner answer Q4)', () =>
       directory(),
     );
     expect(entry!.delivery).toEqual({ recipients: ['ok@example.com'], templateName: null, language: null, message: null });
+  });
+});
+
+describe('feature 162 — values a Sales Opportunity could not carry', () => {
+  const OPPORTUNITY = 'f0000000-0000-4000-8000-0000000000bb';
+
+  it('a custom-field-carry-skipped event is one system entry naming its source and every skipped key', () => {
+    const entries = projectHistory(
+      [
+        event('note-added', { admin: ADMIN }, { note: 'call back' }),
+        event('custom-field-carry-skipped', { role: 'System' }, {
+          source: { entityType: 'opportunity', recordId: OPPORTUNITY, reference: 'OPP-000007' },
+          skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+        }),
+      ],
+      [],
+      directory(),
+    );
+    expect(entries.map((e) => e.kind)).toEqual(['note_added', 'custom_field_carry_skipped']);
+    expect(entries[0]!.customFieldCarry).toBeNull();
+    expect(entries[1]).toMatchObject({
+      kind: 'custom_field_carry_skipped',
+      actor: { kind: 'system' },
+      customFieldCarry: {
+        source: { entityType: 'opportunity', recordId: OPPORTUNITY, reference: 'OPP-000007' },
+        skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+      },
+    });
+    expect(quoteRequestHistoryEntrySchema.safeParse(entries[1]).success).toBe(true);
+  });
+
+  it('a hostile payload keeps only well-formed skips, and a source that is not one reads as none', () => {
+    const [entry] = projectHistory(
+      [
+        event('custom-field-carry-skipped', { role: 'System' }, {
+          source: { entityType: 'order', recordId: 7 },
+          skipped: [{ key: 'ok', reason: 'audience_mismatch' }, { key: 3, reason: 'value_invalid' }, { key: 'x', reason: 'other' }],
+        }),
+      ],
+      [],
+      directory(),
+    );
+    expect(entry!.customFieldCarry).toBeNull();
+  });
+
+  it('passes each skip’s label snapshot through, and a skip stored without one stays without (owner ruling 2026-10-21, V3)', () => {
+    const label = { labelDefault: 'Order source', labels: { pl: 'Źródło zamówienia' } };
+    const [entry] = projectHistory(
+      [
+        event('custom-field-carry-skipped', { role: 'System' }, {
+          source: { entityType: 'opportunity', recordId: OPPORTUNITY, reference: 'OPP-000008' },
+          skipped: [
+            { key: 'order_source', reason: 'target_missing', label },
+            { key: 'fair', reason: 'value_invalid' },
+          ],
+        }),
+      ],
+      [],
+      directory(),
+    );
+    expect(entry!.customFieldCarry?.skipped).toEqual([
+      { key: 'order_source', reason: 'target_missing', label },
+      { key: 'fair', reason: 'value_invalid' },
+    ]);
+    expect(quoteRequestHistoryEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
+
+
+describe('projectHistory — deliveries (`specs/179-rfq-and-customer-notifications/` FR-070)', () => {
+  function delivery(id: string, displayName: string): QuoteRequestDelivery {
+    return {
+      id,
+      channel: 'customer_email',
+      recipient: { kind: 'customer', id: A, displayName },
+      status: 'sent',
+      attempts: 1,
+      lastError: null,
+      closedAt: '2026-11-12T10:00:00.000Z',
+    };
+  }
+
+  it('attaches the deliveries of every event of an entry, by `eventIds`', () => {
+    const created = event('created', { customer: A }, {}, REV1);
+    const submitted = event('submitted', { customer: A }, { itemCount: 1 }, REV1);
+    const first = delivery('d0000000-0000-4000-8000-000000000001', 'Alice Asker');
+    const entries = projectHistory([created, submitted], [revision(REV1, 1, [line()])], directory(), new Map([[submitted.id, [first]]]));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.id).toBe(created.id);
+    expect(entries[0]!.deliveries).toEqual([first]);
+    expect(quoteRequestHistoryEntrySchema.safeParse(entries[0]).success).toBe(true);
+  });
+
+  it('an entry that notified nobody carries no `deliveries` key, and none without the map', () => {
+    const canceled = event('canceled', { admin: ADMIN }, { reason: 'x' });
+    const expired = event('expired', { role: 'System' });
+    const entries = projectHistory([canceled, expired], [], directory(), new Map([[expired.id, [delivery('d0000000-0000-4000-8000-000000000002', 'Alice Asker')]]]));
+    expect(entries[0]).not.toHaveProperty('deliveries');
+    expect(entries[1]!.deliveries).toHaveLength(1);
+    expect(projectHistory([canceled], [], directory())[0]).not.toHaveProperty('deliveries');
   });
 });

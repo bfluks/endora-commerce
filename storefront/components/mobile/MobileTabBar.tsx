@@ -1,15 +1,17 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { loadCartItemCount } from '../../lib/cartCount';
+import { LocalizedLink, useUrlLanguageState } from '../../lib/i18n/localized-link';
+import { stripLocalePrefix } from '../../lib/i18n/locale-path';
 
 /**
  * Feature 044 / US1 — fixed bottom tab bar (Industria Mobile design §01).
  *
- * The primary thumb-reachable navigation on phones; hidden at `md` and up
- * (the desktop header nav takes over). It is a leaf client island so the
+ * The primary thumb-reachable navigation on phones and narrow tablets; hidden
+ * from 877px, where the desktop header rows take over (the header's own
+ * boundary, not `md` — `specs/179-rfq-and-customer-notifications/` WP-09a). It is a leaf client island so the
  * data-loading layout stays a Server Component (Principle VII).
  *
  * The Cart tab carries a live count badge. Like {@link CartCounterBadge} the
@@ -22,14 +24,31 @@ export function MobileTabBar(props: {
   cartItemCount?: number;
   /** Localized tab captions. */
   labels: {
+    /** The tab bar's landmark name. */
+    navigation: string;
     home: string;
     quoteRequest: string;
     quickOrder: string;
     cart: string;
     account: string;
   };
+  /**
+   * Whether the two module-owned tabs' modules are present. Booleans rather
+   * than the presence set because this is a client island and a function does
+   * not cross that boundary. Required, so no caller renders the tabs without
+   * asking (Constitution XVII item 5, issue #666).
+   */
+  present: { quoteRequests: boolean; quickOrder: boolean };
+  /**
+   * The signed-in buyer's unread notification count and its visually hidden
+   * sentence (`specs/179-rfq-and-customer-notifications/` FR-051, FR-051b), shown
+   * on the account tab. Absent for a guest and while `customer_notifications`
+   * is off.
+   */
+  accountUnread?: { count: number; label: string };
 }): ReactNode {
   const pathname = usePathname();
+  const urlState = useUrlLanguageState();
   const [count, setCount] = useState<number>(props.cartItemCount ?? 0);
 
   useEffect(() => {
@@ -56,15 +75,17 @@ export function MobileTabBar(props: {
     };
   }, [pathname]);
 
-  const tabs: { href: string; label: string; icon: ReactNode; match: (p: string) => boolean }[] = [
-    { href: '/', label: props.labels.home, icon: <HomeIcon />, match: (p) => p === '/' },
+  const tabs: { href: string; label: string; icon: ReactNode; match: (p: string) => boolean; shown: boolean }[] = [
+    { href: '/', label: props.labels.home, icon: <HomeIcon />, match: (p) => p === '/', shown: true },
     {
+      shown: props.present.quoteRequests,
       href: '/quote-request',
       label: props.labels.quoteRequest,
       icon: <QuoteIcon />,
       match: (p) => p.startsWith('/quote-request'),
     },
     {
+      shown: props.present.quickOrder,
       href: '/quick-order',
       label: props.labels.quickOrder,
       icon: <LightningIcon />,
@@ -75,6 +96,7 @@ export function MobileTabBar(props: {
       label: props.labels.cart,
       icon: <CartIcon />,
       match: (p) => p.startsWith('/cart'),
+      shown: true,
       // count badge handled below
     },
     {
@@ -82,16 +104,23 @@ export function MobileTabBar(props: {
       label: props.labels.account,
       icon: <UserIcon />,
       match: (p) => p.startsWith('/account'),
+      shown: true,
     },
   ];
 
+  // Not while checking out: the checkout is not interrupted (spec § Header bell decision).
+  const inCheckout = stripLocalePrefix(pathname, urlState).startsWith('/checkout');
+  const unread = !inCheckout && props.accountUnread && props.accountUnread.count > 0 ? props.accountUnread : null;
+
   return (
-    <nav className="m-tabbar" aria-label="Mobile">
-      {tabs.map((tab) => {
-        const active = tab.match(pathname);
+    <nav className="m-tabbar" aria-label={props.labels.navigation}>
+      {tabs.filter((tab) => tab.shown).map((tab) => {
+        // Feature 167 — match the logical path, not the prefixed browser path.
+        const active = tab.match(stripLocalePrefix(pathname, urlState));
         const isCart = tab.href === '/cart';
+        const isAccount = tab.href === '/account';
         return (
-          <Link
+          <LocalizedLink
             key={tab.href}
             href={tab.href}
             className={'m-tabbar__item' + (active ? ' is-active' : '')}
@@ -102,9 +131,15 @@ export function MobileTabBar(props: {
                 {count > 99 ? '99+' : count}
               </span>
             ) : null}
+            {isAccount && unread ? (
+              <span className="m-tabbar__badge" aria-hidden="true">
+                {unread.count > 9 ? '9+' : unread.count}
+              </span>
+            ) : null}
             <span aria-hidden="true">{tab.icon}</span>
             <span>{tab.label}</span>
-          </Link>
+            {isAccount && unread ? <span className="sr-only">{unread.label}</span> : null}
+          </LocalizedLink>
         );
       })}
     </nav>

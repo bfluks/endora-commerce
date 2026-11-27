@@ -38,8 +38,21 @@ import {
 /** A migration class as MikroORM instantiates it. */
 export type MigrationClass = MigrationObject['class'];
 
-/** Where a registry entry came from. Absent means `'core'`. */
-export type MigrationOrigin = 'core' | 'external';
+/**
+ * Where a registry entry came from. Absent means `'core'`. `'generated'` is the
+ * platform's own schema-extension step (`specs/178-extensible-columns/` FR-020)
+ * — the one origin allowed the reserved stamp {@link GENERATED_STAMP}.
+ * `'overlay'` is a deployment's overlay module (`specs/190-overlay-full-modules/`
+ * R-7): guarded like `'external'`, and told apart from it so a diagnostic, the
+ * test template digest and `module:status` can say which of the two it was.
+ */
+export type MigrationOrigin = 'core' | 'external' | 'generated' | 'overlay';
+
+/**
+ * The stamp of a generated schema-extension step: a real instant that sorts
+ * first in its module's block, so the step runs at the head of it (OD-178-1).
+ */
+export const GENERATED_STAMP = '10000101T000000';
 
 export interface MigrationRegistryEntry {
   /**
@@ -66,11 +79,13 @@ export interface MigrationRegistryEntry {
 }
 
 export type MigrationOrderErrorCode =
+  | 'missing-class'
   | 'unparsable-name'
   | 'duplicate-name'
   | 'duplicate-timestamp'
   | 'unknown-module'
-  | 'unscoped-name';
+  | 'unscoped-name'
+  | 'reserved-stamp';
 
 export class MigrationOrderError extends Error {
   readonly code: MigrationOrderErrorCode;
@@ -205,7 +220,24 @@ function parseEntries(
   const byModuleStamp = new Map<string, ParsedMigration>();
   const parsed: ParsedMigration[] = [];
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
+    // A registry entry whose class is `undefined` is a registry that imported a
+    // name its package's built `dist` does not export — in practice a `dist`
+    // that is stale or missing, since the generated registry is derived from
+    // the sources. Reading `.name` off it would be a TypeError that says
+    // nothing about the cause (issue #443).
+    // Only an absent class is this case: a fixture may stand a plain object
+    // carrying a `name` in for a class, and the naming checks below judge it.
+    if (entry.cls === undefined || entry.cls === null) {
+      throw new MigrationOrderError(
+        'missing-class',
+        `[migration-order] registry entry #${index} (module "${entry.moduleId}") carries ` +
+          `no migration class (got ${String(entry.cls)}). ` +
+          `The generated registry imports a class the module package's built output does ` +
+          `not export, which means its \`dist\` is stale or missing: run ` +
+          `\`pnpm run build:packages\` (or \`pnpm --filter <package> run build\`) and retry.`,
+      );
+    }
     const name = entry.cls.name;
     const match = MIGRATION_CLASS_RE.exec(name);
     if (!match) {
@@ -218,6 +250,14 @@ function parseEntries(
     }
     const timestamp = match[1]!;
     assertRealInstant(name, timestamp);
+    if (timestamp === GENERATED_STAMP && entry.origin !== 'generated') {
+      throw new MigrationOrderError(
+        'reserved-stamp',
+        `[migration-order] migration "${name}" (module "${entry.moduleId}") carries the stamp ` +
+          `${GENERATED_STAMP}, which is reserved for the platform's generated schema-extension ` +
+          `step (specs/178-extensible-columns/ FR-020). Re-stamp it with \`migration:new\`.`,
+      );
+    }
 
     const duplicateName = byName.get(name);
     if (duplicateName) {

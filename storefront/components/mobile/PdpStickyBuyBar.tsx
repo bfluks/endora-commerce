@@ -4,6 +4,8 @@ import { useActionState, useState, type ReactNode } from 'react';
 import { ADD_TO_CART_IDLE, type AddToCartResult } from '../../lib/cartAddState';
 import { CartAddedPopup } from '../CartAddedPopup';
 import { CartSubmitButton } from '../CartSubmitButton';
+import { tForLocale } from '../../lib/i18n/messages';
+import { LINE_QUANTITY_MAX } from '@endora-commerce/contracts';
 
 /**
  * Feature 044 / US3 — sticky bottom add-to-cart bar for the PDP (Industria
@@ -25,9 +27,12 @@ export function PdpStickyBuyBar(props: {
   addToCartLabel: string;
   datasheetHref?: string;
   datasheetLabel?: string;
+  /** The page's language, from the server parent. */
+  locale: string;
 }): ReactNode {
+  const t = tForLocale(props.locale);
   const [qty, setQty] = useState(1);
-  const clamp = (n: number): number => (Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1);
+  const clamp = (n: number): number => (Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), LINE_QUANTITY_MAX) : 1);
   // `CartSubmitButton` renders its own pending spinner via `useFormStatus`, so
   // the action's `isPending` flag isn't needed here.
   const [cartState, cartFormAction] = useActionState(props.addToCartAction, ADD_TO_CART_IDLE);
@@ -48,9 +53,10 @@ export function PdpStickyBuyBar(props: {
           type="number"
           name="quantity"
           min={1}
+          max={LINE_QUANTITY_MAX}
           value={qty}
           inputMode="numeric"
-          aria-label="Ilość"
+          aria-label={t('common.quantity')}
           onChange={(e) => setQty(clamp(Number(e.target.value)))}
         />
         <button type="button" aria-label="+" onClick={() => setQty((q) => clamp(q + 1))}>
@@ -63,7 +69,7 @@ export function PdpStickyBuyBar(props: {
         label={props.addToCartLabel}
         icon={<CartIcon />}
       />
-      <CartAddedPopup state={cartState} />
+      <CartAddedPopup state={cartState} locale={props.locale} />
       {props.datasheetHref ? (
         <a
           href={props.datasheetHref}
@@ -71,7 +77,7 @@ export function PdpStickyBuyBar(props: {
           rel="noreferrer"
           className="btn btn--outline"
           style={{ height: 44, flex: '0 0 44px', padding: 0, justifyContent: 'center' }}
-          aria-label={props.datasheetLabel ?? 'Karta katalogowa'}
+          aria-label={props.datasheetLabel ?? t('commerce.pdp.datasheet')}
         >
           <DocIcon />
         </a>

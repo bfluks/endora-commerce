@@ -102,7 +102,13 @@ describe('transactional emails — per-channel + branding (US2)', () => {
     const get = await h.app.inject({ method: 'GET', url: `${BASE}/branding`, cookies: ADMIN_COOKIE });
     const b = (get.json() as { data: { logoAssetId: string; logoUrl: string } }).data;
     expect(b.logoAssetId).toBe(assetId);
-    expect(b.logoUrl).toBe(`${resolvePublicApiBaseUrl()}/assets/file/${assetId}`);
+    // specs/156-asset-stable-url/ T063 (deliberate, R-20): the logo is embedded
+    // in e-mails, so it carries the content version of the file it shows.
+    const [row] = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ content_version: string }>>('select content_version from assets where id = ?', [assetId]);
+    expect(b.logoUrl).toBe(`${resolvePublicApiBaseUrl()}/assets/file/${assetId}?v=${row!.content_version}`);
   });
 
   it('persists and reads back branding accent color', async () => {
@@ -117,5 +123,165 @@ describe('transactional emails — per-channel + branding (US2)', () => {
     const get = await h.app.inject({ method: 'GET', url: `${BASE}/branding`, cookies: ADMIN_COOKIE });
     const b = (get.json() as { data: { accentColor: string } }).data;
     expect(b.accentColor).toBe('#abcdef');
+  });
+  /**
+   * Issue #1466 — before the branding screen was mounted in the admin, the
+   * stored values were proven to be *read back* (the two tests above) but not to
+   * reach a message. This one follows them all the way: what the branding API
+   * stores is what the rendered e-mail carries — the logo in the shared default
+   * header, the accent on a button that sets no colour of its own — and a
+   * channel inherits whatever it does not override.
+   *
+   * The preview is the assertion surface because it shares `renderWith` and
+   * `BrandingService.resolve` with the send path; only the variables differ.
+   */
+  it('renders the stored logo and accent into the e-mail, per channel with inheritance', async () => {
+    const assetId = randomUUID();
+    await h.em().getConnection().execute(
+      `insert into assets (id, kind, filename, mime_type, size_bytes, storage_url,
+         storage_locator, storage_backend, label, visibility, created_at, updated_at)
+       values (?, 'image', 'brand.png', 'image/png', 128, ?, ?, 'local', 'Brand', 'public',
+         now(), now())`,
+      [assetId, `/assets/file/${assetId}`, `cc/dd/${assetId}.png`],
+    );
+
+    const putGlobal = await h.app.inject({
+      method: 'PUT',
+      url: `${BASE}/branding`,
+      cookies: ADMIN_COOKIE,
+      payload: { logoAssetId: assetId, accentColor: '#0a7e5c' },
+    });
+    expect(putGlobal.statusCode).toBe(200);
+    const putChannel = await h.app.inject({
+      method: 'PUT',
+      url: `${BASE}/branding?salesChannelId=${channelId}`,
+      cookies: ADMIN_COOKIE,
+      payload: { accentColor: '#c2410c' },
+    });
+    expect(putChannel.statusCode).toBe(200);
+
+    const draftContent = {
+      root: { props: {} },
+      content: [
+        {
+          type: 'transactional_emails.EmailInsertBlock',
+          props: { id: 'hdr', code: 'default_email_header' },
+        },
+        {
+          type: 'transactional_emails.EmailButton',
+          props: { id: 'btn', label: 'View order', href: 'https://shop.example/o/1', align: 'left' },
+        },
+      ],
+      zones: {},
+    };
+    const preview = async (salesChannelId?: string): Promise<string> => {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `${BASE}/order_confirmation/preview`,
+        cookies: ADMIN_COOKIE,
+        payload: { language: 'en-US', draftContent, ...(salesChannelId ? { salesChannelId } : {}) },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { data: { html: string } }).data.html;
+    };
+
+    const logoUrlPrefix = `${resolvePublicApiBaseUrl()}/assets/file/${assetId}?v=`;
+
+    const globalHtml = await preview();
+    expect(globalHtml).toContain(`src="${logoUrlPrefix}`);
+    expect(globalHtml).toContain('background-color:#0a7e5c');
+
+    const channelHtml = await preview(channelId);
+    // The channel overrides the accent and inherits the logo.
+    expect(channelHtml).toContain('background-color:#c2410c');
+    expect(channelHtml).not.toContain('background-color:#0a7e5c');
+    expect(channelHtml).toContain(`src="${logoUrlPrefix}`);
+  });
+  /**
+   * Issue #1588 — a sales channel that once overrode a branding value could
+   * never inherit the all-channels value again: the API had no way to remove
+   * the channel's own value. `DELETE /branding?salesChannelId=…&fields=…`
+   * removes the named fields' per-channel values, and only those.
+   */
+  it('resets named branding fields of a channel back to the all-channels value', async () => {
+    const putGlobal = await h.app.inject({
+      method: 'PUT',
+      url: `${BASE}/branding`,
+      cookies: ADMIN_COOKIE,
+      payload: { accentColor: '#111111', headerBlockCode: 'global_header' },
+    });
+    expect(putGlobal.statusCode).toBe(200);
+    const putChannel = await h.app.inject({
+      method: 'PUT',
+      url: `${BASE}/branding?salesChannelId=${channelId}`,
+      cookies: ADMIN_COOKIE,
+      payload: { accentColor: '#222222', headerBlockCode: 'channel_header' },
+    });
+    expect(putChannel.statusCode).toBe(200);
+
+    const reset = await h.app.inject({
+      method: 'DELETE',
+      url: `${BASE}/branding?salesChannelId=${channelId}&fields=accentColor`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect(reset.statusCode).toBe(200);
+    const after = (reset.json() as { data: { accentColor: string; headerBlockCode: string } }).data;
+    expect(after.accentColor).toBe('#111111');
+    // A field not named keeps the channel's own value.
+    expect(after.headerBlockCode).toBe('channel_header');
+
+    const channelGet = await h.app.inject({
+      method: 'GET',
+      url: `${BASE}/branding?salesChannelId=${channelId}`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect((channelGet.json() as { data: { accentColor: string } }).data.accentColor).toBe('#111111');
+
+    // The channel follows the all-channels value from now on.
+    await h.app.inject({
+      method: 'PUT',
+      url: `${BASE}/branding`,
+      cookies: ADMIN_COOKIE,
+      payload: { accentColor: '#333333' },
+    });
+    const followed = await h.app.inject({
+      method: 'GET',
+      url: `${BASE}/branding?salesChannelId=${channelId}`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect((followed.json() as { data: { accentColor: string } }).data.accentColor).toBe('#333333');
+
+    const globalGet = await h.app.inject({ method: 'GET', url: `${BASE}/branding`, cookies: ADMIN_COOKIE });
+    expect((globalGet.json() as { data: { accentColor: string } }).data.accentColor).toBe('#333333');
+  });
+
+  it('refuses a branding reset without a channel, without fields, or for an unknown channel', async () => {
+    const noChannel = await h.app.inject({
+      method: 'DELETE',
+      url: `${BASE}/branding?fields=accentColor`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect(noChannel.statusCode).toBe(400);
+
+    const noFields = await h.app.inject({
+      method: 'DELETE',
+      url: `${BASE}/branding?salesChannelId=${channelId}`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect(noFields.statusCode).toBe(400);
+
+    const unknownField = await h.app.inject({
+      method: 'DELETE',
+      url: `${BASE}/branding?salesChannelId=${channelId}&fields=accentColor,salesChannelId`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect(unknownField.statusCode).toBe(400);
+
+    const unknownChannel = await h.app.inject({
+      method: 'DELETE',
+      url: `${BASE}/branding?salesChannelId=${randomUUID()}&fields=accentColor`,
+      cookies: ADMIN_COOKIE,
+    });
+    expect(unknownChannel.statusCode).toBe(404);
   });
 });

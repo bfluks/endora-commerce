@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { formatMoney } from '../lib/i18n/money';
+import { lineAmountHalfUp } from '@endora-commerce/contracts';
+import { LocalizedAnchor } from '../lib/i18n/localized-link';
 
 /**
  * Feature 002 US5 — read-only summary of a grouped product's children
@@ -42,12 +44,12 @@ export function GroupedSummary(props: {
         {props.items.map((item) => (
           <li key={item.id} className="flex items-center gap-2 text-[13px]">
             <span className="font-mono text-muted">{item.quantity} ×</span>
-            <a href={`/p/${item.product.slug}`} className="text-fg hover:text-accent">
+            <LocalizedAnchor href={`/p/${item.product.slug}`} className="text-fg hover:text-accent">
               {item.product.name}
-            </a>
+            </LocalizedAnchor>
             {item.product.price ? (
               <span className="ml-auto font-mono font-medium text-fg">
-                {formatMoney(item.product.price.amount * item.quantity, item.product.price.currency, props.locale)}
+                {formatMoney(Number(lineAmountHalfUp(item.product.price.amount, item.quantity)), item.product.price.currency, props.locale)}
               </span>
             ) : null}
           </li>

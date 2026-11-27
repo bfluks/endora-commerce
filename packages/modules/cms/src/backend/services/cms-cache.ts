@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis';
 import type {
-  CmsResolvedBlock,
+  CmsResolvedBlockByCode,
   CmsResolvedHook,
   CmsResolvedPage,
 } from '@endora-commerce/contracts';
@@ -12,7 +12,7 @@ import type {
  * families:
  *
  *   - `cms:v1:page:<slug>:<channel>:<language>`    → CmsResolvedPage
- *   - `cms:v1:block:<code>:<channel>:<language>`   → CmsResolvedBlock
+ *   - `cms:v1:block:<code>:<channel>:<language>`   → CmsResolvedBlockByCode
  *   - `cms:v1:hook:<code>:<channel>:<language>`    → CmsResolvedHook
  *
  * TTL is fixed at 5 minutes; invalidation runs on every Page / Block /
@@ -37,6 +37,19 @@ export class CmsCache {
   constructor(private readonly redis: Redis, options: CmsCacheOptions = {}) {
     this.ttlSeconds = options.ttlSeconds ?? CMS_CACHE_DEFAULT_TTL_SECONDS;
     this.enabled = (options.enabled ?? true) && this.ttlSeconds > 0;
+  }
+
+  /**
+   * The channel segment of a page key (feature 167): the channel code and the URL
+   * facts the answered URLs are derived from, so a flipped *prefix the default
+   * language* or a changed language list misses the entry instead of serving URLs
+   * under the old prefixes. `invalidatePagesBySlug` still matches every segment.
+   */
+  static pageChannel(
+    code: string,
+    urlFacts: { readonly prefixDefaultLanguage: boolean; readonly languages: readonly string[] },
+  ): string {
+    return `${code}|${urlFacts.prefixDefaultLanguage ? 'p' : 'u'}|${urlFacts.languages.join(',')}`;
   }
 
   static pageKey(slug: string, channel: string, language: string): string {
@@ -72,15 +85,15 @@ export class CmsCache {
     code: string,
     channel: string,
     language: string,
-  ): Promise<CmsResolvedBlock | null> {
-    return this.read<CmsResolvedBlock>(CmsCache.blockKey(code, channel, language));
+  ): Promise<CmsResolvedBlockByCode | null> {
+    return this.read<CmsResolvedBlockByCode>(CmsCache.blockKey(code, channel, language));
   }
 
   async setBlock(
     code: string,
     channel: string,
     language: string,
-    value: CmsResolvedBlock,
+    value: CmsResolvedBlockByCode,
   ): Promise<void> {
     await this.write(CmsCache.blockKey(code, channel, language), value);
   }

@@ -1,26 +1,29 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Organization, PriceList } from '../../helpers/package-entities.js';
+import { Organization } from '../../helpers/package-entities.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
 import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * Feature 026 US5 — Applicable price-lists panel contract.
  *
  *   GET /api/v1/admin/organizations/:id/applicable-price-lists
  *
- * Returns the set of Price Lists currently applicable to the Organization,
- * each tagged with the `reasons[]` array explaining why (direct match,
- * customer-group inheritance, channel inheritance, segment-rule match).
+ * Returns the price books currently applicable to the Organization, each
+ * tagged with the `reasons[]` array explaining why. Since feature 160 (FR-032)
+ * those are the books whose audience names the organization, an ancestor or
+ * its customer group; a channel catalogue book is everyone's price and is not
+ * listed (the ancestor and group cases are in
+ * `test/integration/organizations/effective-price-books.test.ts`).
  */
 describe('Applicable price lists (feature 026 US5)', () => {
   let h: BackendServerHandle;
   let orgId: string;
   let directListId: string;
-  let channelListId: string;
+  let channelBookId: string;
 
   beforeAll(async () => {
     h = await setupBackendServer();
@@ -38,42 +41,21 @@ describe('Applicable price lists (feature 026 US5)', () => {
         country: 'PL',
       },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     orgId = org.id;
 
-    // Create a direct-organization-matching Price List.
-    const directList = em.create(PriceList, {
-      code: `us5-direct-${Date.now()}`,
-      name: 'Direct-Org Price List for Applicable Lists Co',
-      status: 'active',
-      currency: 'PLN',
-      type: 'base',
-      applicationRule: {
-        kind: 'criterion',
-        type: 'organization',
-        values: [orgId],
-      },
+    // A book whose audience names the organization.
+    directListId = await seedPriceBookSql(em, {
+      name: 'Direct-Org price book for Applicable Lists Co',
+      audience: { organizations: [orgId] },
+      rows: [],
     });
-    await em.persistAndFlush(directList);
-    directListId = directList.id;
-
-    // A channel-bound list, evaluated against the system-default channel's
-    // **id** — the criterion the panel used to be unable to match (D-48 / L1).
-    const systemDefault = await em.findOneOrFail(SalesChannel, { systemDefault: true });
-    const channelList = em.create(PriceList, {
-      code: `us5-channel-${Date.now()}`,
-      name: 'Channel-bound Price List for Applicable Lists Co',
-      status: 'active',
-      currency: 'PLN',
-      type: 'base',
-      applicationRule: {
-        kind: 'criterion',
-        type: 'salesChannel',
-        values: [systemDefault.id],
-      },
+    // A channel catalogue book: everyone's price, not the organization's.
+    channelBookId = await seedPriceBookSql(em, {
+      name: 'Channel catalogue book',
+      audience: 'everyone',
+      rows: [],
     });
-    await em.persistAndFlush(channelList);
-    channelListId = channelList.id;
   });
 
   afterAll(async () => {
@@ -95,17 +77,7 @@ describe('Applicable price lists (feature 026 US5)', () => {
     expect(ours!.reasons).toContain('direct_organization_match');
   });
 
-  /**
-   * D-48 / L1. `resolveDefaultSalesChannelId` was
-   * `(await getSystemDefault())?.id ?? 'default'` — a channel *code* landing in
-   * `ResolutionContext.salesChannelId`, which the price-list evaluator compares
-   * as `values.includes(ctx.salesChannelId)` against channel **uuids**. On any
-   * deployment that took the fallback, every `salesChannel` criterion evaluated
-   * false and this panel reported channel-scoped lists as not applying. The
-   * fallback branch is deleted, not patched: the resolver cannot fail to find a
-   * default, so there is nothing left to fall back to.
-   */
-  it('matches a salesChannel criterion bound to the system-default channel', async () => {
+  it('does not list a channel catalogue book (everyone) as an organization price (160 FR-032)', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/admin/organizations/${orgId}/applicable-price-lists`,
@@ -115,13 +87,11 @@ describe('Applicable price lists (feature 026 US5)', () => {
     const body = res.json() as {
       items: Array<{ priceListId: string; reasons: string[] }>;
     };
-    const ours = body.items.find((it) => it.priceListId === channelListId);
-    expect(ours).toBeDefined();
-    expect(ours!.reasons).toContain('sales_channel_inheritance');
+    expect(body.items.find((it) => it.priceListId === channelBookId)).toBeUndefined();
   });
 
-  it('omits a Price List whose application rule targets a different Organization', async () => {
-    // Fresh org without any direct-attached Price List.
+  it('omits a price book whose audience names a different Organization', async () => {
+    // Fresh org without any book of its own.
     const em = h.em();
     const otherOrg = em.create(Organization, {
       name: 'Other Org for Negative Case',
@@ -135,7 +105,7 @@ describe('Applicable price lists (feature 026 US5)', () => {
         country: 'PL',
       },
     });
-    await em.persistAndFlush(otherOrg);
+    await em.persist(otherOrg).flush();
 
     const res = await h.app.inject({
       method: 'GET',
@@ -150,14 +120,16 @@ describe('Applicable price lists (feature 026 US5)', () => {
     expect(sneaked).toBeUndefined();
   });
 
-  it('returns empty items for a non-existent Organization', async () => {
+  // Issue #698 — an unknown Organization is `404 NOT_FOUND` on every
+  // `/:id` route, for a platform administrator too; it answered `200` with no
+  // items before.
+  it('answers 404 NOT_FOUND for a non-existent Organization', async () => {
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/admin/organizations/00000000-0000-4000-8000-0000000aaaaa/applicable-price-lists`,
       cookies: { b2b_session: 'stub-admin-session' },
     });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as { items: unknown[] };
-    expect(body.items).toEqual([]);
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });

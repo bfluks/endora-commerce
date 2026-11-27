@@ -1,0 +1,322 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { SalesChannel } from '@endora-commerce/platform/kernel';
+import type {
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
+  CustomerAccountReadPort,
+  TemplateEmailPort,
+} from '@endora-commerce/contracts';
+import { manifest as transactionalEmailsManifest } from '@endora-commerce/mod-transactional-emails';
+import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
+import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import { createMinimumProduct, minimumFixtureRun, type MinimumProductFixture } from '../../helpers/order-minimum-fixture.js';
+import { clearValueOverrides } from '../../helpers/product-scope-fixture.js';
+import { seedScopedValues } from '../../helpers/scoped-values.js';
+import { withModuleOff } from '../../helpers/off-state.js';
+import {
+  AvailabilityNotification,
+  CustomerAccount,
+  TransactionalEmail,
+  TransactionalEmailContent,
+} from '../../helpers/package-entities.js';
+import type { AvailabilityWorker } from '../../../../packages/modules/inventory/src/backend/services/availability-worker.js';
+import { AvailabilityNotificationService } from '../../../../packages/modules/inventory/src/backend/services/availability-notification-service.js';
+import { InMemoryMailer } from '../../../../packages/modules/email/src/backend/services/mailer.js';
+
+/**
+ * Issue #696 — the buyer's back-in-stock e-mail names the product as the buyer saw it: by its
+ * effective name at the subscription's sales channel and language (C×L → C → Global), which
+ * `catalogProductAvailabilityPort.effectiveTexts` answers
+ * (`specs/174-product-editor-scope-switcher/contracts/readers.md` §1, T067 buyer half).
+ *
+ * The subscription carries the scope: `subscribe` stamps the **resolved request channel** and the
+ * scope language it resolved from `Accept-Language` (Constitution XII). A row written before the
+ * column existed has neither and keeps the Global name, which is what 174 sent to everyone.
+ *
+ * Both senders are held to it: the composed `AvailabilityWorker` (the one `inventory.adjusted.v1`
+ * reaches) and `AvailabilityNotificationService.processRestockedFanOut`.
+ *
+ * Issue #1256 — and the rest of the message follows the subscription too: both senders render the
+ * operator-editable `availability_back_in_stock` template in the subscription's channel and
+ * language through `templateEmailPort`, so a subscriber on a Polish channel reads the Polish
+ * default (`Ponownie dostępny: …`), an operator's per-channel edit is what goes out on that
+ * channel, a subscription with no scope renders on the system-default channel, and an operator
+ * who switched the e-mail off gets nothing — never the fixed English text.
+ *
+ * Every write here is scoped to this file's own products and subscriber e-mail addresses.
+ */
+
+const VIP = 'pl_b2b_vip';
+
+describe('#696 — the back-in-stock e-mail names the product at the subscription scope [integration]', () => {
+  let h: BackendServerHandle;
+  const mailer = new InMemoryMailer();
+  const RUN = minimumFixtureRun();
+  let vipId: string;
+  /** Global, Channel and Channel × pl-PL names. */
+  let drill: MinimumProductFixture;
+  /** Global and Channel names only — no Channel × language override. */
+  let sander: MinimumProductFixture;
+  const DRILL_GLOBAL = `Drill X ${RUN}`;
+  const DRILL_CL = `Wiertarka X Pro ${RUN}`;
+  const SANDER_GLOBAL = `Sander Y ${RUN}`;
+  const SANDER_C = `Sander Y Pro ${RUN}`;
+  const sql = (query: string, params: unknown[] = []) => h.em().getConnection().execute(query, params);
+
+  beforeAll(async () => {
+    h = await setupBackendServer({ organizationsMailer: mailer });
+    const em = h.em();
+    vipId = (await em.findOneOrFail(SalesChannel, { code: VIP })).id;
+    drill = await createMinimumProduct(em, {
+      sku: `S696-DR-${RUN}`,
+      nameEn: DRILL_GLOBAL,
+      namePl: DRILL_GLOBAL,
+      channelIds: [vipId],
+    });
+    sander = await createMinimumProduct(em, {
+      sku: `S696-SA-${RUN}`,
+      nameEn: SANDER_GLOBAL,
+      namePl: SANDER_GLOBAL,
+      channelIds: [vipId],
+    });
+    await seedScopedValues(em, drill.id, [
+      { field: 'name', scope: { level: 'channel', channelId: vipId }, value: `Drill X Pro ${RUN}` },
+      { field: 'name', scope: { level: 'channel_language', channelId: vipId, languageCode: 'pl-PL' }, value: DRILL_CL },
+    ]);
+    await seedScopedValues(em, sander.id, [
+      { field: 'name', scope: { level: 'channel', channelId: vipId }, value: SANDER_C },
+    ]);
+    // Tracked and out of stock, so the storefront accepts a subscription.
+    await sql(`update products set manage_stock = true where id in (?, ?)`, [drill.id, sander.id]);
+  });
+
+  afterAll(async () => {
+    if (!h) return;
+    await sql(`delete from availability_notifications where product_id in (?, ?)`, [drill.id, sander.id]);
+    await clearValueOverrides(h.em(), [drill.id, sander.id]);
+    await teardownBackendServer(h);
+  });
+
+  function ports(): {
+    catalogProducts: CatalogProductReadPort;
+    customerAccounts: CustomerAccountReadPort;
+    catalogAvailability: CatalogProductAvailabilityPort;
+    templateEmail: TemplateEmailPort;
+  } {
+    const cradle = h.container.cradle as never as {
+      catalogProductReadPort: CatalogProductReadPort;
+      customerAccountReadPort: CustomerAccountReadPort;
+      catalogProductAvailabilityPort: CatalogProductAvailabilityPort;
+      templateEmailPort: TemplateEmailPort;
+    };
+    return {
+      catalogProducts: cradle.catalogProductReadPort,
+      customerAccounts: cradle.customerAccountReadPort,
+      catalogAvailability: cradle.catalogProductAvailabilityPort,
+      templateEmail: cradle.templateEmailPort,
+    };
+  }
+
+  /** The worker the composed module subscribed to `inventory.adjusted.v1`. */
+  function composedWorker(): AvailabilityWorker {
+    const cradle = h.container.cradle as never as Record<string, { handle: { availabilityWorker: AvailabilityWorker } }>;
+    return cradle['inventory']!.handle.availabilityWorker;
+  }
+
+  type Sender = (productId: string, mail: InMemoryMailer) => Promise<{ notified: number }>;
+  const senders: Array<[string, Sender]> = [
+    ['the composed stock worker', (productId) => composedWorker().dispatchForStockIncrease({ productId })],
+    [
+      'the restock fan-out',
+      (productId, mail) => {
+        const { catalogProducts, customerAccounts, catalogAvailability, templateEmail } = ports();
+        return new AvailabilityNotificationService(
+          h.em,
+          catalogProducts,
+          customerAccounts,
+          catalogAvailability,
+          mail,
+          templateEmail,
+        ).processRestockedFanOut({ productId });
+      },
+    ],
+  ];
+
+  async function subscribeOnStorefront(productId: string, email: string, language: string) {
+    return h.app.inject({
+      method: 'POST',
+      url: '/api/v1/storefront/inventory/notify-when-available',
+      headers: { 'x-sales-channel': VIP, 'accept-language': language },
+      payload: { productId, email },
+    });
+  }
+
+  async function reset(productId: string): Promise<void> {
+    await sql(`delete from availability_notifications where product_id = ?`, [productId]);
+    mailer.sent.length = 0;
+  }
+
+  /** A subscription row as a pre-#696 database holds it: no channel, no language. */
+  async function seedUnscoped(productId: string): Promise<void> {
+    const em = h.em();
+    const customer = await em.findOneOrFail(CustomerAccount, { id: TEST_CUSTOMER_ID });
+    em.create(AvailabilityNotification, {
+      customerAccountId: customer.id,
+      organizationId: customer.organizationId,
+      productId,
+      variantId: null,
+    });
+    await em.flush();
+  }
+
+  it('stamps the resolved request channel and scope language on the subscription', async () => {
+    await reset(drill.id);
+    const res = await subscribeOnStorefront(drill.id, `s696-a-${RUN}@example.test`, 'pl-PL,pl;q=0.9');
+    expect(res.statusCode, res.body).toBe(202);
+    const rows = (await sql(
+      `select sales_channel_id, language_code from availability_notifications where product_id = ?`,
+      [drill.id],
+    )) as Array<{ sales_channel_id: string | null; language_code: string | null }>;
+    expect(rows).toEqual([{ sales_channel_id: vipId, language_code: 'pl-PL' }]);
+  });
+
+  it('stamps the channel default language when the request asks in one the channel does not serve', async () => {
+    await reset(drill.id);
+    const res = await subscribeOnStorefront(drill.id, `s696-b-${RUN}@example.test`, 'de-DE');
+    expect(res.statusCode, res.body).toBe(202);
+    const rows = (await sql(`select language_code from availability_notifications where product_id = ?`, [
+      drill.id,
+    ])) as Array<{ language_code: string | null }>;
+    expect(rows).toEqual([{ language_code: 'pl-PL' }]);
+  });
+
+  /** Each subscription's status, once its `notified_at` is stamped — `null` while it is not. */
+  async function statuses(productId: string): Promise<Array<string | null>> {
+    const rows = (await sql(
+      `select status, notified_at from availability_notifications where product_id = ? order by status`,
+      [productId],
+    )) as Array<{ status: string; notified_at: Date | null }>;
+    return rows.map((r) => (r.notified_at === null ? null : r.status));
+  }
+
+  describe.each(senders)('%s', (_label, send) => {
+    it('marks every subscription it mailed notified, not queued (#1291)', async () => {
+      await reset(drill.id);
+      await seedUnscoped(drill.id);
+      expect((await subscribeOnStorefront(drill.id, `s1291-st-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+      expect((await send(drill.id, mailer)).notified).toBe(2);
+      expect(mailer.sent).toHaveLength(2);
+      expect(await statuses(drill.id)).toEqual(['notified', 'notified']);
+    });
+
+    it('names the product at Channel × language', async () => {
+      await reset(drill.id);
+      expect((await subscribeOnStorefront(drill.id, `s696-cl-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+      expect((await send(drill.id, mailer)).notified).toBe(1);
+      expect(mailer.sent).toHaveLength(1);
+      expect(mailer.sent[0]?.subject).toBe(`Ponownie dostępny: ${DRILL_CL}`);
+      expect(mailer.sent[0]?.text).toContain(`${DRILL_CL}`);
+      expect(mailer.sent[0]?.text).toContain('jest ponownie dostępny');
+      expect(mailer.sent[0]?.html).toContain('Ponownie dostępny');
+    });
+
+    it('names the product at Channel when no Channel × language override exists', async () => {
+      await reset(sander.id);
+      expect((await subscribeOnStorefront(sander.id, `s696-c-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+      expect((await send(sander.id, mailer)).notified).toBe(1);
+      expect(mailer.sent[0]?.subject).toBe(`Ponownie dostępny: ${SANDER_C}`);
+    });
+
+    it('falls back to the Global name for a subscription without a scope (pre-#696 rows)', async () => {
+      await reset(drill.id);
+      await seedUnscoped(drill.id);
+      expect((await send(drill.id, mailer)).notified).toBe(1);
+      expect(mailer.sent[0]?.subject).toBe(`Back in stock: ${DRILL_GLOBAL}`);
+    });
+
+    it('names each subscriber at their own scope in one fan-out', async () => {
+      await reset(drill.id);
+      await seedUnscoped(drill.id);
+      expect((await subscribeOnStorefront(drill.id, `s696-mix-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+      expect((await send(drill.id, mailer)).notified).toBe(2);
+      const subjects = mailer.sent.map((m) => m.subject).sort();
+      expect(subjects).toEqual([`Back in stock: ${DRILL_GLOBAL}`, `Ponownie dostępny: ${DRILL_CL}`].sort());
+    });
+
+    it('renders the operator\'s edit for the subscription\'s channel and language (#1256)', async () => {
+      await reset(drill.id);
+      const em = h.em();
+      const email = await em.findOneOrFail(TransactionalEmail, { code: 'availability_back_in_stock' });
+      const override = em.create(TransactionalEmailContent, {
+        emailId: email.id,
+        salesChannelId: vipId,
+        language: 'pl-PL',
+        subject: `VIP ${RUN}: {{var product.name}} wrócił`,
+        content: { root: { props: {} }, content: [] },
+      });
+      await em.flush();
+      try {
+        expect((await subscribeOnStorefront(drill.id, `s1256-ed-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+        await seedUnscoped(drill.id);
+        expect((await send(drill.id, mailer)).notified).toBe(2);
+        const subjects = mailer.sent.map((m) => m.subject).sort();
+        // The unscoped subscription renders on the system-default channel, which the VIP edit
+        // does not reach.
+        expect(subjects).toEqual([`Back in stock: ${DRILL_GLOBAL}`, `VIP ${RUN}: ${DRILL_CL} wrócił`].sort());
+      } finally {
+        await sql(`delete from transactional_email_contents where id = ?`, [override.id]);
+      }
+    });
+
+    it('sends nothing — not the English text — while the operator has the e-mail switched off (#1256)', async () => {
+      await reset(drill.id);
+      expect((await subscribeOnStorefront(drill.id, `s1256-off-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+      await seedUnscoped(drill.id);
+      await sql(`update transactional_emails set active = false where code = 'availability_back_in_stock'`);
+      try {
+        // Consumed, as the port's `true` says: the platform decided to send nothing.
+        expect((await send(drill.id, mailer)).notified).toBe(2);
+        expect(mailer.sent).toEqual([]);
+        // Issue #1291 — and consumed reads as `notified`, from either sender.
+        expect(await statuses(drill.id)).toEqual(['notified', 'notified']);
+      } finally {
+        await sql(`update transactional_emails set active = true where code = 'availability_back_in_stock'`);
+      }
+    });
+  });
+
+  it('relies on a template sender that has no absent state: transactional_emails is non-deactivatable (#1256)', () => {
+    // Neither sender probes `transactional_emails`' presence: the composition refuses to start
+    // without a non-deactivatable module, and an operator switches the one e-mail off instead —
+    // the case above. Should the lock ever be withdrawn, this fails and the senders need a gate.
+    const activation = transactionalEmailsManifest.activation;
+    expect(activation !== undefined && 'nonDeactivatable' in activation && activation.nonDeactivatable).toBe(true);
+  });
+
+  it.each(['deactivated', 'platform-unavailable'] as const)(
+    'while inventory is %s it takes no subscription, and a kept one keeps its scope for after',
+    async (axis) => {
+      await reset(drill.id);
+      expect((await subscribeOnStorefront(drill.id, `s696-off-${RUN}@example.test`, 'pl-PL')).statusCode).toBe(202);
+
+      await withModuleOff('inventory', axis, async () => {
+        const refused = await subscribeOnStorefront(drill.id, `s696-off2-${RUN}@example.test`, 'pl-PL');
+        expect(refused.statusCode, refused.body).toBe(503);
+        expect((refused.json() as { error: { code: string } }).error.code).toBe('MODULE_DISABLED');
+      });
+
+      // Off is non-destructive: the one subscription taken while on is there, scoped, and queued.
+      const rows = (await sql(
+        `select email, status, sales_channel_id, language_code from availability_notifications where product_id = ?`,
+        [drill.id],
+      )) as Array<Record<string, unknown>>;
+      expect(rows).toEqual([
+        { email: `s696-off-${RUN}@example.test`, status: 'queued', sales_channel_id: vipId, language_code: 'pl-PL' },
+      ]);
+
+      // Restored, the composed worker renders the template at that scope.
+      expect((await composedWorker().dispatchForStockIncrease({ productId: drill.id })).notified).toBe(1);
+      expect(mailer.sent[0]?.subject).toBe(`Ponownie dostępny: ${DRILL_CL}`);
+    },
+  );
+});

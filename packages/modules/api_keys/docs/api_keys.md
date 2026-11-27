@@ -1,9 +1,9 @@
 ---
-title: api_keys
+title: API keys
 description: Bearer-token integration credentials
 ---
 
-# `api_keys`
+# API keys (`api_keys`)
 
 Scoped bearer-token credentials for machine-to-machine integrations. The
 plaintext token is shown once at creation; only its SHA-256 hash is stored.
@@ -22,8 +22,9 @@ namespace, which the *Partner API access* integration guide documents in full.
 
 External calls authenticate by sending `Authorization: Bearer sk_live_…`.
 `requireApiKey(scope)` and `requireBoundApiKey(scope)` are Fastify
-pre-handlers exposed by the `api_keys` plugin; route surfaces gate themselves
-with them (`requireApiKey('catalog:write')`,
+pre-handlers that the `api_keys` module provides as ports (so a route of another
+module answers `503 MODULE_DISABLED` while this module is off); route surfaces
+gate themselves with them (`requireApiKey('catalog:write')`,
 `requireBoundApiKey('orders:write')`, etc.).
 
 ## Scope enum
@@ -37,6 +38,7 @@ Creation validates scopes against the typed catalog in
 | `catalog:write` | PIM by-SKU upsert — **unbound keys only** |
 | `orders:read` | External order reads — **bound keys only** |
 | `orders:write` | External order intake — **bound keys only** |
+| `platform.api_description.read` | The API description — `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` |
 
 Enforcement stays membership-based, so legacy free-text scopes on existing
 keys remain readable and enforceable — only creation is validated.
@@ -60,6 +62,20 @@ validated server-side and mirrored inline in the admin form:
 | B3 | The service Customer Account must be active and belong to the bound Organization |
 | B4 | Organization and Sales Channel must exist (the channel need not be active at creation — the key simply fails closed while it is inactive) |
 | B5 | `expiresAt`, when present, must be a future instant |
+
+A breach of any rule is answered `422 VALIDATION_FAILED`, with every issue
+listed in `details` as `{ path, issue }`. B3 has three branches: an account
+that does not exist and an account of another organization are validation,
+each with its own issue. An account of the bound organization that is
+blocked, deleted or anonymized is refused by its own state, and when it is
+the **only** problem the answer is
+`422 API_KEY_SERVICE_ACCOUNT_INACTIVE` instead, with `details.field:
+"binding.customerAccountId"`, `customerAccountId`, `organizationId` and a
+refusal token in `details.code`: `blocked` (unblock the account or choose
+another one) or `removed` (deleted or anonymized; choose another account).
+The operator reads the sentence in their own language. Beside any other
+issue, the inactive account stays one entry of the `VALIDATION_FAILED` list.
+Until issue #644 all three B3 branches shared one English issue.
 
 At request time a bound key derives a single-org tenant context and a pinned
 sales channel (an explicit `X-Sales-Channel` header naming a different channel

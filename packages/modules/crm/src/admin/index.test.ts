@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS,
   calendarScopeSchema,
+  customFieldCarrySkipReasonSchema,
   opportunityEventReminderChannelSchema,
   opportunityEventReminderStateSchema,
   opportunityEventRuleSchema,
@@ -54,7 +55,14 @@ describe('crm admin contributions', () => {
       ['/crm/opportunities/new', 'crm:write'],
       ['/crm/opportunities/:id', 'crm:read'],
       ['/crm/workflow', 'crm:configure'],
+      // Issue #1559: the workflow configuration's tabs are routes of their own.
+      ['/crm/workflow/order-sync', 'crm:configure'],
+      ['/crm/workflow/value', 'crm:configure'],
+      ['/crm/workflow/board-card', 'crm:configure'],
+      // The board's former address, redirecting to `?view=board` (issue #1558).
       ['/crm/board', 'crm:read'],
+      // The configuration's Tags tab (issue #1557), and its old address, a redirect.
+      ['/crm/workflow/tags', 'crm:configure'],
       ['/crm/tags', 'crm:configure'],
       ['/crm/analytics', 'crm:analytics'],
       // User Story 22: the read behind it is `crm:read`, and the screen holds no write.
@@ -73,16 +81,16 @@ describe('crm admin contributions', () => {
     expect(entry).not.toMatch(/^import .* from '\.\/(pages|components)\//m);
   });
 
-  it('puts every sidebar row in the CRM section — opportunities, the board, the calendar, analytics, tags, workflow last', () => {
+  it('puts every sidebar row in the CRM section — opportunities (list and board, one row), the calendar, analytics, the configuration last', () => {
     expect(
       (contributions.nav ?? []).map((row) => [row.to, row.section, row.requiredPermission]),
     ).toEqual([
+      // One row for the list and the board since issue #1558 (DEC-13).
       ['/crm/opportunities', 'crm', 'crm:read'],
-      ['/crm/board', 'crm', 'crm:read'],
-      // The three screens of every day first, then the manager's, then the two that configure.
+      // The screens of every day first, then the manager's, then the one
+      // configuration row (Workflow | Tags since issue #1557).
       ['/crm/calendar', 'crm', 'crm:read'],
       ['/crm/analytics', 'crm', 'crm:analytics'],
-      ['/crm/tags', 'crm', 'crm:configure'],
       ['/crm/workflow', 'crm', 'crm:configure'],
     ]);
     const weights = (contributions.nav ?? []).map((row) => row.weight ?? 0);
@@ -107,6 +115,9 @@ describe('crm admin contributions', () => {
       'open-crm-analytics',
       // Added with its route, never before (Principle XVI).
       'open-crm-calendar',
+      // The two configuration screens the sidebar lists (issue #516).
+      'open-crm-tags',
+      'open-crm-workflow',
     ]);
     for (const action of actions) {
       expect(paths.has(action.targetRoute), action.id).toBe(true);
@@ -202,29 +213,19 @@ describe('crm admin copy', () => {
       // One label per field the history can show — the set the tab itself reads.
       'history.field.': [...LABELLED_HISTORY_FIELDS],
       'history.notFollowed.': ['skipped', 'failed'],
-      'references.kind.': ['product', 'order', 'admin_user'],
-      'references.inserted.': ['product', 'order', 'admin_user'],
-      'references.unavailable.': ['product', 'order', 'admin_user'],
-      // The search a button opens: its name, its placeholder and its empty state.
-      'references.search.': [
-        'person',
-        'personPlaceholder',
-        'personEmpty',
-        'order',
-        'orderPlaceholder',
-        'orderEmpty',
-        'product',
-        'productPlaceholder',
-        'productEmpty',
-      ],
-      // The list an `@` opens (User Story 18): one title and one empty state per kind.
-      'references.suggest.title.': ['person', 'order', 'product'],
-      'references.suggest.empty.': ['person', 'order', 'product'],
-      // What a board card shows (User Story 19): one name per built-in field,
-      // the names of a range's two boxes, and the two groups of the section.
+      // Feature 162 — what a carry into the Opportunity skipped: the record it
+      // came from, and every reason the contract can answer.
+      'history.customFieldCarry.from.': ['order', 'quote_request'],
+      'history.carryReason.': [...customFieldCarrySkipReasonSchema.options],
+      // The reference editor's families (`references.*`, `editor.format.*`) left
+      // this bundle with the editor, for the kit's `core` one
+      // (`specs/163-projects-and-tasks/` research R-17); `admin/test/kit/
+      // kit-collaboration-bundle.test.ts` holds them there.
+      // What a board card shows (User Story 19): one name per built-in field
+      // and the names of a range's two boxes. The section's editor and its
+      // groups' names are the kit's `BoardCardFieldsEditor` (issue #1506).
       'board.field.': [...OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS],
       'board.filter.': ['min', 'max', 'from', 'to', 'minShort', 'maxShort'],
-      'boardCard.available.': ['builtin', 'custom'],
       // The calendar and an Opportunity's Events (User Stories 21 and 22): one
       // name per view for each of the two arrows and for the switch, the two
       // scopes, and — from the contract's own vocabularies, so a state the
@@ -261,7 +262,7 @@ describe('crm admin copy', () => {
 
   it('ships no key under its own prefixes that no screen asks for', () => {
     const text = sources.map((source) => source.text).join('\n');
-    // Everything but the seven families the host and the backend read by a
+    // Everything but the nine families the host and the backend read by a
     // name they build themselves: sidebar rows and palette actions (from the
     // manifest), permission labels, error codes, audit actions and the bell's
     // sentences — the last are addressed by `crm-notifier.ts` and drawn by the
@@ -271,8 +272,21 @@ describe('crm admin copy', () => {
     // record type's group and field labels, which global search resolves on the
     // server from the provider's descriptor (`backend/admin-search-provider.ts`,
     // held by its own test and by `admin_search`'s provider-conformance test).
+    // `settingGroups` is the eighth: the Settings screen reads a group's heading
+    // as `settingGroups.<group code>.name` from the declaring module's bundle
+    // (issue #884), held repo-wide by `backend/test/unit/_i18n/setting-group-names.test.ts`.
+    // `settingLabels` is the ninth: a setting's name and description, read by
+    // the same screen as `settingLabels.<setting code>.name|description`
+    // (issue #1522). `transactionalEmails` is the tenth: an e-mail's name and
+    // description, which `transactional_emails` reads on the server as
+    // `transactionalEmails.<code>.name|description` from the sending module's
+    // bundle (issue #1809), held repo-wide by
+    // `backend/test/unit/_i18n/manifest-prose-bundles.test.ts`.
     const own = Object.keys(en).filter(
-      (key) => !/^(nav|actions|adminRoles|errors|auditLog|notifications|adminSearch)\./.test(key),
+      (key) =>
+        !/^(nav|actions|adminRoles|errors|auditLog|notifications|adminSearch|settingGroups|settingLabels|transactionalEmails)\./.test(
+          key,
+        ),
     );
     expect(own.length).toBeGreaterThan(400);
     const unused = own.filter((key) => {
@@ -368,20 +382,23 @@ function literalKeys(text: string, open: number): string[] {
 }
 
 /**
- * Every key a `crm.opportunity.*` Command can put in `before` or `after`: the
- * literals assigned to either name, and the snapshot they spread.
+ * Every key the history can show of a `crm.opportunity.*` Command: the
+ * literals assigned to `before` or `after` — in an audit state, or in what a
+ * Command hands the Opportunity's value store (#470) — and the snapshot and
+ * the values they spread (`opportunity-audit-state.ts`).
  */
+const AUDIT_STATE_FILE = 'opportunity-audit-state.ts';
 function auditedStateKeys(): string[] {
   const keys = new Set<string>();
   for (const file of readdirSync(SERVICES_ROOT)) {
     if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
     const source = readFileSync(new URL(file, SERVICES_ROOT), 'utf8');
-    if (!source.includes("'crm.opportunity.")) continue;
+    if (!source.includes("'crm.opportunity.") && file !== AUDIT_STATE_FILE) continue;
     // Comments carry commas and braces of their own.
     const text = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     const starts = [
       ...text.matchAll(/\b(?:before|after)(?::| =)[^,;{}\n]*\{/g),
-      ...text.matchAll(/function auditSnapshot\([^)]*\)[^{]*\{\s*return \{/g),
+      ...text.matchAll(/function (?:auditSnapshot|opportunityValues)\([^)]*\)[^{]*\{\s*return \{/g),
     ];
     for (const match of starts) {
       for (const key of literalKeys(text, match.index + match[0].length - 1)) keys.add(key);

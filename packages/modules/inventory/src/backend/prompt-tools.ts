@@ -7,6 +7,7 @@ import {
   type SearchWarehousesParams,
   type SetStockLevelParams,
   type ToolContext,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -37,10 +38,6 @@ export interface InventoryPromptToolsDeps {
 }
 
 const RESULT_LIMIT = 20;
-
-function label(name: Record<string, string>): string {
-  return name['en'] ?? Object.values(name)[0] ?? '(unnamed)';
-}
 
 export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActionTool[] {
   const warehouseService = new WarehouseService(deps.emFactory);
@@ -88,6 +85,7 @@ export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActi
       const em = deps.emFactory();
       const product = await deps.catalogProducts.findById(params.productId);
       if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Product not found.');
+      if (!isUuidShape(params.warehouseId)) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
       const warehouse = await em.findOne(Warehouse, { id: params.warehouseId });
       if (!warehouse) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
       const level = await em.findOne(StockLevel, {
@@ -97,10 +95,10 @@ export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActi
       });
       const current = level?.onHand ?? 0;
       return {
-        headline: `Set stock of "${label(product.name)}" in warehouse "${warehouse.name}" to ${params.quantity}`,
+        headline: `Set stock of "${(product.name || product.sku)}" in warehouse "${warehouse.name}" to ${params.quantity}`,
         current: { onHand: current },
         affectedCount: 1,
-        sample: [{ id: product.id, label: label(product.name) }],
+        sample: [{ id: product.id, label: (product.name || product.sku) }],
       };
     },
     execute: async (params, ctx: ToolContext) => {

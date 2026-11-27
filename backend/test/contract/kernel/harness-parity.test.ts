@@ -1,8 +1,18 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { GUARD_SEAM_REGISTRATIONS } from '@endora-commerce/contracts';
 // Comments removed by the parser rather than by an ordered pair of regexes
 // (issue #241). This file is where the ordered pair was wrong: block-first, a
 // `//` line ending in a route glob at `test-server.ts:1544` opened a comment
@@ -90,12 +100,25 @@ const REPO_ROOT = resolve(BACKEND_ROOT, '..');
 /** Directories that hold no source of ours, or hold a second copy of it. */
 const PRUNED = new Set(['node_modules', 'dist', 'build', '.turbo', 'i18n', 'docs', 'coverage']);
 
+/**
+ * `check-module-boundary.test.ts` writes ledger shards into a
+ * `ledger-shard-fixture-*` directory under `backend/test/unit/scripts/` and
+ * deletes it again, in a parallel worker; it has to sit there for its shards to
+ * resolve as real ones. Walking into it raced to ENOENT (#1344). It is pruned
+ * by name rather than by tolerating ENOENT, because that is narrower: the one
+ * directory known never to hold a root is skipped, and a file that vanishes
+ * anywhere else in the walk still throws.
+ */
+const TEMP_FIXTURE_PREFIX = 'ledger-shard-fixture-';
+
 function sourceFilesUnder(dir: string, extensions: readonly string[]): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!PRUNED.has(entry.name)) found.push(...sourceFilesUnder(full, extensions));
+      if (!PRUNED.has(entry.name) && !entry.name.startsWith(TEMP_FIXTURE_PREFIX)) {
+        found.push(...sourceFilesUnder(full, extensions));
+      }
     } else if (extensions.some((extension) => entry.name.endsWith(extension))) {
       found.push(full);
     }
@@ -561,11 +584,102 @@ describe('T075 — a converted module costs no test-helper edit', () => {
       expect(source, `${root} does not pass decorationOrder`).toContain(
         'decorationOrder: divergenceDeclaration.decorationOrder',
       );
+      // `specs/176-command-hooks-outbox/` FR-014 — the command-hook tie-break
+      // comes from the same declaration and has to reach both roots for the
+      // same reason: a deployment that orders two hook modules in production
+      // and not in its tests meets `UnorderedCommandHooksError` in every test.
+      expect(source, `${root} does not pass commandHookOrder`).toContain(
+        'commandHookOrder: divergenceDeclaration.commandHookOrder',
+      );
+      // `specs/189-command-middleware/` FR-031 — the `admit` middleware
+      // tie-break, for the same reason: a deployment that orders two admission
+      // rules in production and not in its tests meets
+      // `UnorderedCommandMiddlewareError` in every test.
+      expect(source, `${root} does not pass commandMiddlewareOrder`).toContain(
+        'commandMiddlewareOrder: divergenceDeclaration.commandMiddlewareOrder',
+      );
       // Read once and used twice, never loaded twice: two `import()`s of one
       // file answering one question is how the omissions and the order come to
       // disagree about which declaration this deployment wrote.
       const loads = [...source.matchAll(/loadDivergenceDeclaration\(/g)].length;
       expect(loads, `${root} loads the declaration ${loads} time(s)`).toBe(1);
+    }
+  });
+
+  it('both compositions wire the command-middleware registry identically (189 FR-041)', () => {
+    // A test double that skipped child Commands would reproduce, in every
+    // contributor's suite, the defect the middleware point exists to fix (R-17).
+    // So there is no double: both compositions build the one registry with the
+    // live effective state, hand that one object to the bus and to
+    // `composeModules`, and seal it against the same derivation.
+    for (const [root, source] of COMPOSITION_SOURCES) {
+      const code = codeOnly(source);
+      expect([...code.matchAll(/\bnew CommandMiddlewareRegistry\s*\(/g)].length, `${root} builds the registry once`).toBe(1);
+      expect(code, `${root} asks presence of the effective state`).toMatch(
+        /new CommandMiddlewareRegistry\(\{\s*isPresent: \(moduleId\) => effectiveState\.isPresent\(moduleId\),\s*log: platformLogger\(\),\s*\}\)/,
+      );
+      expect(code, `${root} hands the registry to the bus`).toMatch(/middleware: commandMiddlewareRegistry,/);
+      expect(code, `${root} hands the registry to composeModules`).toMatch(/\bcommandMiddlewareRegistry,\s*commandMiddleware: \{/);
+      expect(code, `${root} seals it against the manifests' declarations`).toMatch(/declarations: commandMiddlewareFrom\(/);
+    }
+  });
+
+  it('both roots supply every guard seam as a root registration (189 T069, FR-055)', () => {
+    // `GUARD_SEAM_REGISTRATIONS` is a list, not a derivation (D-296.5): nothing
+    // in the ledger tells a guard seam from other root plumbing. So the list has
+    // to be held to the roots from this side, or a rename at a root would leave
+    // it naming nothing and the deprecation in `decorate` would warn about no
+    // decoration anyone can write.
+    //
+    // "Root-supplied" is what `decorate`'s predicate reads as
+    // `ownerOf(name) === undefined` over a held name. It is decided here by
+    // position: a name a root registers **before** `composeModules(` is in the
+    // container when every module registers, so a module that claims it is
+    // refused with `ForeignRegistrationError` and the name keeps no owner. The
+    // ORM-derived names arrive through `registerOrm(container, …)`, whose own
+    // keys are read off the platform's `kernel/container.ts`.
+    const containerPath = join(platformSrc as string, 'kernel', 'container.ts');
+    const ormNames = new Set<string>();
+    everyNode(ts.createSourceFile(containerPath, readFileSync(containerPath, 'utf8'), ts.ScriptTarget.ES2022, true), (node) => {
+      if (!ts.isFunctionDeclaration(node) || node.name?.text !== 'registerOrm' || node.body === undefined) return;
+      everyNode(node.body, (child) => {
+        if (!ts.isCallExpression(child) || !ts.isPropertyAccessExpression(child.expression)) return;
+        if (child.expression.name.text !== 'register') return;
+        const [values] = child.arguments;
+        if (values === undefined || !ts.isObjectLiteralExpression(values)) return;
+        for (const property of values.properties) {
+          if (property.name !== undefined && ts.isIdentifier(property.name)) ormNames.add(property.name.text);
+        }
+      });
+    });
+    expect(ormNames.has('emFactory'), '`registerOrm` registers `emFactory`').toBe(true);
+
+    for (const [root, source] of COMPOSITION_SOURCES) {
+      const code = codeOnly(source);
+      const composeAt = code.indexOf('= composeModules(');
+      expect(composeAt, `${root} composes no modules`).toBeGreaterThan(0);
+      const beforeCompose = ts.createSourceFile('root.ts', code.slice(0, composeAt), ts.ScriptTarget.ES2022, true);
+      const supplied = new Set<string>();
+      everyNode(beforeCompose, (node) => {
+        if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return;
+        if (node.expression.text === 'registerOrm') {
+          for (const name of ormNames) supplied.add(name);
+          return;
+        }
+        if (node.expression.text !== 'registerValues') return;
+        const values = node.arguments[1];
+        if (values === undefined || !ts.isObjectLiteralExpression(values)) return;
+        for (const property of values.properties) {
+          if (property.name !== undefined && ts.isIdentifier(property.name)) supplied.add(property.name.text);
+        }
+      });
+      const missing = GUARD_SEAM_REGISTRATIONS.filter((name) => !supplied.has(name));
+      expect(
+        missing,
+        `${root} does not register these guard seams before composing the modules, so ` +
+          '`GUARD_SEAM_REGISTRATIONS` names something that root does not supply. Changing the ' +
+          'list is a ruling that amends D-296.',
+      ).toEqual([]);
     }
   });
 
@@ -883,6 +997,12 @@ describe('T076 — the drift between the roots is an exact ledger', () => {
    * was written to hold; recording the blind spot is the honest half of it.
    */
   const PRODUCTION_ONLY_BOOT_STEPS: Readonly<Record<string, string>> = {
+    assertAdminBaseUrlWellFormed:
+      'Production refuses to boot on an ADMIN_BASE_URL that is set but malformed (issue #185, ' +
+      'architect ruling on #1078); the harness does not call it, so the refusal itself — the ' +
+      'message an operator sees — is exercised by nothing here. ' +
+      '`packages/platform/src/kernel/admin-base-url.test.ts` covers it over its inputs and ' +
+      'through `composeApp()`.',
     assertPublicApiBaseUrlConfigured:
       'Production refuses to boot without PUBLIC_API_BASE_URL; the harness supplies its own ' +
       'base URL, so the refusal itself — the message an operator sees on a misconfigured ' +
@@ -1068,8 +1188,9 @@ describe('T076 — what one composition costs, before the 555× multiplier', () 
     // reach it.
     const composition = codeOnly(harnessComposition);
     const guards = [...composition.matchAll(/options\.exercisePubSub === true/g)].length;
-    const subscribes = [...composition.matchAll(/\.(subscribe|start)\(redisSubscriber|redisSubscriber\.subscribe\(/g)]
-      .length;
+    const subscribes = [
+      ...composition.matchAll(/\.(subscribe|start)\(redisSubscriber|redisSubscriber\.subscribe\(/g),
+    ].length;
     expect(guards).toBe(2);
     expect(subscribes).toBe(0);
   });
@@ -1447,7 +1568,10 @@ function drainableModuleValueImportDeclarations(source: string, fileName: string
   const drainablePerSpecifier = new Map<string, boolean>();
   for (const [key, specifier] of moduleValueImports(source, fileName)) {
     const permanent = ROOT_MODULE_VALUE_IMPORTS[key]?.permanent === true;
-    drainablePerSpecifier.set(specifier, (drainablePerSpecifier.get(specifier) ?? false) || !permanent);
+    drainablePerSpecifier.set(
+      specifier,
+      (drainablePerSpecifier.get(specifier) ?? false) || !permanent,
+    );
   }
   return [...drainablePerSpecifier.values()].filter(Boolean).length;
 }
@@ -1875,7 +1999,11 @@ function guardedSeamsOf(sourceFile: ts.SourceFile, optional: ReadonlySet<string>
     if (!ts.isVariableDeclaration(node)) return;
     const initializer = node.initializer;
     if (initializer === undefined) return;
-    if (ts.isIdentifier(initializer) && initializer.text === 'options' && ts.isObjectBindingPattern(node.name)) {
+    if (
+      ts.isIdentifier(initializer) &&
+      initializer.text === 'options' &&
+      ts.isObjectBindingPattern(node.name)
+    ) {
       for (const element of node.name.elements) {
         const field = element.propertyName ?? element.name;
         if (ts.isIdentifier(field) && ts.isIdentifier(element.name) && optional.has(field.text)) {
@@ -1989,7 +2117,10 @@ function moduleSourceFiles(): Map<string, readonly string[]> {
     const root = dirname(entry.manifestPath);
     const src = join(root, 'src');
     const base = existsSync(src) ? src : root;
-    perModule.set(entry.manifest.id, existsSync(base) ? sourceFilesUnder(base, ['.ts', '.js']) : []);
+    perModule.set(
+      entry.manifest.id,
+      existsSync(base) ? sourceFilesUnder(base, ['.ts', '.js']) : [],
+    );
   }
   return perModule;
 }
@@ -2027,6 +2158,29 @@ function seamUsers(seam: string): string[] {
 }
 
 describe('112 — every composition root mounts every seam the composed list uses', () => {
+  it('does not walk into the ledger-shard temp fixture another test file writes (#1344)', () => {
+    // A root-shaped file inside a `ledger-shard-fixture-*` directory must not be
+    // read at all: in the real tree that directory is created and deleted by a
+    // parallel worker, and reading it is what raced to ENOENT.
+    const tree = mkdtempSync(join(tmpdir(), 'harness-parity-walk-'));
+    try {
+      const rootShaped = [
+        "import { MODULES } from './composition.generated.js';",
+        'composeModules(MODULES, { interceptors: [] });',
+        '',
+      ].join('\n');
+      mkdirSync(join(tree, 'ledger-shard-fixture-x'));
+      mkdirSync(join(tree, 'plain'));
+      writeFileSync(join(tree, 'ledger-shard-fixture-x', 'payments.ts'), rootShaped);
+      writeFileSync(join(tree, 'plain', 'root.ts'), rootShaped);
+      expect(compositionRootsIn([tree]).map((root) => root.path)).toEqual([
+        relative(REPO_ROOT, join(tree, 'plain', 'root.ts')),
+      ]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
   it('derives the root population, and it is more than the two pinned above', () => {
     // The floor is a broken-walk detector and it is also SC-004's second half:
     // narrowing this population back to the two roots T075/T076 pin is the
@@ -2091,7 +2245,7 @@ describe('112 — every composition root mounts every seam the composed list use
     expect(
       unmountable,
       `These seams refuse an option \`ComposeModulesOptions\` has no member for, so no root ` +
-        'can mount them. The composer is what forwards a root\'s options into a module ' +
+        "can mount them. The composer is what forwards a root's options into a module " +
         'context; add the field there, or the refusal is unreachable.',
     ).toEqual([]);
   });

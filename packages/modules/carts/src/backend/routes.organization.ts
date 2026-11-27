@@ -1,13 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   rejectOrgCartSchema,
-  setCartApprovalPolicySchema,
   cartStatusSchema,
   cartApprovalStatusSchema,
   ERROR_CODES,
+  organizationPermissionPreHandler,
   type CartStatus,
   type CartApprovalStatus,
+  type CatalogProductReadPort,
   type CustomerAccountReadPort,
+  type OrganizationPermissionPort,
+  type OrgCartDetailView,
 } from '@endora-commerce/contracts';
 import { z } from 'zod';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -15,20 +18,28 @@ import type { CartService } from './services/cart-service.js';
 import type { CartApprovalService } from './services/cart-approval-service.js';
 import type { CartOrganizationVisibilityService } from './services/cart-organization-visibility-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import { cartLineAmount, cartSubtotal } from './services/cart-money.js';
+import { productMetaOf } from './services/cart-line-meta.js';
+import { cartOwnerIdentity } from './services/cart-owner-identity.js';
 
 /**
- * Storefront routes scoped to an Organization Admin (feature 027 US4).
+ * Storefront routes of the Organization's cart approval (feature 027 US4;
+ * `specs/170-organization-roles/` `contracts/storefront-api.md` §5).
  *
- *   - GET    /api/v1/organization/carts                        org-admin
- *   - GET    /api/v1/organization/carts/:id                    org-admin
- *   - PATCH  /api/v1/organization/policies/cart-approval       org-admin
- *   - POST   /api/v1/cart/submit-for-approval                  ordinary member
- *   - POST   /api/v1/organization/carts/:id/approve            org-admin
- *   - POST   /api/v1/organization/carts/:id/reject             org-admin
+ *   - GET    /api/v1/organization/carts                        carts.approve
+ *   - GET    /api/v1/organization/carts/:id                    carts.approve
+ *   - POST   /api/v1/cart/submit-for-approval                  any member
+ *   - POST   /api/v1/organization/carts/:id/approve            carts.approve
+ *   - POST   /api/v1/organization/carts/:id/reject             carts.approve
  *
- * Role check is uniform: the caller's CustomerAccount.role must be
- * `organization_admin` for every endpoint marked "org-admin" above.
+ * The gate is the organization permission `carts.approve` (FR-032, FR-033),
+ * declared as a `preHandler` after `requireCustomer`: a member whose role lacks
+ * it is refused `403 ORGANIZATION_PERMISSION_REQUIRED` naming the code. It
+ * replaced the legacy administrator role read; *Administrator* holds every
+ * code, so an administrator's reach is unchanged. The per-Organization policy
+ * switch (`PATCH /api/v1/organization/policies/cart-approval`) is removed (OR-3):
+ * whether a buyer needs approval is their role's `carts.order_without_approval`.
  * Anti-enumeration: a foreign organization's carts return 404, not 403.
  */
 
@@ -55,20 +66,29 @@ const orgCartsListQuerySchema = z.object({
 export interface CartsOrganizationRoutesDeps {
   cartService: CartService;
   /**
-   * `customer_accounts`' read model (feature 075, Phase C). Two reads: the
-   * caller's own role — which is the org-admin gate on every route here — and
-   * the owner's e-mail on the cart detail. Both were `em.findOne` against
-   * `customer_accounts`' table, so the gate went on answering out of rows a
-   * deactivation leaves in place.
+   * `customer_accounts`' read model (feature 075, Phase C) — the owner's e-mail
+   * on the cart detail. It was `em.findOne` against `customer_accounts`' table.
    */
   customerAccounts: CustomerAccountReadPort;
+  /**
+   * `organizations`' permission port, resolved per request through this thunk
+   * (`contracts/organization-permission-port.md` §5) — never a captured port.
+   */
+  organizationPermissions: () => OrganizationPermissionPort;
   cartApprovalService: CartApprovalService;
+  /** Issue #650 — the names and SKUs of a cart's lines on the detail. */
+  catalogProducts: Pick<CatalogProductReadPort, 'findByIds'>;
   visibilityService: CartOrganizationVisibilityService;
   emFactory: () => EntityManager;
   /** Declared on the routes that validate a body, so it runs before validation. */
   requireCustomer: RequireCustomerGuard;
   resolveCartActor: (request: FastifyRequest) => {
-    customer?: { customerAccountId: string; organizationId: string | null };
+    /** `organizationRoleId` as in `CartsDeps.resolveCartActor` (research R-15, FR-080). */
+    customer?: {
+      customerAccountId: string;
+      organizationId: string | null;
+      organizationRoleId?: string | null;
+    };
     anonymousToken?: string;
   };
 }
@@ -82,25 +102,28 @@ export async function registerCartsOrganizationRoutes(
     cartApprovalService,
     visibilityService,
     customerAccounts,
+    catalogProducts,
     requireCustomer,
     resolveCartActor,
+    organizationPermissions,
   } = deps;
 
-  /** Resolves the caller as an Organization Administrator (404 if not). */
-  const requireOrgAdmin = async (request: FastifyRequest): Promise<{
-    customerAccountId: string;
-    organizationId: string;
-  }> => {
+  /** Signed in, and the role holds `carts.approve` — judged before any handler. */
+  const approver = [requireCustomer, organizationPermissionPreHandler(organizationPermissions, 'carts.approve')];
+
+  /** The approver the guards admitted, as the service takes it. */
+  const approverOf = (request: FastifyRequest): { customerAccountId: string; organizationId: string } => {
     const actor = resolveCartActor(request);
     if (!actor.customer) {
       throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Sign-in required.');
     }
     if (!actor.customer.organizationId) {
-      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'No organization in session.');
-    }
-    const me = await customerAccounts.findById(actor.customer.customerAccountId);
-    if (!me || me.role !== 'organization_admin') {
-      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Organization Admin role required.');
+      // D-178 — an invariant, as on `submit-for-approval` below.
+      throw new HttpError(
+        500,
+        ERROR_CODES.INTERNAL,
+        'Invariant violated: a customer account has no Organization (Principle XI).',
+      );
     }
     return {
       customerAccountId: actor.customer.customerAccountId,
@@ -108,8 +131,8 @@ export async function registerCartsOrganizationRoutes(
     };
   };
 
-  app.get('/api/v1/organization/carts', async (request) => {
-    const orgAdmin = await requireOrgAdmin(request);
+  app.get('/api/v1/organization/carts', { preHandler: approver }, async (request) => {
+    const approverActor = approverOf(request);
     const parsed = orgCartsListQuerySchema.parse(request.query ?? {});
     const query: Parameters<typeof visibilityService.list>[1] = {};
     if (parsed.status !== undefined) query.status = parsed.status;
@@ -117,60 +140,61 @@ export async function registerCartsOrganizationRoutes(
     if (parsed.page !== undefined) query.page = parsed.page;
     if (parsed.pageSize !== undefined) query.pageSize = parsed.pageSize;
     if (parsed.sort !== undefined) query.sort = parsed.sort;
-    return visibilityService.list(orgAdmin.organizationId, query);
+    return visibilityService.list(approverActor.organizationId, query);
   });
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/organization/carts/:id',
+    { preHandler: approver },
     async (request) => {
-      const orgAdmin = await requireOrgAdmin(request);
+      const approverActor = approverOf(request);
       const cart = await visibilityService.getInOrganization(
         request.params.id,
-        orgAdmin.organizationId,
+        approverActor.organizationId,
       );
       const items = await cartService.getItems(cart.id);
-      const total = items.reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
+      const total = Number(cartSubtotal(items));
       const currency = items[0]?.currency ?? 'PLN';
       const owner = cart.customerAccountId
         ? await customerAccounts.findById(cart.customerAccountId)
         : null;
-      return {
-        data: {
-          id: cart.id,
-          ownerCustomerAccountId: cart.customerAccountId,
-          ownerDisplayName: owner?.email ?? cart.customerAccountId,
-          status: cart.status,
-          approvalStatus: cart.approvalStatus,
-          itemCount: items.length,
-          total: { amount: total, currency },
-          lastActivityAt: cart.lastActivityAt.toISOString(),
-          submittedForApprovalAt: cart.submittedForApprovalAt?.toISOString() ?? null,
-          approvedAt: cart.approvedAt?.toISOString() ?? null,
-          rejectedAt: cart.rejectedAt?.toISOString() ?? null,
-          rejectedReason: cart.rejectedReason ?? null,
-        },
+      // Issue #650 — the lines, so the administrator sees what they approve:
+      // named in the response language, at the price stored on the line.
+      const products =
+        items.length > 0
+          ? await catalogProducts.findByIds(Array.from(new Set(items.map((it) => it.productId))))
+          : [];
+      const meta = productMetaOf(products, await request.responseLanguage(), new Set());
+      const data: OrgCartDetailView = {
+        id: cart.id,
+        ownerCustomerAccountId: cart.customerAccountId ?? null,
+        ...cartOwnerIdentity(owner, cart.customerAccountId ?? ''),
+        orderId: cart.completedOrderId ?? null,
+        status: cart.status,
+        approvalStatus: cart.approvalStatus,
+        itemCount: items.length,
+        total: { amount: total, currency },
+        lastActivityAt: cart.lastActivityAt.toISOString(),
+        submittedForApprovalAt: cart.submittedForApprovalAt?.toISOString() ?? null,
+        approvedAt: cart.approvedAt?.toISOString() ?? null,
+        rejectedAt: cart.rejectedAt?.toISOString() ?? null,
+        rejectedReason: cart.rejectedReason ?? null,
+        items: items.map((it) => {
+          const name = meta.get(it.productId)?.name ?? null;
+          return {
+            id: it.id,
+            productId: it.productId,
+            variantId: it.variantId ?? null,
+            displayName:
+              name !== null && it.packagingUnitName ? `${name} (${it.packagingUnitName})` : name,
+            productSku: meta.get(it.productId)?.sku ?? null,
+            quantity: it.quantity,
+            unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+            lineTotal: { amount: cartLineAmount(it.unitPrice, it.quantity), currency: it.currency },
+          };
+        }),
       };
-    },
-  );
-
-  app.patch(
-    '/api/v1/organization/policies/cart-approval',
-    { preHandler: requireCustomer, schema: { body: setCartApprovalPolicySchema } },
-    async (request) => {
-      const orgAdmin = await requireOrgAdmin(request);
-      const body = setCartApprovalPolicySchema.parse(request.body);
-      const org = await cartApprovalService.setPolicyForOrganization(
-        orgAdmin.organizationId,
-        orgAdmin,
-        body.requiresCartApproval,
-      );
-      return {
-        data: {
-          organizationId: org.id,
-          requiresCartApproval: org.requiresCartApproval,
-          updatedAt: org.updatedAt.toISOString(),
-        },
-      };
+      return { data };
     },
   );
 
@@ -191,30 +215,43 @@ export async function registerCartsOrganizationRoutes(
         'Invariant violated: a customer account has no Organization (Principle XI).',
       );
     }
-    const cart = await cartService.getOrCreateForCustomer(actor.customer);
-    await cartApprovalService.submitForApproval(cart, {
-      customerAccountId: actor.customer.customerAccountId,
-      organizationId: actor.customer.organizationId,
+    // The basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+    const cart = await cartService.getOrCreateForCustomer({
+      ...actor.customer,
+      salesChannelId: getResolvedChannel(request).id,
     });
-    return { data: { ok: true, approvalStatus: cart.approvalStatus } };
+    const language = await request.responseLanguage();
+    // The stored cart, not the one read above: the reply states what was
+    // written (issue #619 — it used to echo an object nothing had persisted).
+    const submitted = await cartApprovalService.submitForApproval(
+      cart,
+      {
+        customerAccountId: actor.customer.customerAccountId,
+        organizationId: actor.customer.organizationId,
+        organizationRoleId: actor.customer.organizationRoleId ?? null,
+      },
+      { language },
+    );
+    return { data: { ok: true, approvalStatus: submitted.approvalStatus } };
   });
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/organization/carts/:id/approve',
+    { preHandler: approver },
     async (request) => {
-      const orgAdmin = await requireOrgAdmin(request);
-      const cart = await cartApprovalService.approve(request.params.id, orgAdmin);
+      const approverActor = approverOf(request);
+      const cart = await cartApprovalService.approve(request.params.id, approverActor);
       return { data: { ok: true, cartId: cart.id, approvalStatus: cart.approvalStatus } };
     },
   );
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/organization/carts/:id/reject',
-    { preHandler: requireCustomer, schema: { body: rejectOrgCartSchema } },
+    { preHandler: approver, schema: { body: rejectOrgCartSchema } },
     async (request) => {
-      const orgAdmin = await requireOrgAdmin(request);
+      const approverActor = approverOf(request);
       const body = rejectOrgCartSchema.parse(request.body);
-      const cart = await cartApprovalService.reject(request.params.id, orgAdmin, body.reason);
+      const cart = await cartApprovalService.reject(request.params.id, approverActor, body.reason);
       return {
         data: {
           ok: true,

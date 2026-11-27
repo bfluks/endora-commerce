@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_TAB_ID,
   EVENTS_TAB_ID,
-  ITEM_COUNT_LABEL_KEY,
   LINKS_TAB_ID,
   OPPORTUNITY_TABS,
   searchForTab,
@@ -63,7 +62,6 @@ describe('the tabs of the Opportunity screen', () => {
       attachments: undefined,
       history: undefined,
     });
-    expect(ITEM_COUNT_LABEL_KEY).toBe('opportunity.tabs.counted');
   });
 
   it('puts Events third, under an id that is in the addresses a reminder writes', () => {
@@ -106,6 +104,15 @@ describe('tabFromSearch', () => {
 
   it('lets an explicit tab win over the return marker', () => {
     expect(tabFromSearch(search('created=order&tab=notes'))).toBe('notes');
+  });
+
+  // Spec 183 FR-011: a contributed tab is selectable while it is visible, and
+  // an id no visible contribution declares is the default tab, as before.
+  it('opens a contributed tab the address names while that tab is visible', () => {
+    expect(tabFromSearch(search('tab=probe'), ['probe'])).toBe('probe');
+    expect(tabFromSearch(search('tab=probe'), [])).toBe(DEFAULT_TAB_ID);
+    expect(tabFromSearch(search('tab=probe'))).toBe(DEFAULT_TAB_ID);
+    expect(tabFromSearch(search('tab=notes'), ['probe'])).toBe('notes');
   });
 });
 

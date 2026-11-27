@@ -1,36 +1,45 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
+import type { Redis } from 'ioredis';
 import { z } from 'zod';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, AuditRedactionPort } from '@endora-commerce/platform/kernel';
 import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type {
   Actor,
   AddressReadPort,
+  AddressServicePort,
   AdminI18nTranslatePort,
   AdminSearchProviderRegistryPort,
   AdminRolePort,
   AdminUserReadPort,
   AuthSessionPort,
   AuthSessionReadPort,
+  CartAnonymizationPort,
   CartQueryPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   CustomerAccountAdminSearchPort,
+  CustomerAccountCommandPort,
   CustomerAccountLifecycleWritePort,
+  CustomerAccountPreferencePort,
   CustomerAccountReadPort,
-  CustomerAddressReadPort,
   CustomerAuthPort,
   CustomerGroupReadPort,
   CustomerPasswordResetPort,
   DefaultPreferencePort,
+  EmailDefaultsRegistryPort,
+  EmailDeliveryAnonymizationPort,
   EmailMailerPort,
   ImpersonationPort,
   OrderListPort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
   PersonalOrganizationPort,
   RfqCustomerPort,
-  SalesRepAssignmentPort,
+  TemplateEmailPort,
   VatValidator,
 } from '@endora-commerce/contracts';
 import {
@@ -38,15 +47,19 @@ import {
   searchCustomersForAdmin,
   type CustomerAdminSearchProviderDeps,
 } from './admin-search-provider.js';
-import { CustomerAddressReadService } from './services/customer-address-read-port.js';
+import { readChannelSetting as readSetting, type ChannelSettingScope } from './channel-setting.js';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { CUSTOMERS_SETTING_CODES } from '../manifest.js';
 import { customersModule, type CustomersModuleOptions } from './plugin.js';
+import { startAddressBookRetirement } from './workers/address-book-retirement-worker.js';
+import { startAnonymizationSweep } from './workers/anonymization-sweep-worker.js';
 import { CustomerAddress } from './entities/customer-address.entity.js';
+import { ADMIN_PASSWORD_RESET_DEFAULT } from './email-templates/transactional-defaults.js';
+import { ADMIN_PASSWORD_RESET_EMAIL_CODE } from './services/admin-password-reset-email.js';
 
 /**
  * `customers` — three settings reads that only production performed
@@ -93,6 +106,8 @@ import { CustomerAddress } from './entities/customer-address.entity.js';
 export interface CustomersCradle {
   readonly emFactory: () => EntityManager;
   readonly auditLogService: AuditPort;
+  /** Platform-owned, beside the writer (issue #844); the retention sweep's. */
+  readonly auditRedactionService: AuditRedactionPort;
   readonly settingsReadPort: SettingsReadPort;
   readonly salesChannelResolutionPort: SalesChannelResolutionPort;
   readonly requireAdmin: RequireAdminFactory;
@@ -115,6 +130,17 @@ export interface CustomersCradle {
    * harness does.
    */
   readonly customerModerationActorResolver: CustomersModuleOptions['resolveModerationActor'];
+  /**
+   * Whether this process runs queue consumers (Principle X) — the platform's
+   * one module-agnostic answer, `false` in the test kit.
+   */
+  readonly processRunsWorkers: boolean;
+  /**
+   * The connection a module may build a BullMQ queue on; `undefined` is a
+   * composition that wants no queues, and neither the address-book retirement
+   * job's consumer nor the anonymization sweep's is then built.
+   */
+  readonly moduleQueueRedis: Redis | undefined;
   readonly customers: ReturnType<typeof customersModule>;
 }
 
@@ -141,16 +167,12 @@ function registerModerationActor(ctx: ModuleContext): void {
       .asFunction(() => {
         const admins = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
         const roles = lazyPort<AdminRolePort>(ctx, 'adminRolePort');
-        const salesRepScope = lazyPort<SalesRepAssignmentPort>(
-          ctx,
-          'organizationSalesRepScopePort',
-        );
         return async (request: FastifyRequest) => {
           const actor = request.actor as Actor | undefined;
           if (actor?.kind !== 'admin') {
             throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Admin session required.');
           }
-          return moderationActorFor({ admins, roles, salesRepScope }, actor.adminUserId);
+          return moderationActorFor({ admins, roles }, actor.adminUserId);
         };
       })
       .singleton(),
@@ -158,7 +180,7 @@ function registerModerationActor(ctx: ModuleContext): void {
 }
 
 /**
- * Who is moderating, and which organizations they may act on — the customer
+ * Who is moderating, and whether their reach is scoped at all — the customer
  * list's scope, asked by its routes for the request's admin and by global
  * search for the searching admin (`specs/150-admin-global-search/`).
  */
@@ -166,22 +188,19 @@ async function moderationActorFor(
   ports: {
     admins: AdminUserReadPort;
     roles: AdminRolePort;
-    salesRepScope: SalesRepAssignmentPort;
   },
   adminUserId: string,
-): Promise<{ adminUserId: string; isPlatformAdmin: boolean; allowedOrganizationIds: string[] }> {
+): Promise<{ adminUserId: string; isPlatformAdmin: boolean }> {
   const adminUser = await ports.admins.findById(adminUserId);
   // `getById` cannot 404 here: `admin_users_admin_role_fk` is
   // `on delete restrict`, so a non-null `adminRoleId` names a row.
   const role = adminUser?.adminRoleId ? await ports.roles.getById(adminUser.adminRoleId) : null;
   const isPlatformAdmin = role?.code !== 'sales_representative';
-  // Feature 056 — subtree-expanded when the rep holds
-  // `organizations:rollup`, which is `organizations`' decision and the
-  // reason this reads an assembled port rather than the tree.
-  const allowedOrganizationIds = isPlatformAdmin
-    ? []
-    : await ports.salesRepScope.listAssignedOrganizationIds(adminUserId);
-  return { adminUserId, isPlatformAdmin, allowedOrganizationIds };
+  // Issue #305 — which organizations a sales representative reaches is not
+  // this module's to list: it is the ambient tenant context's, derived by
+  // `organizations`' one reach rule (assigned, roll-up and every unassigned
+  // organization), and `CustomerAccount` reads are narrowed by it.
+  return { adminUserId, isPlatformAdmin };
 }
 
 /**
@@ -194,7 +213,6 @@ function customerAdminSearchDeps(ctx: ModuleContext): CustomerAdminSearchProvide
   const scopePorts = {
     admins: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
     roles: lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
-    salesRepScope: lazyPort<SalesRepAssignmentPort>(ctx, 'organizationSalesRepScopePort'),
   };
   const searchDeps = {
     accountSearch: lazyPort<CustomerAccountAdminSearchPort>(ctx, 'customerAccountAdminSearchPort'),
@@ -213,51 +231,43 @@ export function registerModule(ctx: ModuleContext): void {
   const cradle = (): CustomersCradle => ctx.cradle<CustomersCradle>();
   registerModerationActor(ctx);
 
-  /**
-   * This module's own settings, read against the system-default channel. Each
-   * degrades to the manifest default rather than failing the request — the
-   * identical try/catch stood in the production root, three times over.
-   *
-   * D-48 removed an `if (!channel) return fallback;` from between the two: on
-   * the impossible no-channel branch it returned the compiled-in constant
-   * without reading the setting at all, which is worse than switching tier.
-   */
-  const readChannelSetting = async <T>(
+  /** See `readChannelSetting` in `./channel-setting.ts` (issue #773). */
+  const readChannelSetting = <T>(
     code: string,
     schema: Parameters<SettingsReadPort['get']>[2],
     fallback: T,
-  ): Promise<T> => {
-    try {
-      const channel = await cradle().salesChannelResolutionPort.getSystemDefault();
-      return (await cradle().settingsReadPort.get(code, channel.id, schema)) as T;
-    } catch {
-      return fallback;
-    }
-  };
+    scope?: ChannelSettingScope,
+  ): Promise<T> =>
+    readSetting(
+      {
+        // Getters, so a cradle that cannot resolve degrades inside the reader's
+        // try/catch exactly as the inline closure did.
+        get settingsReadPort() {
+          return cradle().settingsReadPort;
+        },
+        get salesChannelResolutionPort() {
+          return cradle().salesChannelResolutionPort;
+        },
+        currentChannelId: () => currentSalesChannel()?.id,
+      },
+      code,
+      schema,
+      fallback,
+      scope,
+    );
 
-  /**
-   * Feature 075, Phase P — the customer's own saved addresses.
-   *
-   * `quick_order` reads one when it fills in a buyer's one-click defaults. The
-   * table is distinct from `addresses`' on purpose and the port keeps them
-   * distinct: this one hangs off a customer account, that one off an
-   * organisation, and a B2C buyer keeps addresses that are theirs rather than
-   * their personal organisation's.
-   */
-  ctx.di.providePort<CustomerAddressReadPort>(
-    'customerAddressReadPort',
-    ctx
-      .asFunction(({ emFactory }: CustomersCradle) => new CustomerAddressReadService(emFactory))
-      .singleton(),
-  );
+  // `specs/173-b2c-address-book-merge/` release 1 removed
+  // `customerAddressReadPort`: the personal address book is retired, and its
+  // one consumer, `quick_order`, reads the Organization book only (#769).
 
   ctx.di.register({
     customers: ctx
       .asFunction(
-        ({ emFactory, auditLogService }: CustomersCradle) =>
+        ({ emFactory, auditLogService, auditRedactionService }: CustomersCradle) =>
           customersModule({
             emFactory,
             auditLogService,
+            auditRedactionService,
             // Every one of these is another module's gated port and is stored by
             // the constructor, so a singleton may not hold one directly.
             // Feature 075, Phase C (issue #195) — `customerAuthPort` rather
@@ -278,12 +288,21 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'customerAccountReadPort',
             ),
+            // Issue #652 (D-292) — the buyer's e-mail-language write.
+            customerAccountPreferencePort: lazyPort<CustomerAccountPreferencePort>(
+              ctx,
+              'customerAccountPreferencePort',
+            ),
             // Feature 075, Phase C — the rest of `customer_accounts`' surface
             // this module's screens run on. Every one of these replaced a
             // direct load or mutation of that module's `CustomerAccount`
             // entity: the block/unblock/delete/restore/assign writes, the
             // retention scrub, the admin list's paginated query, and the
             // customer-group names beside it.
+            // `specs/186-aggregate-ports/` (issue #1822) — the account writes
+            // are the aggregate port's Commands; the lifecycle port is left
+            // with the two Organization moves (`specs/191-membership-join-requests/`).
+            customerAccountCommandPort: lazyPort<CustomerAccountCommandPort>(ctx, 'customerAccountCommandPort'),
             customerAccountLifecycleWritePort: lazyPort<CustomerAccountLifecycleWritePort>(
               ctx,
               'customerAccountLifecycleWritePort',
@@ -306,10 +325,21 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'personalOrganizationPort',
             ),
-            // `addresses`' read: the org-shared book a customer may pick a
-            // delivery address from, which this module used to query directly.
+            // `specs/170-organization-roles/` WP-02b — the role an account moved
+            // to another Organization holds there.
+            organizationRoleReadPort: lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort'),
+            // `specs/170-organization-roles/` WP-03 — the self-service profile's permissions (FR-056).
+            organizationPermissionPort: lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+            // `addresses`' read: the customer's Organization book, every
+            // customer's one address book (`specs/173-b2c-address-book-merge/`).
             addressReadPort: lazyPort<AddressReadPort>(ctx, 'addressReadPort'),
+            // …and its write: the release-1 retirement job moves B2C rows
+            // through it, and the retention sweep anonymizes with it (OD-7).
+            addressServicePort: lazyPort<AddressServicePort>(ctx, 'addressServicePort'),
             customFieldValues: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+            // Issue #1903 — the admin list's custom-field filters
+            // (`specs/157-custom-fields-list-filters/`).
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
             rfqService: lazyPort<RfqCustomerPort>(ctx, 'rfqService'),
             // Issue #108 — `organizations`' scope, not a private copy of its
             // wiring. The copy this replaces omitted the optional subtree deps,
@@ -321,11 +351,21 @@ export function registerModule(ctx: ModuleContext): void {
               'organizationSalesRepScopePort',
             ),
             mailer: lazyPort<EmailMailerPort>(ctx, 'emailMailer'),
+            // Issue #1295 — the operator-triggered password-reset e-mail is a
+            // transactional template; the mailer above is its fallback.
+            templateEmail: lazyPort<TemplateEmailPort>(ctx, 'templateEmailPort'),
             // Feature 075 — `carts`' reporting read and `admin_users`'
             // impersonation seam, where this module built a second instance of
             // each from an import of the owner's directory. Both are gated
             // ports, so a singleton may not hold one directly.
             cartQueryPort: lazyPort<CartQueryPort>(ctx, 'cartQueryPort'),
+            // Issue #920 — and its step in the anonymisation sweep.
+            cartAnonymizationPort: lazyPort<CartAnonymizationPort>(ctx, 'cartAnonymizationPort'),
+            // Issue #928 — `email`'s step: the records of the e-mails sent to the account.
+            emailDeliveryAnonymizationPort: lazyPort<EmailDeliveryAnonymizationPort>(
+              ctx,
+              'emailDeliveryAnonymizationPort',
+            ),
             impersonationPort: lazyPort<ImpersonationPort>(ctx, 'impersonationPort'),
             // `auth`'s read over the session table, for the online-customers
             // panel — the last thing in this module that named `Session`.
@@ -357,6 +397,7 @@ export function registerModule(ctx: ModuleContext): void {
             // `MODULE_DISABLED` at the seam rather than half a set of defaults.
             defaultPreferencePort: lazyPort<DefaultPreferencePort>(ctx, 'defaultPreferencePort'),
             storefrontBaseUrl: cradle().storefrontBaseUrl,
+            linkChannel: () => cradle().salesChannelResolutionPort.getSystemDefault(),
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireCustomer: (req, reply) => cradle().requireCustomer(req, reply),
@@ -370,6 +411,7 @@ export function registerModule(ctx: ModuleContext): void {
                 CUSTOMERS_SETTING_CODES.ALLOW_REGISTRATION_WITHOUT_ORGANIZATION,
                 z.boolean(),
                 false,
+                'request',
               ),
             resolveDeletionRetentionDays: () =>
               readChannelSetting(CUSTOMERS_SETTING_CODES.DELETION_RETENTION_DAYS, z.number(), 365),
@@ -386,6 +428,56 @@ export function registerModule(ctx: ModuleContext): void {
 
   ctx.routes(async (app) => {
     await cradle().customers.plugin(app);
+
+    // `specs/173-b2c-address-book-merge/` release 1 — the one-time job that
+    // retires the personal address book (plan R-1). Attached here, where
+    // `app.log` exists and a `BACKEND_ROLE=worker` process reaches it, and
+    // through `ctx.worker` — `defineModuleWorker('customers', …)` — so it runs
+    // only while this module is present. Built only where the host says this
+    // process consumes queues and offers a connection; the shared test server
+    // says neither and drives the service directly.
+    await startAddressBookRetirement({
+      processRunsWorkers: cradle().processRunsWorkers,
+      moduleQueueRedis: cradle().moduleQueueRedis,
+      retirement: cradle().customers.handle().addressBookRetirement,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
+
+    // The clock of the retention sweep (issue #677): a daily Job Scheduler and
+    // its consumer. Until this call existed nothing ran
+    // `AnonymizationSweepWorker.sweep()` at all, so a deleted account kept its
+    // personal data past `customers.deletion_retention_days` indefinitely.
+    // Attached and gated exactly as the job above: through `ctx.worker`, so no
+    // tick runs while this module is off, and only where this process consumes
+    // queues.
+    await startAnonymizationSweep({
+      processRunsWorkers: cradle().processRunsWorkers,
+      moduleQueueRedis: cradle().moduleQueueRedis,
+      sweeper: cradle().customers.handle().anonymizationSweepWorker,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
+  });
+
+  /**
+   * The default subject and content for the transactional e-mail this module
+   * declares in its manifest (issue #1295) — a **contribution** hook, as every
+   * other module's: `transactional_emails`' boot reconciler reads the registry
+   * once, inside its plugin body, so this always lands first.
+   */
+  ctx.onBoot(() => {
+    lazyPort<EmailDefaultsRegistryPort>(ctx, 'emailDefaultsPort').register(
+      ADMIN_PASSWORD_RESET_EMAIL_CODE,
+      ADMIN_PASSWORD_RESET_DEFAULT,
+      'customers',
+    );
   });
 
   /**

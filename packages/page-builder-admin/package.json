@@ -1,7 +1,11 @@
 {
   "name": "@endora-commerce/page-builder-admin",
-  "version": "0.106.0",
+  "version": "0.112.0",
   "type": "module",
+  "sideEffects": [
+    "*.css",
+    "./dist/email/EmailEditorPane.js"
+  ],
   "endora": {
     "type": "admin-ui"
   },
@@ -29,13 +33,14 @@
   },
   "files": [
     "dist",
-    "tailwind.css"
+    "tailwind.css",
+    "!dist/**/*.map"
   ],
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src"
   },
@@ -64,6 +69,6 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "typescript": "^5.9.3",
-    "vite": "^7.3.2"
+    "vite": "^8.3.8"
   }
 }

@@ -6,11 +6,13 @@ import {
   resolveSettingDescription,
   resolveSettingGroupName,
   resolveSettingName,
+  resolveSettingOption,
   settingDescriptionKey,
   settingGroupNameKey,
   settingNameKey,
+  settingOptionKey,
 } from '../../../../packages/modules/settings/src/admin/components/setting-label';
-import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 
 /**
  * A setting's name and description, written in the owning module's own bundle,
@@ -106,12 +108,25 @@ describe('setting label resolution', () => {
       );
     });
 
-    it('falls back to English, then to the declared description', () => {
+    // Issue #1522 (UX audit SHELL-23) — a description is a hint, and an
+    // English paragraph under a Polish label is noise: it never falls back to
+    // another language, neither to the English bundle nor to the manifest.
+    it('shows nothing in Polish when only English carries the description', () => {
       const fallbackBundle: Bundle = { seo: { [DESCRIPTION_KEY]: 'English bundle copy.' } };
       expect(
         resolveSettingDescription(SETTING, { language: 'pl', bundle: {}, fallbackBundle }),
+      ).toBeNull();
+      expect(resolveSettingDescription(SETTING, { language: 'pl', bundle: {} })).toBeNull();
+    });
+
+    it('takes the English bundle, then the declared description, in English', () => {
+      expect(
+        resolveSettingDescription(SETTING, {
+          language: 'en',
+          bundle: { seo: { [DESCRIPTION_KEY]: 'English bundle copy.' } },
+        }),
       ).toBe('English bundle copy.');
-      expect(resolveSettingDescription(SETTING, { language: 'pl', bundle: {} })).toBe(
+      expect(resolveSettingDescription(SETTING, { language: 'en', bundle: {} })).toBe(
         'What search engines are told about every page.',
       );
     });
@@ -154,6 +169,39 @@ describe('setting label resolution', () => {
           bundle: { seo: { 'settingGroups.my_group.name': 'not mine' } },
         }),
       ).toBe('My group');
+    });
+  });
+  // Issue #1479 (UX audit SHELL-02) — an enum option's label.
+  describe('option', () => {
+    const MODE = { code: 'newsletter.opt_in_mode', ownerModule: 'newsletter', name: 'Opt-in mode' };
+    const KEY = 'settingLabels.newsletter.opt_in_mode.options.double';
+
+    it('builds the key a module author writes', () => {
+      expect(settingOptionKey('newsletter.opt_in_mode', 'double')).toBe(KEY);
+    });
+
+    it("takes the administrator's language, then English, then the value itself", () => {
+      expect(
+        resolveSettingOption(MODE, 'double', {
+          language: 'pl',
+          bundle: { newsletter: { [KEY]: 'Podwójna zgoda' } },
+          fallbackBundle: { newsletter: { [KEY]: 'Double opt-in' } },
+        }),
+      ).toBe('Podwójna zgoda');
+      expect(
+        resolveSettingOption(MODE, 'double', {
+          language: 'pl',
+          bundle: { newsletter: {} },
+          fallbackBundle: { newsletter: { [KEY]: 'Double opt-in' } },
+        }),
+      ).toBe('Double opt-in');
+      expect(resolveSettingOption(MODE, 'double', { language: 'pl', bundle: {} })).toBe('double');
+    });
+
+    it("never reads another module's namespace", () => {
+      expect(
+        resolveSettingOption(MODE, 'double', { language: 'en', bundle: { settings: { [KEY]: 'not mine' } } }),
+      ).toBe('double');
     });
   });
 });

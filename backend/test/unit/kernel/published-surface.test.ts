@@ -118,6 +118,12 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'configuredPublicApiBaseUrl',
     'resolvePublicApiBaseUrl',
   ],
+  /**
+   * Issue #185 — the Admin UI's base address, the platform's input every module
+   * that mails an administrator links into the admin through. The boot-time
+   * refusal beside it, `assertAdminBaseUrlWellFormed`, is the host's and not published.
+   */
+  'admin-base-url.js': ['configuredAdminBaseUrl'],
   /** Row 11. */
   'lifecycle/effective-state.js': ['effectiveState', 'toModulePresenceDto'],
   /**
@@ -171,17 +177,39 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
   'request-scope-hook.js': ['scopeRequestToActor'],
   /**
    * D-160.10 — the port replaces the class. `RecordAuditInput` and
-   * `AuditLogFilter` are the argument shapes of its own methods.
+   * `AuditLogFilter` are the argument shapes of its own methods;
+   * `AuditLogPosition` is the filter's keyset `after`, and `AuditLogFacets`
+   * the answer of `queryFacets` (issue #1555).
    */
-  'ports/audit.js': ['AuditPort', 'RecordAuditInput', 'AuditLogFilter'],
+  'ports/audit.js': ['AuditPort', 'RecordAuditInput', 'AuditLogFilter', 'AuditLogFacets', 'AuditLogPosition'],
   /** Row 37 — the return shape of every {@link AuditPort} method. */
   'audit/audit-log-entry.entity.js': ['AuditLogEntry'],
+  /**
+   * Issue #844 — the one non-append write on the audit table, a port of its own
+   * beside {@link AuditPort} so that port's contract stays append-only. The
+   * shapes are its own method's; the two constants are the action of the row it
+   * writes and the bound of one target.
+   */
+  'ports/audit-redaction.js': [
+    'AUDIT_REDACTED_ACTION',
+    'AUDIT_REDACTION_MAX_IDS_PER_TARGET',
+    'AuditRedactionPort',
+    'AuditRedactionInput',
+    'AuditRedactionResult',
+    'AuditRedactionTarget',
+  ],
   /** Row 44; `InProcessCacheLayer` is what a caller registers. */
   'cache/in-process-cache-registry.js': [
     'InProcessCacheRegistry',
     'inProcessCaches',
     'InProcessCacheLayer',
   ],
+  /**
+   * Issue #1096 — how a module's cross-process cache subscriber subscribes
+   * without racing ioredis's handshake (`custom_fields`, `price_lists`). The
+   * structural type is the parameter `subscribeWhenReady` takes.
+   */
+  'cache/subscribe-when-ready.js': ['subscribeWhenReady', 'HandshakeAwareSubscriber'],
   /** Rows 20 and 38. */
   'crypto/password-hasher.js': ['hashPassword', 'verifyPassword', 'verifyPasswordOrDummy'],
   /**
@@ -267,8 +295,52 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
   'ports/settings.js': ['SettingsReadPort', 'SettingsReadResult'],
   'ports/sales-channel.js': [
     'ResolvedChannel',
+    'SalesChannelAccessPort',
     'SalesChannelMembershipPort',
     'SalesChannelResolutionPort',
+  ],
+  /** Feature 154 — the write seam a channel delete drops the access cache through. */
+  'sales-channels/sales-channel-access-cache.js': ['SalesChannelAccessCacheInvalidation'],
+  /**
+   * `specs/178-extensible-columns/` — the declaration API an installed package
+   * declares its extension columns with, the Zod schemas of its values, the
+   * accessor it reads and writes them through, and the errors and shapes those
+   * throw and answer in. The presence seam of the accessor, the projection and
+   * the ledger are **not** here: they are the host's (`./db`, `./composition`).
+   */
+  'schema-extensions/define.js': ['defineColumnExtension'],
+  'schema-extensions/zod.js': ['columnExtensionPatchSchema', 'columnExtensionSchema'],
+  'schema-extensions/accessor.js': ['ExtensionColumnsAccessor', 'extensionColumns'],
+  'schema-extensions/reads.js': ['ExtensionAttributeMap', 'ExtensionJsonValue', 'SchemaExtensionReads'],
+  /**
+   * `specs/187-side-table-extensions/` B1 (T034) — the entry a module hands
+   * `ctx.entityExtensionLoaders` for a side table its manifest `extends`. A
+   * module writes it; nothing else about the registry is a module's, so the
+   * registry class is on `./composition`, not here.
+   */
+  'entity-extensions/loaders.js': ['EntityExtensionLoaderEntry'],
+  /**
+   * T036 — the reads service a host read port hands its records to, and the
+   * lazy holder that resolves it only for a read that names an `include`. The
+   * factory is the root's, on `./composition`.
+   */
+  'entity-extensions/reads.js': ['EntityExtensionReads', 'lazyEntityExtensionReads'],
+  'schema-extensions/errors.js': [
+    'ExtensionHostRowNotFoundError',
+    'ExtensionProjectionWriteError',
+    'ExtensionValueCorruptError',
+    'ExtensionWriteOutsideCommandError',
+    'SchemaExtensionInvalidError',
+  ],
+  'schema-extensions/types.js': [
+    'ColumnExtension',
+    'ColumnExtensionInput',
+    'ColumnExtensionPatch',
+    'ColumnExtensionValues',
+    'ColumnIndex',
+    'ColumnSpec',
+    'ColumnType',
+    'ExtensibleHostTable',
   ],
 };
 
@@ -299,10 +371,39 @@ const PUBLISHED_TENANCY_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'TransitivelyScoped',
     'RuleScoped',
   ],
-  /** Row 21 — the one symbol of the escape hatch a module takes. */
-  'escape-hatch.js': ['withSystemScope'],
-  /** Row 28, plus `orgConstraintFor`'s return shape. */
-  'derived-scope.js': ['orgConstraintFor', 'isOrgInScope', 'ruleVisibleForScope', 'OrgConstraint'],
+  /**
+   * Row 21 — the symbols of the escape hatch a module takes. `withSystemScopeActingFor`
+   * joined `withSystemScope` in feature 163 (S-W2): a worker finishing work an admin
+   * queued runs system-scoped *as that admin*, so its Commands are audited with the
+   * requester — `catalog`'s `bulk-operation.service.ts` is the reach.
+   */
+  'escape-hatch.js': ['withSystemScope', 'withSystemScopeActingFor'],
+  /**
+   * Row 28, plus `orgConstraintFor`'s return shape. Issue #305 added the
+   * readers a module needs once a sales representative's reach is a
+   * complement (`excluded`): no module may read the constraint's id lists, so
+   * the `where` fragment (`orgScopeWhere`, which T042c had withdrawn as
+   * unreached), its SQL twin, the empty-reach test, the ranking ids and the
+   * reading of another administrator's scope are published instead. Issue
+   * #955 Phase 2 (owner ruling of 2026-11-10) replaced the synchronous
+   * `isOrgInScope` / `ruleVisibleForScope` with the async `orgInScope` /
+   * `ruleInScope`, and added `orgScopeTest`, the synchronous predicate a
+   * caller obtains once.
+   */
+  'derived-scope.js': [
+    'orgConstraintFor',
+    'orgInScope',
+    'ruleInScope',
+    'orgScopeTest',
+    'OrgConstraint',
+    'orgScopeWhere',
+    'orgScopeSql',
+    'OrgScopeSql',
+    'OrgScopeSource',
+    'reachesNoOrganization',
+    'assignedOrganizationIdsForRanking',
+    'orgConstraintForAdminScope',
+  ],
 };
 
 /**
@@ -337,6 +438,64 @@ const PUBLISHED_COMMANDS_SURFACE: Readonly<Record<string, readonly string[]>> = 
   'command-bus.js': ['CommandBus'],
   /** Row 5's "+5" — the undo helper, its parameters and its return. */
   'reversible.js': ['applyUndo', 'RevertRecord', 'RevertHandlers', 'UndoResult'],
+  /**
+   * `specs/176-command-hooks-outbox/` P2 (`contracts/command-hooks-api.md` §2) —
+   * what a hook author writes against: the entry `ctx.commandHooks` takes, the
+   * context it is handed, and the `afterCommit` shapes a ref names.
+   */
+  'hooks/types.js': [
+    'CommandHookContext',
+    'BeforeCommitHook',
+    'CommandHookEntry',
+    'AfterCommitContext',
+    'AfterCommitHandler',
+  ],
+  /** The veto class and the composition refusals a hook author meets at boot. */
+  'hooks/errors.js': [
+    'CommandHookRefusal',
+    'UndeclaredHookableActionError',
+    'HookPhaseNotOfferedError',
+    'DuplicateHookableActionError',
+    'DuplicateCommandHookError',
+    'HookOwnerNotDependedOnError',
+    'UnorderedCommandHooksError',
+    'CommandHookOrderContradictionError',
+  ],
+  /** The running hook, for an owner-side accessor (spec 178). */
+  'hooks/origin.js': ['currentCommandHookOrigin', 'CommandHookOrigin'],
+  /** 176 P3 — what an `afterCommit` handler throws to dead-letter its row at once. */
+  'outbox/errors.js': ['PermanentOutboxFailure'],
+  /**
+   * `specs/189-command-middleware/` P1 (`contracts/command-middleware-api.md`
+   * §2, §3) — what a middleware author writes against: the entry
+   * `ctx.commandMiddleware` takes, what `admit` and `observe` receive, and the
+   * running middleware's shape.
+   */
+  'middleware/types.js': [
+    'CommandAdmissionMeta',
+    'CommandAdmitHandler',
+    'CommandMiddlewareCallContext',
+    'CommandMiddlewareEntry',
+    'CommandMiddlewareOrigin',
+    'CommandObserveHandler',
+    'CommandRunEntry',
+    'CommandRunOutcome',
+  ],
+  /** The refusal class and the composition refusals a middleware author meets at boot. */
+  'middleware/errors.js': [
+    'CommandRefusedError',
+    'CommandRefusalStatus',
+    'UndeclaredCommandMiddlewareError',
+    'UnregisteredCommandMiddlewareError',
+    'CommandMiddlewarePhaseMismatchError',
+    'DuplicateCommandMiddlewareError',
+    'CommandMiddlewareOriginError',
+    'UnorderedCommandMiddlewareError',
+    'CommandMiddlewareOrderContradictionError',
+    'StaleCommandMiddlewareOrderError',
+  ],
+  /** The running middleware, for the re-entry guard's readers. */
+  'middleware/origin.js': ['currentCommandMiddlewareOrigin'],
 };
 
 /** `src/http/index.ts` — the `./http` subpath, as MR !880 built it. */
@@ -347,6 +506,12 @@ const PUBLISHED_HTTP_SURFACE: readonly string[] = [
   'StorefrontRevalidator',
   'encodeCursor',
   'decodeCursor',
+  // `specs/182-related-payers/` research R-4 — the priced audience every catalogue-pricing route
+  // reads, and the one slot its contributor (`carts`) fills. Published beside `productAudienceOf`
+  // for the reason it is: one derivation of "who is priced", not one per module.
+  'pricedAudienceOf',
+  'providePricingSubjectResolver',
+  'PricingSubjectResolver',
 ];
 
 /** `src/events/index.ts` — the `./events` subpath, as MR !880 built it. */
@@ -448,10 +613,13 @@ const NOT_PUBLISHED: Readonly<Record<string, string>> = {
 
   // --- accidental-reach -------------------------------------------------
   ManifestReconciler: 'accidental-reach — §1.3 row 46; a component does not reach itself.',
+  backfillPlaintextSecrets:
+    'composition — a boot repair the root runs once; a module writes a secret through its seam.',
   ReconciliationResult: 'accidental-reach — the return of the above.',
 
   // --- unreached --------------------------------------------------------
   AuditLogService: 'superseded by `AuditPort` (D-160.10) — the class is not published.',
+  AuditRedactionService: 'superseded by `AuditRedactionPort` (issue #844) — the class is not published, as `AuditLogService` is not.',
   enterPlatformScope: 'unreached — `enterSystemScope` is the module-facing entry (row 13).',
   getCurrentPlatformScope: 'unreached — no module asks which scope it is in.',
   openPlatformScopeCount: 'unreached — a harness assertion over scope balance.',
@@ -501,9 +669,6 @@ const NOT_PUBLISHED: Readonly<Record<string, string>> = {
   setEscapeHatchAuditSink: 'composition — the host wires the escape hatch to the audit sink.',
   EscapeHatchAuditRecord: 'composition — the argument of that sink.',
   EscapeHatchAuditSink: 'composition — the type of that sink.',
-  orgScopeWhere:
-    'unreached — modules take `orgConstraintFor` and build their own `where`; ' +
-    'publishing a MikroORM fragment builder would freeze that shape into the contract.',
   TenantScopeMode: 'unreached — a member of `TenantContext`, read as `ctx.mode`, never declared.',
   TenantActor: 'unreached — a member of `TenantContext`, read as `ctx.actor`.',
   TenantImpersonation: 'unreached — as above.',
@@ -575,12 +740,17 @@ const HOST_COMPOSITION_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'ComposeAppOptions',
     'ComposedAppContext',
   ],
+  // Issue #497 — the cursor seal both roots register as the `cursorSeal`
+  // value: `composeApp` keyed by the session key, the test kit by its own. A
+  // module resolves the value and declares the shape it uses in its cradle, so
+  // `CursorSeal` itself is not on the barrel (R3.1a).
+  'composition/cursor-seal.ts': ['createCursorSeal'],
   // What an entry point does with a refusal the platform wrote for the
   // operator: `exitOnRefusal` on `composeApp`'s promise in the API and the
-  // worker, `refuseOverlaySchema` in `migrate`, which composes nothing and has
-  // to ask. A scaffolded instance's three wiring files name them; a module has
-  // no process to exit.
-  'overlay/overlay-schema.ts': ['exitOnRefusal', 'refuseOverlaySchema'],
+  // worker. A scaffolded instance's wiring names it; a module has no process to
+  // exit. `refuseOverlaySchema`, which `migrate` called, went with the schema
+  // refusal it carried (`specs/190-overlay-full-modules/` FR-037).
+  'overlay/overlay-schema.ts': ['exitOnRefusal'],
   'http/server.ts': ['buildServer', 'ModulePlugin'],
   'http/interceptors/index.ts': ['ApiInterceptorRegistry'],
   // T119b. `./http` carries `HttpError` — what a module *raises* — and not the
@@ -643,6 +813,31 @@ const HOST_COMPOSITION_SURFACE: Readonly<Record<string, readonly string[]>> = {
   'kernel/lifecycle/registry-cache.ts': ['registryCache', 'publishStateChanged'],
   'kernel/lifecycle/activation-resolver.ts': ['activationDeclarationsFrom'],
   'kernel/lifecycle/required-modules.ts': ['requiredModulesFrom'],
+  // `specs/176-command-hooks-outbox/` P2 — the registry a root builds once and
+  // hands its `CommandBus` and `composeModules`, and the two derivations it is
+  // sealed against. Beside `requiredModulesFrom` for its reason; the test kit's
+  // `composeTestServer` and its `command-hooks` helper are the consumers.
+  'commands/hooks/registry.ts': ['CommandHookRegistry'],
+  'kernel/lifecycle/command-hook-inputs.ts': ['commandMiddlewareFrom', 'hookableActionsFrom', 'moduleDependencyClosureFrom'],
+  // `specs/189-command-middleware/` P1 — the command-middleware registry, beside
+  // the hook registry for its reason; the test kit's `composeTestServer` and
+  // its `command-middleware` helpers are the consumers.
+  'commands/middleware/registry.ts': ['CommandMiddlewareRegistry'],
+  // `specs/187-side-table-extensions/` B1 — the side-table loader registry and
+  // the reads service a root registers over it, beside the middleware registry
+  // for its reason; the test kit's `composeTestServer` is the consumer.
+  'kernel/entity-extensions/registry.ts': ['EntityExtensionLoaderRegistry', 'entityExtensionDeclarationsFrom'],
+  'kernel/entity-extensions/reads.ts': ['createEntityExtensionReads'],
+  // `specs/176-command-hooks-outbox/` P3 — the outbox's host half. Both roots
+  // build the wake-up they hand their `CommandBus`; the generated entity
+  // registry names the entity class (`ModuleRegistration`'s reason, below);
+  // the store, the drain and one tick are what the integration tests drive
+  // against Postgres, since the shared test server runs no worker.
+  'commands/outbox/wake.ts': ['createCommandOutboxWake'],
+  'commands/outbox/command-outbox-entry.entity.ts': ['CommandOutboxEntry'],
+  'commands/outbox/store.ts': ['PostgresOutboxStore'],
+  'commands/outbox/drain.ts': ['drainCommandOutbox'],
+  'commands/outbox/drain-worker.ts': ['runCommandOutboxDrainTick'],
   // Feature 132. The derivation and its refusal sit beside the two above for the
   // same reason: a root calls them once, before the first module registers, and a
   // module never does — it reads the result through `effectiveState`, which is on
@@ -666,8 +861,18 @@ const HOST_COMPOSITION_SURFACE: Readonly<Record<string, readonly string[]>> = {
   // into `packages/platform/dist/` — a specifier that resolves in this checkout
   // and in no client's. One export here retired six re-export shims.
   'kernel/lifecycle/module-registration.entity.ts': ['ModuleRegistration'],
+  /**
+   * `specs/178-extensible-columns/` FR-022 — the ledger row, on this subpath for
+   * `ModuleRegistration`'s reason: the generated entity registry must name it
+   * and no module may.
+   */
+  'kernel/schema-extensions/schema-extension-element.entity.ts': ['SchemaExtensionElement'],
   'kernel/settings/compose.ts': ['composeSettingsKernel', 'SettingsKernel'],
   'kernel/settings/manifest-reconciler.ts': ['ManifestReconciler'],
+  // Issue #700 — the boot step that encrypts any plaintext a `secret` setting
+  // still stores. `composeApp` runs it; the integration test that proves no
+  // plaintext survives in either table or the cache calls it the same way.
+  'kernel/settings/plaintext-secret-backfill.ts': ['backfillPlaintextSecrets'],
   'kernel/sales-channels/compose.ts': ['composeSalesChannelsKernel', 'SalesChannelsKernel'],
   'kernel/sales-channels/default-channel-reconciler.ts': ['DefaultChannelReconciler'],
   // T118 — `createRequestLanguageResolver` was here and is not: the assembly
@@ -678,6 +883,10 @@ const HOST_COMPOSITION_SURFACE: Readonly<Record<string, readonly string[]>> = {
   // deliberately not recorded beside it (D-100, and see the doc block above).
   'kernel/i18n/error-envelope-options.ts': ['composeErrorEnvelopeOptions'],
   'kernel/audit/audit-log-service.ts': ['AuditLogService'],
+  // Issue #844 — the redaction port's implementation, beside the writer's, for
+  // the same reason: the composition root constructs it, and the integration
+  // test that drives it against PostgreSQL constructs it the same way.
+  'kernel/audit/audit-redaction-service.ts': ['AuditRedactionService'],
   'tenancy/scoped-em.ts': ['forkScopedEm'],
   'tenancy/resolve-tenant-context.ts': ['resolveTenantContext', 'systemTenantContext'],
 };
@@ -1275,7 +1484,7 @@ describe('the platform’s published surface', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('the http barrel exports exactly the six symbols §1.3 marks P', () => {
+  it('the http barrel exports exactly the symbols §1.3 marks P, and R-4\'s priced audience', () => {
     expect([...new Set(barrelExports('http/index.ts'))].sort()).toEqual(
       [...PUBLISHED_HTTP_SURFACE].sort(),
     );

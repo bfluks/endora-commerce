@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ERROR_CODES, type DeliveryMethodUpsert } from '@endora-commerce/contracts';
+import { ERROR_CODES, roundHalfUp, type DeliveryMethodUpsert, isUuidShape } from '@endora-commerce/contracts';
 import type { Command } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import { DeliveryMethod } from '../entities/delivery-method.entity.js';
@@ -95,17 +95,24 @@ export function makeUpsertDeliveryMethodCommand(
         if (referencing > 0) {
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
+            ERROR_CODES.DELIVERY_METHOD_IN_USE,
             `Cannot change the adapter of delivery method "${row.code}": ${referencing} ` +
               `shipment(s) were created against it through "${row.adapter}". Set its status to ` +
               '"inactive" and create a new method for the other adapter instead.',
+            {
+              code: 'change_adapter',
+              deliveryMethodId: row.id,
+              deliveryMethodCode: row.code,
+              adapter: row.adapter,
+              shipmentCount: referencing,
+            },
           );
         }
       }
 
       if (row) {
         row.name = body.name;
-        row.cost = body.cost.toFixed(2);
+        row.cost = roundHalfUp(body.cost);
         row.currency = body.currency;
         row.adapter = adapter;
         if (body.status !== undefined) row.status = body.status;
@@ -116,7 +123,7 @@ export function makeUpsertDeliveryMethodCommand(
           id,
           code: input.code,
           name: body.name,
-          cost: body.cost.toFixed(2),
+          cost: roundHalfUp(body.cost),
           currency: body.currency,
           adapter,
           status: body.status ?? 'active',
@@ -160,7 +167,10 @@ export function makeUpsertDeliveryMethodCommand(
  */
 export type ShipmentUsageCounter = (
   deliveryMethodId: string,
-  /** Which write is asking — it only selects the refusal's wording. Defaults to `'delete'`. */
+  /**
+   * Which write is asking — it selects the refusal's wording and its
+   * `details.code` token. Defaults to `'delete'`.
+   */
   intent?: ShipmentUsageIntent,
 ) => Promise<number>;
 
@@ -176,6 +186,9 @@ export function makeDeleteDeliveryMethodCommand(
     objectType: 'delivery_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Delivery method not found.');
+      }
       const row = await em.findOne(DeliveryMethod, { id });
       if (!row) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Delivery method not found.');
@@ -184,12 +197,18 @@ export function makeDeleteDeliveryMethodCommand(
       if (referencing > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.DELIVERY_METHOD_IN_USE,
           `Cannot delete delivery method: ${referencing} shipment(s) reference it. Set status to "inactive" instead.`,
+          {
+            code: 'delete',
+            deliveryMethodId: row.id,
+            deliveryMethodCode: row.code,
+            shipmentCount: referencing,
+          },
         );
       }
       const before = deliveryMethodAuditState(row);
-      await em.removeAndFlush(row);
+      await em.remove(row).flush();
       return { result: undefined, before, after: null };
     },
   };
@@ -219,11 +238,12 @@ export function makeWithdrawCreatedDeliveryMethodCommand(id: string): Command<vo
     objectType: 'delivery_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) return { result: undefined, skipAudit: true };
       const row = await em.findOne(DeliveryMethod, { id });
       // Already gone: there is nothing left to take back, and nothing to audit.
       if (!row) return { result: undefined, skipAudit: true };
       const before = deliveryMethodAuditState(row);
-      await em.removeAndFlush(row);
+      await em.remove(row).flush();
       return { result: undefined, before, after: null };
     },
   };
@@ -245,6 +265,7 @@ export function makeDeactivateCreatedDeliveryMethodCommand(id: string): Command<
     objectType: 'delivery_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) return { result: undefined, skipAudit: true };
       const row = await em.findOne(DeliveryMethod, { id });
       if (!row || row.status === 'inactive') return { result: undefined, skipAudit: true };
       const before = deliveryMethodAuditState(row);

@@ -48,8 +48,7 @@ import { Redis } from 'ioredis';
 import { discoverConfiguredMigrations } from '../../db/configured-migrations.js';
 import { attachEscapeHatchAuditWriter } from '../../kernel/audit/escape-hatch-audit-writer.js';
 import { enterSystemScope } from '../../kernel/scope.js';
-import { activeOverlayModulesRoot } from '../../overlay/deployment-roots.js';
-import { overlayModulesUnder } from '../../overlay/overlay-runtime.js';
+import { overlayModulesFor } from '../../overlay/overlay-runtime.js';
 import {
   discoverPackageModuleManifests,
   installedPackageModuleIdClaims,
@@ -57,7 +56,8 @@ import {
 import { nodeModulesRootsFor } from '../../packages/installed-packages.js';
 import { resolveManifestEntries, type RegisteredManifestEntry } from '../manifest-registry.js';
 import type { MigrationOwnership } from '../services/migration-ownership.js';
-import type { OperatorResources, OperatorRuntime } from './operator-runtime.js';
+import { attachOperatorDiagnostics } from './operator-diagnostics.js';
+import type { MigrationCatalogue, OperatorResources, OperatorRuntime } from './operator-runtime.js';
 
 /**
  * The declaration-level manifest set of a tree that ships no generated index:
@@ -72,8 +72,10 @@ import type { OperatorResources, OperatorRuntime } from './operator-runtime.js';
 export async function instanceManifestEntries(
   deploymentRoot: string,
   env: NodeJS.ProcessEnv = process.env,
+  deploymentSourceRoot?: string,
 ): Promise<readonly RegisteredManifestEntry[]> {
-  const overlayModules = overlayModulesUnder(activeOverlayModulesRoot(deploymentRoot, env), () =>
+  // Judged against its sources first, as the API's composition is (#1848, FR-015).
+  const overlayModules = overlayModulesFor({ deploymentRoot, deploymentSourceRoot }, env, () =>
     installedPackageModuleIdClaims(nodeModulesRootsFor(env)),
   );
   return await resolveManifestEntries({
@@ -109,20 +111,47 @@ export async function instanceManifestEntries(
  *
  * ## Overlay modules
  *
- * An overlay module is in the resolved set and in no package, so the
- * discovered ownership answers `null` for it — *"I cannot say"*, which the
- * orchestrator refuses on. Here the answer is known: an overlay module
- * contributes no schema, and a tree in which one does never reaches this
- * point (`overlay/overlay-schema.ts` refuses it while the entries are
- * resolved). So each is covered and owns nothing, and its hard uninstall runs
- * its hook and drops its registration.
+ * Given the deployment root, the discovery reads the active deployment's
+ * overlay modules as well (`specs/190-overlay-full-modules/` FR-036), so an
+ * overlay module's chain is enumerated from the same order `migrate` applied it
+ * by and its hard uninstall reverts it. An overlay module in the resolved set
+ * that the discovery did not see — no root was supplied — is still covered and
+ * owns nothing, which is true of every one that ships no migration.
  */
 export async function instanceMigrationOwnership(
   entries: readonly RegisteredManifestEntry[],
   env: NodeJS.ProcessEnv = process.env,
+  deploymentRoot?: string,
 ): Promise<MigrationOwnership> {
-  const discovered = (await discoverConfiguredMigrations({ coreEntries: [], manifests: [] }, env))
-    .ownership;
+  return (await instanceMigrationCatalogue(entries, env, deploymentRoot)).ownership;
+}
+
+/**
+ * The instance's migration order with origins, and the ownership answer above
+ * — what `module:status` lists a module's migrations from
+ * (`specs/190-overlay-full-modules/` FR-045). One discovery for both halves, so
+ * the listing is the chain a hard uninstall would revert.
+ */
+export async function instanceMigrationCatalogue(
+  entries: readonly RegisteredManifestEntry[],
+  env: NodeJS.ProcessEnv = process.env,
+  deploymentRoot?: string,
+): Promise<MigrationCatalogue> {
+  const configured = await discoverConfiguredMigrations(
+    { coreEntries: [], manifests: [] },
+    env,
+    deploymentRoot,
+  );
+  return {
+    registered: configured.registered,
+    ownership: withOverlayCoverage(configured.ownership, entries),
+  };
+}
+
+function withOverlayCoverage(
+  discovered: MigrationOwnership,
+  entries: readonly RegisteredManifestEntry[],
+): MigrationOwnership {
   const overlayIds = new Set(
     entries.filter((entry) => entry.origin === 'overlay').map((entry) => entry.manifest.id),
   );
@@ -143,6 +172,8 @@ export interface InstanceOperatorRuntimeOptions {
    * package can derive for itself, for `composeApp`'s own reason.
    */
   readonly deploymentRoot: string;
+  /** `apps/` as written, when {@link deploymentRoot} holds it compiled (#1848, FR-016). */
+  readonly deploymentSourceRoot?: string;
   /**
    * The instance's own `mikro-orm.config.js` default export.
    *
@@ -173,7 +204,18 @@ export async function instanceOperatorRuntime(
   const env = options.env ?? process.env;
   const out = options.out ?? ((line: string) => void process.stdout.write(line));
   const err = options.err ?? ((line: string) => void process.stderr.write(line));
-  const entries = await instanceManifestEntries(options.deploymentRoot, env);
+  // Issue #819 — the platform's own log lines (the ORM bootstrap's
+  // tenancy-chain notice among them) go to `err`, never in front of a
+  // `--json` answer on stdout. Attached before the manifest set is resolved,
+  // which may itself have something to say, and detached if that refuses.
+  const detachDiagnostics = attachOperatorDiagnostics(err);
+  let entries: readonly RegisteredManifestEntry[];
+  try {
+    entries = await instanceManifestEntries(options.deploymentRoot, env, options.deploymentSourceRoot);
+  } catch (error: unknown) {
+    detachDiagnostics();
+    throw error;
+  }
   let opened: OperatorResources | undefined;
   // Cross-organisation access is audited in the database (owner decision of
   // 2026-10-03). These commands never compose, so `composeApp`'s writer is not
@@ -194,15 +236,20 @@ export async function instanceOperatorRuntime(
         return opened;
       },
       entries,
-      migrationOwnership: () => instanceMigrationOwnership(entries, env),
+      migrationOwnership: () => instanceMigrationOwnership(entries, env, options.deploymentRoot),
+      migrations: () => instanceMigrationCatalogue(entries, env, options.deploymentRoot),
       out,
       err,
     },
     dispose: async (): Promise<void> => {
-      await escapeHatchAudit.detach();
-      if (!opened) return;
-      opened.redis.disconnect();
-      await opened.orm.close(true);
+      try {
+        await escapeHatchAudit.detach();
+        if (!opened) return;
+        opened.redis.disconnect();
+        await opened.orm.close(true);
+      } finally {
+        detachDiagnostics();
+      }
     },
   };
 }

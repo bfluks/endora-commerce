@@ -13,6 +13,7 @@ import { CrmOpportunity } from '../entities/crm-opportunity.entity.js';
 import { CrmOpportunityAttachment } from '../entities/crm-opportunity-attachment.entity.js';
 import { asDownloadLink, refuseActiveContent } from './attachment-active-content.js';
 import { isUuid, loadOpportunity } from './opportunity-access.js';
+import { recordValueChange } from './opportunity-audit-state.js';
 import { actingAdminUserId } from './opportunity-assignment-service.js';
 
 export interface OpportunityAttachmentServiceDeps {
@@ -56,13 +57,14 @@ function fileUnavailable(): HttpError {
  * `visibility: 'private'`. The port says nothing about what a file was
  * uploaded *for*, so that is all this module can hold it to.
  *
- * **The download link is resolved here**, through `assetsLibraryPort`, because
- * the library's own admin API is gated on the library's permissions and the
- * people working an Opportunity need not hold them. It is a signed link that
- * expires within minutes, so a screen reads the list again before it opens
- * one. It is handed out only under an Opportunity that was loaded through the
- * tenant-scoped EntityManager — and a file already attached to an Opportunity
- * the caller cannot see cannot be attached elsewhere to obtain one.
+ * **The download link is resolved here**, through `assetReadPort.resolveUrls`
+ * in one batch per list (issue #545), because the library's own admin API is
+ * gated on the library's permissions and the people working an Opportunity need
+ * not hold them. It is a signed link that expires within minutes, so a screen
+ * reads the list again before it opens one. It is handed out only under an
+ * Opportunity that was loaded through the tenant-scoped EntityManager — and a
+ * file already attached to an Opportunity the caller cannot see cannot be
+ * attached elsewhere to obtain one.
  *
  * Every write is a Command recorded against the Opportunity.
  */
@@ -108,12 +110,20 @@ export class OpportunityAttachmentService {
 
     const asset = await this.deps.assets.findById(assetId, { liveOnly: true });
     if (!asset) throw fileUnavailable();
+    // A file the library hides from the caller — held only by records of any
+    // module they may not see — is not there to attach, and gets the
+    // missing-file answer before the private-file and active-content refusals
+    // could tell it apart (`specs/166-asset-reference-visibility/` R-13, FR-006).
+    if (!(await this.deps.assets.visibleToCaller([assetId])).has(assetId)) throw fileUnavailable();
     await this.#refuseAFileHeldOutOfReach(em, assetId);
     if (asset.visibility !== 'private') {
+      // The file's visibility refuses a well-formed request, so not
+      // `VALIDATION_FAILED` (issue #639).
       throw new HttpError(
         422,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.CRM_ATTACHMENT_NOT_PRIVATE,
         'An attachment must be a private file. Upload it to the media library as private.',
+        { assetId, visibility: asset.visibility },
       );
     }
     // The same refusal as the upload's: a file of the library is held to it too.
@@ -133,10 +143,12 @@ export class OpportunityAttachmentService {
             fileName: asset.filename.slice(0, 255),
             uploadedByAdminUserId: uploader,
           });
+          // A file's name is free text: it goes to the Opportunity's own store (#470).
+          const values = recordValueChange(tx, opportunity.id, { before: null, after: { fileName: created.fileName } });
           return {
             result: created,
             before: null,
-            after: { attachmentId: created.id, assetId, fileName: created.fileName },
+            after: { attachmentId: created.id, assetId, ...values },
           };
         },
       });
@@ -167,7 +179,8 @@ export class OpportunityAttachmentService {
           opportunityId: opportunity.id,
         });
         if (!row) throw attachmentNotFound();
-        const before = { attachmentId: row.id, assetId: row.assetId, fileName: row.fileName };
+        const values = recordValueChange(em, opportunity.id, { before: { fileName: row.fileName }, after: null });
+        const before = { attachmentId: row.id, assetId: row.assetId, ...values };
         em.remove(row);
         return { result: undefined, before, after: null };
       },
@@ -211,12 +224,14 @@ export class OpportunityAttachmentService {
     const names = new Map(
       uploaders.map((admin) => [admin.id, `${admin.firstName} ${admin.lastName}`.trim() || admin.email]),
     );
-    // One call per file that is still there, and none for one that is gone —
-    // so the library is never asked for something it would have to refuse.
+    // One batched read for every file that is still there, and none for one
+    // that is gone. `resolveUrls` answers the URL the asset detail carries —
+    // signed and expiring for a private file — without the detail's "used by"
+    // list, which asked every reference descriptor about each file (#545).
+    const live = assets.map((asset) => asset.id);
+    const resolved = live.length > 0 ? await this.deps.assets.resolveUrls(live) : new Map<string, string>();
     const urls = new Map<string, string>();
-    for (const asset of assets) {
-      urls.set(asset.id, asDownloadLink((await this.deps.assetsLibrary.getAsset(asset.id)).url, asset.id));
-    }
+    for (const [assetId, url] of resolved) urls.set(assetId, asDownloadLink(url, assetId));
     return rows.map((row) => {
       const asset = assetById.get(row.assetId);
       const size = asset ? Number(asset.sizeBytes) : 0;

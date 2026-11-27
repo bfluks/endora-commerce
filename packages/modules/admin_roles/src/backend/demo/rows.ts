@@ -57,7 +57,7 @@ export const SALES_REPRESENTATIVE_PERMISSIONS: readonly string[] = [
   'rfqs:handle',
   'catalog:read',
   // D-173 — the RFQ create screen prefills the agreed unit price from
-  // `GET /admin/products/:id/resolved-price`, which is `price_lists`' own
+  // `POST /admin/price-books/resolve` (feature 160), which is `price_lists`' own
   // endpoint and is gated on `price_lists:read` rather than on
   // `rfqs:handle`. Without this code the prefill answers 403.
   'price_lists:read',
@@ -67,6 +67,12 @@ export const SALES_REPRESENTATIVE_PERMISSIONS: readonly string[] = [
   // the Opportunities assigned to them.
   'crm:read',
   'crm:write',
+  // Feature 165 — the demo assigns Tasks to its Sales Reps, and a rep's own
+  // *My Tasks* is the screen the feature is built around. Without `tasks:read`
+  // a rep can open no Task and the assignee and mention lists skip them; without
+  // `tasks:write` they cannot move or comment on the Tasks assigned to them.
+  'tasks:read',
+  'tasks:write',
 ];
 
 /**

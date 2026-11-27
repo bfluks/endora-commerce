@@ -1,0 +1,215 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ComponentType, ReactElement, ReactNode } from 'react';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
+import { MemoryRouter } from 'react-router-dom';
+import { CATALOG, IDS, PLATFORM_ADMIN } from '../../helpers/price-book-fixtures';
+import { withSession } from '../../helpers/render-with-session';
+
+/**
+ * The display-mode page names a category or a product override in the admin
+ * language (feature 161, pre-Phase-4 fix).
+ *
+ * On `master` the page read `/pricing/rule-targets/categories`; on the release
+ * branch it reads `/price-books/targets/categories`, whose names — like the
+ * admin product list's — are maps keyed by language tag. Rendered as they
+ * came, an override of either scope would put an object into the tree. The
+ * names are picked as every other admin surface picks them
+ * (`pickCategoryDisplayName`: the admin language's tag, then `en-US`, then any,
+ * then the slug or SKU).
+ */
+
+const getSpy = vi.fn();
+const putSpy = vi.fn();
+
+vi.mock('@endora-commerce/admin-kit/lib', async () => {
+  const actual = await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>(
+    '@endora-commerce/admin-kit/lib',
+  );
+  return {
+    ...actual,
+    apiClient: { get: (...args: unknown[]) => getSpy(...args), post: vi.fn(), put: (...args: unknown[]) => putSpy(...args), patch: vi.fn(), delete: vi.fn() },
+  };
+});
+
+const { contributions } = await import('@endora-commerce/mod-price-lists/admin');
+const route = contributions.routes?.find((r) => r.path === '/price-lists/display-modes');
+const Page = ((await route!.component()) as { default: ComponentType }).default;
+
+const REPO_ROOT = resolve(process.cwd(), '..');
+function coreBundle(language: 'en' | 'pl'): Bundle {
+  return {
+    core: JSON.parse(readFileSync(join(REPO_ROOT, 'packages/modules/_i18n/i18n', `${language}.json`), 'utf8')) as Record<string, string>,
+  };
+}
+
+const PRODUCT = { id: IDS.products.P1, sku: 'P1', name: 'Screws 0200' };
+
+function answer(url: string): unknown {
+  if (url.includes('/display-mode-overrides?scope=category')) {
+    return { data: { items: [{ scope: 'category', targetId: IDS.categories.screws, mode: 'net_only', updatedAt: '2026-10-22T10:00:00.000Z' }] } };
+  }
+  if (url.includes('/display-mode-overrides?scope=product')) {
+    return { data: { items: [{ scope: 'product', targetId: PRODUCT.id, mode: 'both', updatedAt: '2026-10-22T10:00:00.000Z' }] } };
+  }
+  if (url.includes('/display-mode-overrides?scope=')) return { data: { items: [] } };
+  if (url.includes('/targets/organizations')) return { data: { items: CATALOG.organizations } };
+  if (url.includes('/targets/categories')) return { data: { items: CATALOG.categories } };
+  if (url.includes('/admin/catalog/products')) return { data: [PRODUCT] };
+  if (url.includes('/admin/settings/')) return { defaultValue: 'gross_only' };
+  // Feature 161 — the page is *Pricing settings* now, and reads the list-price
+  // setting and the precedence beside the overrides.
+  if (url.endsWith('/price-books/settings/show-list-price')) return { data: { value: false } };
+  if (url.endsWith('/price-books/precedence')) {
+    return {
+      data: {
+        version: 1,
+        preset: 'HY',
+        categoryBeforeAttribute: true,
+        depthMode: 'within_cell',
+        cells: [
+          'org.variant', 'org.product', 'org.category_attribute', 'org.category', 'org.attribute',
+          'group.variant', 'group.product', 'group.category_attribute', 'group.category', 'group.attribute',
+          'org.all', 'group.all',
+        ],
+      },
+    };
+  }
+  throw new Error(`unexpected url ${url}`);
+}
+
+function mount(language: 'en' | 'pl'): void {
+  const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
+    <TranslationProvider language={language} initialBundle={coreBundle(language)}>
+      {/* Feature 161 — the page's precedence section reads the address and its
+          list-price switch the session, as every admin screen may. */}
+      {withSession(<MemoryRouter>{children}</MemoryRouter>, { session: PLATFORM_ADMIN })}
+    </TranslationProvider>
+  );
+  render(<Page />, { wrapper });
+}
+
+describe('DisplayModeOverridesPage — names in the admin language', () => {
+  beforeEach(() => {
+    getSpy.mockReset();
+    getSpy.mockImplementation(async (url: string) => answer(url));
+  });
+
+  it('names a category override in English, with its slug', async () => {
+    const user = userEvent.setup();
+    mount('en');
+    await user.click(await screen.findByRole('tab', { name: 'Category' }));
+    const table = await screen.findByRole('table');
+    expect(await within(table).findByText('Screws')).toBeInTheDocument();
+    expect(within(table).getByText('screws')).toBeInTheDocument();
+  });
+
+  it('names a category override in Polish', async () => {
+    const user = userEvent.setup();
+    mount('pl');
+    await user.click(await screen.findByRole('tab', { name: 'Kategoria' }));
+    expect(await within(await screen.findByRole('table')).findByText('Wkręty')).toBeInTheDocument();
+  });
+
+  // Feature 174 (FR-031): the product's Global name, whatever the admin language.
+  it('names a product override by its Global name, with its SKU', async () => {
+    const user = userEvent.setup();
+    mount('pl');
+    await user.click(await screen.findByRole('tab', { name: 'Produkt' }));
+    const table = await screen.findByRole('table');
+    expect(await within(table).findByText('Screws 0200')).toBeInTheDocument();
+    expect(within(table).getByText('P1')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Issue #1492 (UX audit CAT-17): the page drew its scope switch as three
+ * hand-coloured buttons and its results as cards painted green or red, with no
+ * live role. The switch is the kit's tabs; a result is an `Alert` — a saved
+ * override a polite status, a failure an alert.
+ */
+describe('DisplayModeOverridesPage — one visual system (#1492)', () => {
+  beforeEach(() => {
+    getSpy.mockReset();
+    getSpy.mockImplementation(async (url: string) => answer(url));
+    putSpy.mockReset();
+    putSpy.mockResolvedValue({});
+  });
+
+  it('switches scope through tabs that say which one is selected', async () => {
+    const user = userEvent.setup();
+    mount('en');
+    const organization = await screen.findByRole('tab', { name: 'Organization' });
+    expect(organization).toHaveAttribute('aria-selected', 'true');
+    const category = screen.getByRole('tab', { name: 'Category' });
+    expect(category).toHaveAttribute('aria-selected', 'false');
+    await user.click(category);
+    expect(category).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tabpanel')).toContainElement(await screen.findByRole('table'));
+  });
+
+  it('announces a saved override politely, as a status', async () => {
+    const user = userEvent.setup();
+    mount('en');
+    await user.click(await screen.findByRole('tab', { name: 'Category' }));
+    const table = await screen.findByRole('table');
+    await within(table).findByText('Screws');
+    await user.selectOptions(within(table).getByRole('combobox'), 'both');
+    const status = await screen.findByText('Override saved.');
+    expect(status.closest('[role="status"]')).not.toBeNull();
+    expect(status.closest('[role="alert"]')).toBeNull();
+  });
+
+  it('shows a failed save as an alert', async () => {
+    const user = userEvent.setup();
+    putSpy.mockRejectedValueOnce(new Error('down'));
+    mount('en');
+    await user.click(await screen.findByRole('tab', { name: 'Category' }));
+    const table = await screen.findByRole('table');
+    await within(table).findByText('Screws');
+    await user.selectOptions(within(table).getByRole('combobox'), 'both');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Save failed.');
+  });
+});
+
+/**
+ * Issue #1448 (UX audit DS-15, slice S12): an empty scope and a search that
+ * matches nothing are different situations. Only the second offers Clear
+ * filters, which empties the search and hands focus back to it.
+ */
+describe('DisplayModeOverridesPage — no overrides vs no results (#1448)', () => {
+  beforeEach(() => {
+    getSpy.mockReset();
+    getSpy.mockImplementation(async (url: string) => answer(url));
+  });
+
+  it('says an empty scope has no overrides yet', async () => {
+    mount('en');
+    const panel = await screen.findByRole('tabpanel');
+    await waitFor(() => expect(panel.querySelector('[data-empty-state]')).not.toBeNull());
+    expect(panel.querySelector('[data-empty-state]')).toHaveAttribute('data-empty-state', 'no-data');
+    expect(within(panel).queryByRole('button', { name: CORE_EN['common.emptyState.clearFilters']! })).toBeNull();
+  });
+
+  it('says a search matches nothing, and Clear filters brings the overrides back', async () => {
+    const user = userEvent.setup();
+    mount('en');
+    await user.click(await screen.findByRole('tab', { name: 'Category' }));
+    const table = await screen.findByRole('table');
+    await within(table).findByText('Screws');
+    const search = screen.getByRole('searchbox');
+    await user.type(search, 'zzz');
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.querySelector('[data-empty-state]')).toHaveAttribute('data-empty-state', 'no-results');
+    await user.click(within(panel).getByRole('button', { name: CORE_EN['common.emptyState.clearFilters']! }));
+    expect(await within(await screen.findByRole('table')).findByText('Screws')).toBeInTheDocument();
+    expect(search).toHaveValue('');
+    await waitFor(() => expect(document.activeElement).toBe(search));
+  });
+});
+
+const CORE_EN = coreBundle('en').core as Record<string, string>;

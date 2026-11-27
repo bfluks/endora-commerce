@@ -21,7 +21,9 @@ import {
   type OpportunityEventSink,
 } from '../events/opportunity-status-events.js';
 import { effectiveOpportunityValue } from '../domain/effective-value.js';
+import { withCallerOptions, type CallerOptions } from '../commands/caller-options.js';
 import { loadOpportunity } from './opportunity-access.js';
+import { recordValueChange } from './opportunity-audit-state.js';
 import type { OpportunityTransitionGuardRegistry } from './opportunity-transition-guard-registry.js';
 import type { OrderStatusPropagationService } from './order-status-propagation-service.js';
 import type { WorkflowReadService } from './workflow-read-service.js';
@@ -48,6 +50,8 @@ export interface OpportunityTransitionRequest {
   causeOrderId?: string | undefined;
   /** Defaults to the ambient actor: the acting administrator, or the system. */
   actor?: OpportunityStatusActor | undefined;
+  /** `opportunityCommandPort`'s `source` and `extensions` for the Command; absent on the route. */
+  caller?: CallerOptions | undefined;
 }
 
 export interface AppliedOpportunityTransition {
@@ -67,7 +71,7 @@ export interface AppliedOpportunityTransition {
  */
 const MAX_REEVALUATIONS = 1;
 
-function ambientActor(): OpportunityStatusActor {
+export function ambientActor(): OpportunityStatusActor {
   const actor = getTenantContext()?.actor;
   return actor?.kind === 'admin' && actor.id ? { kind: 'admin', adminUserId: actor.id } : { kind: 'system' };
 }
@@ -194,7 +198,7 @@ export class OpportunityTransitionService {
       emitOpportunityStatusBefore(this.deps.events, event);
 
       // --- 4. the write --------------------------------------------------------
-      const applied = await this.deps.commandBus.run({
+      const applied = await this.deps.commandBus.run(withCallerOptions({
         action: 'crm.opportunity.transition',
         objectType: 'crm_opportunity',
         objectId: opportunity.id,
@@ -256,6 +260,7 @@ export class OpportunityTransitionService {
                 statusHistoryId: history.id,
               }).id,
           );
+          const reasonKeys = reason ? recordValueChange(em, locked.id, { before: null, after: { reason } }) : {};
           return {
             result: {
               number: locked.number,
@@ -266,15 +271,17 @@ export class OpportunityTransitionService {
             before: { status: from },
             // The Order that caused the move is named in the audit entry too:
             // the Opportunity's change history is read from the audit trail.
+            // The reason is free text, so it goes to the Opportunity's own
+            // store and the entry names it (#470).
             after: {
               status: to,
               cause,
               ...(request.causeOrderId ? { causeOrderId: request.causeOrderId } : {}),
-              ...(reason ? { reason } : {}),
+              ...reasonKeys,
             },
           };
         },
-      });
+      }, request.caller ?? {}));
 
       if (applied === null) {
         if (evaluation < MAX_REEVALUATIONS) continue;

@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
@@ -8,6 +7,7 @@ import {
   RFQ_DRAFT_STORAGE_KEY,
   rfqDraftCount,
 } from '../../lib/rfqDraft';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Header Quote-Request icon + draft-count badge. Mirrors `CartCounterBadge`,
@@ -44,14 +44,14 @@ export function RfqDraftBadge(props: {
       : props.ariaLabel;
 
   return (
-    <Link href="/quote-request" className="icon-btn" aria-label={ariaLabel}>
+    <LocalizedLink href="/quote-request" className="icon-btn" aria-label={ariaLabel}>
       <RfqIcon />
       {count > 0 ? (
         <span className="icon-btn__count" aria-hidden="true">
           {count > 99 ? '99+' : count}
         </span>
       ) : null}
-    </Link>
+    </LocalizedLink>
   );
 }
 

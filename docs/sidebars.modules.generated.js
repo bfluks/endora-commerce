@@ -26,7 +26,7 @@ const modules = [
   { type: 'doc', id: 'modules/module-map.generated', label: 'Module map', key: 'module-map' },
   {
     type: 'category',
-    label: 'addresses', key: 'addresses',
+    label: 'Addresses', key: 'addresses',
     link: { type: 'doc', id: 'modules/addresses' },
     items: [
       'module-reference/addresses',
@@ -34,7 +34,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'Admin Command Palette Actions', key: 'admin_actions',
+    label: 'Admin command palette actions', key: 'admin_actions',
     link: { type: 'doc', id: 'modules/admin-actions' },
     items: [
       'module-reference/admin-actions',
@@ -42,16 +42,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'Admin UI Languages', key: '_i18n',
-    link: { type: 'doc', id: 'modules/i18n' },
-    items: [
-      'module-reference/i18n',
-    ],
-  },
-  { type: 'doc', id: 'module-reference/admin-notifications', label: 'admin_notifications', key: 'admin_notifications' },
-  {
-    type: 'category',
-    label: 'admin_roles', key: 'admin_roles',
+    label: 'Admin roles', key: 'admin_roles',
     link: { type: 'doc', id: 'modules/admin_roles' },
     items: [
       'module-reference/admin-roles',
@@ -59,23 +50,24 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'admin_search', key: 'admin_search',
-    link: { type: 'doc', id: 'modules/admin-search' },
+    label: 'Admin UI languages', key: '_i18n',
+    link: { type: 'doc', id: 'modules/i18n' },
     items: [
-      'module-reference/admin-search',
+      'module-reference/i18n',
     ],
   },
   {
     type: 'category',
-    label: 'admin_users', key: 'admin_users',
+    label: 'Admin users', key: 'admin_users',
     link: { type: 'doc', id: 'modules/admin_users' },
     items: [
       'module-reference/admin-users',
     ],
   },
+  { type: 'doc', id: 'module-reference/admin-notifications', label: 'admin_notifications', key: 'admin_notifications' },
   {
     type: 'category',
-    label: 'analytics', key: 'analytics',
+    label: 'Analytics', key: 'analytics',
     link: { type: 'doc', id: 'modules/analytics' },
     items: [
       'module-reference/analytics',
@@ -83,7 +75,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'api_keys', key: 'api_keys',
+    label: 'API keys', key: 'api_keys',
     link: { type: 'doc', id: 'modules/api_keys' },
     items: [
       'module-reference/api-keys',
@@ -91,7 +83,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'Assets Library', key: 'assets_library',
+    label: 'Assets library', key: 'assets_library',
     link: { type: 'doc', id: 'modules/assets-library/index' },
     items: [
       'module-reference/assets-library',
@@ -99,7 +91,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'audit_logs', key: 'audit_logs',
+    label: 'Audit log', key: 'audit_logs',
     link: { type: 'doc', id: 'modules/audit_logs' },
     items: [
       'module-reference/audit-logs',
@@ -107,7 +99,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'auth', key: 'auth',
+    label: 'Authentication', key: 'auth',
     link: { type: 'doc', id: 'modules/auth' },
     items: [
       'module-reference/auth',
@@ -123,7 +115,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'carts', key: 'carts',
+    label: 'Carts', key: 'carts',
     link: { type: 'doc', id: 'modules/carts' },
     items: [
       'module-reference/carts',
@@ -138,11 +130,14 @@ const modules = [
       'modules/catalog/attributes',
       'modules/catalog/category-content',
       'modules/catalog/composite-products',
+      'modules/catalog/editing-a-product-at-a-scope',
       'modules/catalog/packaging-units',
-      'modules/catalog/per-channel-per-language-overrides',
       'modules/catalog/attachments',
+      'modules/catalog/product-content',
       'modules/catalog/gallery-and-labels',
       'modules/catalog/product-links',
+      'modules/catalog/per-channel-per-language-overrides',
+      'modules/catalog/url-keys-and-redirects',
       'module-reference/catalog',
     ],
   },
@@ -151,13 +146,16 @@ const modules = [
     label: 'CMS', key: 'cms',
     link: { type: 'doc', id: 'modules/cms/index' },
     items: [
+      'modules/cms/brand',
       'modules/cms/extending-page-builder',
+      'modules/cms/page-navigation',
+      'modules/cms/contact-form',
       'module-reference/cms',
     ],
   },
   {
     type: 'category',
-    label: 'Compare Products', key: 'comparisons',
+    label: 'Compare products', key: 'comparisons',
     link: { type: 'doc', id: 'modules/comparisons' },
     items: [
       'module-reference/comparisons',
@@ -173,7 +171,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'credit_limits', key: 'credit_limits',
+    label: 'Credit limits', key: 'credit_limits',
     link: { type: 'doc', id: 'modules/credit_limits' },
     items: [
       'module-reference/credit-limits',
@@ -181,7 +179,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'crm', key: 'crm',
+    label: 'CRM — sales opportunities', key: 'crm',
     link: { type: 'doc', id: 'modules/crm' },
     items: [
       'module-reference/crm',
@@ -189,16 +187,23 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'currencies', key: 'currencies',
+    label: 'Currencies', key: 'currencies',
     link: { type: 'doc', id: 'modules/currencies' },
     items: [
       'module-reference/currencies',
     ],
   },
-  { type: 'doc', id: 'module-reference/custom-fields', label: 'custom_fields', key: 'custom_fields' },
   {
     type: 'category',
-    label: 'customer_accounts', key: 'customer_accounts',
+    label: 'Custom fields', key: 'custom_fields',
+    link: { type: 'doc', id: 'modules/custom_fields' },
+    items: [
+      'module-reference/custom-fields',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Customer accounts', key: 'customer_accounts',
     link: { type: 'doc', id: 'modules/customer_accounts' },
     items: [
       'module-reference/customer-accounts',
@@ -206,7 +211,15 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'customers', key: 'customers',
+    label: 'Customer notifications', key: 'customer_notifications',
+    link: { type: 'doc', id: 'modules/customer-notifications' },
+    items: [
+      'module-reference/customer-notifications',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Customers', key: 'customers',
     link: { type: 'doc', id: 'modules/customers' },
     items: [
       'module-reference/customers',
@@ -214,7 +227,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'delivery_methods', key: 'delivery_methods',
+    label: 'Delivery methods', key: 'delivery_methods',
     link: { type: 'doc', id: 'modules/delivery_methods' },
     items: [
       'module-reference/delivery-methods',
@@ -239,6 +252,30 @@ const modules = [
   { type: 'doc', id: 'module-reference/email', label: 'email', key: 'email' },
   {
     type: 'category',
+    label: 'Feedback', key: 'admin_feedback',
+    link: { type: 'doc', id: 'modules/admin-feedback' },
+    items: [
+      'module-reference/admin-feedback',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Forms', key: 'forms',
+    link: { type: 'doc', id: 'modules/forms' },
+    items: [
+      'module-reference/forms',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Global search', key: 'admin_search',
+    link: { type: 'doc', id: 'modules/admin-search' },
+    items: [
+      'module-reference/admin-search',
+    ],
+  },
+  {
+    type: 'category',
     label: 'Google Analytics', key: 'google_analytics',
     link: { type: 'doc', id: 'modules/google-analytics' },
     items: [
@@ -255,7 +292,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'import_export', key: 'import_export',
+    label: 'Import / export', key: 'import_export',
     link: { type: 'doc', id: 'modules/import_export' },
     items: [
       'module-reference/import-export',
@@ -263,7 +300,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'inventory', key: 'inventory',
+    label: 'Inventory', key: 'inventory',
     link: { type: 'doc', id: 'modules/inventory' },
     items: [
       'module-reference/inventory',
@@ -279,7 +316,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'invoices', key: 'invoices',
+    label: 'Invoices', key: 'invoices',
     link: { type: 'doc', id: 'modules/invoices' },
     items: [
       'module-reference/invoices',
@@ -287,7 +324,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'languages', key: 'languages',
+    label: 'Languages', key: 'languages',
     link: { type: 'doc', id: 'modules/languages' },
     items: [
       'module-reference/languages',
@@ -317,10 +354,9 @@ const modules = [
       'module-reference/meta-ads',
     ],
   },
-  { type: 'doc', id: 'module-reference/mfa', label: 'mfa', key: 'mfa' },
   {
     type: 'category',
-    label: 'Module Lifecycle', key: '_lifecycle',
+    label: 'Module lifecycle', key: '_lifecycle',
     link: { type: 'doc', id: 'modules/lifecycle' },
     items: [
       'module-reference/lifecycle',
@@ -328,7 +364,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'newsletter', key: 'newsletter',
+    label: 'Newsletter', key: 'newsletter',
     link: { type: 'doc', id: 'modules/newsletter' },
     items: [
       'module-reference/newsletter',
@@ -336,7 +372,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'orders', key: 'orders',
+    label: 'Orders', key: 'orders',
     link: { type: 'doc', id: 'modules/orders' },
     items: [
       'module-reference/orders',
@@ -344,7 +380,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'organizations', key: 'organizations',
+    label: 'Organizations', key: 'organizations',
     link: { type: 'doc', id: 'modules/organizations' },
     items: [
       'modules/organization-hierarchy',
@@ -353,7 +389,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'payment_methods', key: 'payment_methods',
+    label: 'Payment methods', key: 'payment_methods',
     link: { type: 'doc', id: 'modules/payment_methods' },
     items: [
       'module-reference/payment-methods',
@@ -361,24 +397,33 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'payments', key: 'payments',
+    label: 'Payments', key: 'payments',
     link: { type: 'doc', id: 'modules/payments' },
     items: [
       'module-reference/payments',
     ],
   },
-  { type: 'doc', id: 'module-reference/pim-connector', label: 'pim_connector', key: 'pim_connector' },
   {
     type: 'category',
-    label: 'price_lists', key: 'price_lists',
+    label: 'PIM connector shared layer', key: 'pim_connector',
+    link: { type: 'doc', id: 'modules/pim_connector' },
+    items: [
+      'module-reference/pim-connector',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Price books', key: 'price_lists',
     link: { type: 'doc', id: 'modules/price_lists' },
     items: [
+      'modules/price_lists/price-book-editor',
+      'modules/price_lists/developer-guide',
       'module-reference/price-lists',
     ],
   },
   {
     type: 'category',
-    label: 'Product Feeds', key: 'product_feeds',
+    label: 'Product feeds', key: 'product_feeds',
     link: { type: 'doc', id: 'modules/product_feeds' },
     items: [
       'module-reference/product-feeds',
@@ -386,7 +431,15 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'promotions', key: 'promotions',
+    label: 'Projects', key: 'projects',
+    link: { type: 'doc', id: 'modules/projects' },
+    items: [
+      'module-reference/projects',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Promotions', key: 'promotions',
     link: { type: 'doc', id: 'modules/promotions' },
     items: [
       'module-reference/promotions',
@@ -394,7 +447,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'Prompt Actions (AI assistant)', key: 'prompt_actions',
+    label: 'Prompt actions (AI assistant)', key: 'prompt_actions',
     link: { type: 'doc', id: 'modules/prompt-actions' },
     items: [
       'module-reference/prompt-actions',
@@ -402,7 +455,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'PWA (Progressive Web App)', key: 'pwa',
+    label: 'PWA (progressive web app)', key: 'pwa',
     link: { type: 'doc', id: 'modules/pwa' },
     items: [
       'module-reference/pwa',
@@ -410,7 +463,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'quick_order', key: 'quick_order',
+    label: 'Quick order', key: 'quick_order',
     link: { type: 'doc', id: 'modules/quick_order' },
     items: [
       'module-reference/quick-order',
@@ -418,7 +471,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'quote_requests', key: 'quote_requests',
+    label: 'Quote requests', key: 'quote_requests',
     link: { type: 'doc', id: 'modules/quote_requests' },
     items: [
       'module-reference/quote-requests',
@@ -426,7 +479,17 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'returns', key: 'returns',
+    label: 'Related payers', key: 'related_payers',
+    link: { type: 'doc', id: 'modules/related-payers/index' },
+    items: [
+      'modules/related-payers/operator-guide',
+      'modules/related-payers/storefront-guide',
+      'module-reference/related-payers',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Returns', key: 'returns',
     link: { type: 'doc', id: 'modules/returns' },
     items: [
       'module-reference/returns',
@@ -444,15 +507,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'search', key: 'search',
-    link: { type: 'doc', id: 'modules/search' },
-    items: [
-      'module-reference/search',
-    ],
-  },
-  {
-    type: 'category',
-    label: 'seo', key: 'seo',
+    label: 'SEO', key: 'seo',
     link: { type: 'doc', id: 'modules/seo' },
     items: [
       'module-reference/seo',
@@ -468,7 +523,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'shipments', key: 'shipments',
+    label: 'Shipments', key: 'shipments',
     link: { type: 'doc', id: 'modules/shipments' },
     items: [
       'module-reference/shipments',
@@ -476,7 +531,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'shopping_lists', key: 'shopping_lists',
+    label: 'Shopping lists', key: 'shopping_lists',
     link: { type: 'doc', id: 'modules/shopping_lists' },
     items: [
       'module-reference/shopping-lists',
@@ -484,7 +539,23 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'taxes', key: 'taxes',
+    label: 'Storefront search', key: 'search',
+    link: { type: 'doc', id: 'modules/search' },
+    items: [
+      'module-reference/search',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Tasks', key: 'tasks',
+    link: { type: 'doc', id: 'modules/tasks' },
+    items: [
+      'module-reference/tasks',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Taxes', key: 'taxes',
     link: { type: 'doc', id: 'modules/taxes' },
     items: [
       'module-reference/taxes',
@@ -492,7 +563,7 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'transactional_emails', key: 'transactional_emails',
+    label: 'Transactional emails', key: 'transactional_emails',
     link: { type: 'doc', id: 'modules/transactional-emails' },
     items: [
       'module-reference/transactional-emails',
@@ -500,7 +571,15 @@ const modules = [
   },
   {
     type: 'category',
-    label: 'webhooks', key: 'webhooks',
+    label: 'Two-step verification and federated sign-in', key: 'mfa',
+    link: { type: 'doc', id: 'modules/mfa' },
+    items: [
+      'module-reference/mfa',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Webhooks', key: 'webhooks',
     link: { type: 'doc', id: 'modules/webhooks' },
     items: [
       'module-reference/webhooks',

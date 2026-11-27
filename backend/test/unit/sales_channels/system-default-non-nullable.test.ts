@@ -50,7 +50,6 @@ describe('SalesChannelResolverService.getSystemDefault (D-48)', () => {
       code: 'anything-at-all',
       name: { 'en-US': 'Anything' },
       active: true,
-      isPublic: true,
       systemDefault: true,
       languages: ['en-US'],
       defaultLanguage: 'en-US',

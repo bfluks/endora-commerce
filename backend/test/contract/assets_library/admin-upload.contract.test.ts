@@ -13,11 +13,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 
-import { Setting } from '@endora-commerce/platform/kernel';
-
-import { SettingValue } from '@endora-commerce/platform/kernel';
-
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { overrideAssetSetting } from '../../helpers/crm-attachment-upload.js';
 
 
 /**
@@ -70,31 +66,20 @@ function buildMultipart(parts: Array<{ name: string; filename?: string; mime?: s
 describe('admin upload (T035)', () => {
   let h: BackendServerHandle;
   let baseDir: string;
+  let restoreBaseDir: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     h = await setupBackendServer();
     baseDir = await mkdtemp(join(tmpdir(), 'assets-library-upload-'));
-    // Override the local-FS base directory via a SettingValue (per-channel
-    // override) so the manifest's defaultValue stays untouched and the
-    // reconciler's breaking-change detector remains satisfied on next boot.
-    const em = h.em();
-    const setting = await em.findOneOrFail(Setting, { code: 'assets.local.base_dir' });
-    const channel = await em.findOneOrFail(SalesChannel, { code: 'default' });
-    const existing = await em.findOne(SettingValue, { setting });
-    if (existing) {
-      existing.value = baseDir;
-    } else {
-      em.create(SettingValue, {
-        setting,
-        salesChannel: channel,
-        value: baseDir,
-      });
-    }
-    await em.flush();
+    // Override the local-FS base directory as the platform-wide value, so the
+    // manifest's defaultValue stays untouched and the reconciler's
+    // breaking-change detector remains satisfied on next boot.
+    restoreBaseDir = await overrideAssetSetting(h, 'assets.local.base_dir', baseDir);
     h.assetsLibrary.adapters.invalidate();
   });
 
   afterAll(async () => {
+    await restoreBaseDir?.();
     await teardownBackendServer(h);
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -135,7 +120,7 @@ describe('admin upload (T035)', () => {
 
     // Cleanup the row so subsequent tests start from a clean state.
     const em = h.em();
-    await em.removeAndFlush(await em.findOneOrFail(Asset, { id: json.data.id }));
+    await em.remove(await em.findOneOrFail(Asset, { id: json.data.id })).flush();
   });
 
   it('returns 400 ASSET_UPLOAD_NO_FILE when no file part is included', async () => {
@@ -154,14 +139,7 @@ describe('admin upload (T035)', () => {
   });
 
   it('returns 415 ASSET_UPLOAD_TYPE_NOT_ALLOWED for a disallowed type', async () => {
-    const em = h.em();
-    const allowed = await em.findOneOrFail(Setting, { code: 'assets.allowed_file_types' });
-    const channel = await em.findOneOrFail(SalesChannel, { code: 'default' });
-    const existing = await em.findOne(SettingValue, { setting: allowed });
-    const before = existing?.value;
-    if (existing) existing.value = ['png', 'mp4'];
-    else em.create(SettingValue, { setting: allowed, salesChannel: channel, value: ['png', 'mp4'] });
-    await em.flush();
+    const restore = await overrideAssetSetting(h, 'assets.allowed_file_types', ['png', 'mp4']);
     try {
       const { body, contentType } = buildMultipart([
         { name: 'file', filename: 'notes.txt', mime: 'text/plain', value: 'hello' },
@@ -178,22 +156,12 @@ describe('admin upload (T035)', () => {
         error: { code: 'ASSET_UPLOAD_TYPE_NOT_ALLOWED' },
       });
     } finally {
-      const row = await em.findOne(SettingValue, { setting: allowed });
-      if (row) {
-        row.value = before ?? ['*'];
-        await em.flush();
-      }
+      await restore();
     }
   });
 
   it('returns 413 ASSET_UPLOAD_TOO_LARGE when file exceeds the cap', async () => {
-    const em = h.em();
-    const max = await em.findOneOrFail(Setting, { code: 'assets.max_file_size_mb' });
-    const channel = await em.findOneOrFail(SalesChannel, { code: 'default' });
-    const existing = await em.findOne(SettingValue, { setting: max });
-    if (existing) existing.value = 1;
-    else em.create(SettingValue, { setting: max, salesChannel: channel, value: 1 });
-    await em.flush();
+    const restore = await overrideAssetSetting(h, 'assets.max_file_size_mb', 1);
     try {
       // Create a 2 MB buffer; declaredSize from multipart is unknown to the
       // pipeline (declaredSize=0), but the @fastify/multipart limits are not
@@ -218,14 +186,10 @@ describe('admin upload (T035)', () => {
       if (r.statusCode === 201) {
         const json = r.json() as { data: { id: string } };
         const a = await h.em().findOneOrFail(Asset, { id: json.data.id });
-        await h.em().removeAndFlush(a);
+        await h.em().remove(a).flush();
       }
     } finally {
-      const row = await em.findOne(SettingValue, { setting: max });
-      if (row) {
-        row.value = 0;
-        await em.flush();
-      }
+      await restore();
     }
   });
 
@@ -248,7 +212,7 @@ describe('admin upload (T035)', () => {
     const s = await stat(join(baseDir, aa, bb, `${id}.png`));
     expect(s.isFile()).toBe(true);
     // Cleanup.
-    await h.em().removeAndFlush(await h.em().findOneOrFail(Asset, { id }));
+    await h.em().remove(await h.em().findOneOrFail(Asset, { id })).flush();
   });
 
   // Mark mkdir as used to avoid the unused-import lint.

@@ -86,3 +86,20 @@ export function renderRobotsSystemRules(): string {
     '',
   ].join('\n');
 }
+
+/**
+ * The whole `robots.txt` of a store closed to anonymous visitors
+ * (`specs/154-sales-channel-access/`).
+ *
+ * Every page of such a store answers an anonymous visitor — a crawler is one —
+ * with the sign-in page, so there is nothing to fetch and nothing to list: one
+ * group closing everything to every crawler, and no `Sitemap:` line, because
+ * the sitemap of a closed store is empty. It replaces the rules above rather
+ * than adding to them, and nothing an operator writes is joined to it: a group
+ * written for one crawler would replace `Disallow: /` for that crawler.
+ *
+ * Spelled as {@link renderRobotsSystemRules} spells its group.
+ */
+export function renderClosedStoreRobotsTxt(): string {
+  return [`User-Agent: ${ROBOTS_SYSTEM_RULES.userAgent}`, 'Disallow: /', ''].join('\n');
+}

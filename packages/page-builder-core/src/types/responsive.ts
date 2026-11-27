@@ -51,18 +51,33 @@ export function settingsScopeToTier(scope: SettingsScope): BreakpointTier {
   return 'mobile';
 }
 
+const RESPONSIVE_KEYS: ReadonlySet<string> = new Set(['base', 'tablet', 'desktop']);
+
+/**
+ * Whether `value` is a per-breakpoint value. One with `base` always is (as
+ * written by the editor); one without `base` (an API write, an import) is when
+ * it holds `tablet` and/or `desktop` and no other key, so a plain object value
+ * — spacing parts, a colour, hide-on flags — is never taken for one
+ * (`specs/163-page-builder-marketing-pages/` T170). Without `base`, a value
+ * reads as "no value below the first breakpoint that has one": see
+ * {@link normalizeResponsive}.
+ */
 export function isResponsiveProp<T>(value: unknown): value is ResponsiveProp<T> {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    'base' in (value as Record<string, unknown>)
-  );
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  if ('base' in (value as Record<string, unknown>)) return true;
+  const keys = Object.keys(value as Record<string, unknown>);
+  return keys.length > 0 && keys.every((key) => RESPONSIVE_KEYS.has(key));
 }
 
-/** Coerce a plain or responsive value into `ResponsiveProp<T>`. */
+/**
+ * Coerce a plain or responsive value into `ResponsiveProp<T>`. A responsive
+ * value stored without `base` takes `fallback` as its base — what an unset
+ * value gives — so the breakpoints below the first one that has a value render
+ * as unset and the ones from it up inherit as usual (T170).
+ */
 export function normalizeResponsive<T>(value: T | ResponsiveProp<T> | undefined, fallback: T): ResponsiveProp<T> {
   if (value === undefined) return { base: fallback };
-  if (isResponsiveProp<T>(value)) return value;
+  if (isResponsiveProp<T>(value)) return value.base === undefined ? { ...value, base: fallback } : value;
   return { base: value };
 }
 

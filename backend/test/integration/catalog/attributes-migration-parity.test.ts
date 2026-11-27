@@ -193,7 +193,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
       await executedMigrations(),
       `${TARGET_MIGRATION} (stamp ${TARGET_STAMP}) must be applied before this file reverts it`,
     ).toContain(TARGET_MIGRATION);
-    await db.orm.getMigrator().down({ migrations: [TARGET_MIGRATION] });
+    await db.orm.migrator.down({ migrations: [TARGET_MIGRATION] });
   }
 
   async function seedLegacyFixtures(): Promise<void> {
@@ -211,9 +211,9 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
            ("id", "key", "label", "label_default", "value_type", "is_required",
             "is_searchable", "is_filterable", "is_variant_axis", "display_as_slider",
             "is_comparable", "quick_searchable", "is_promo_rule", "filter_position",
-            "is_visible_on_product_page", "channel_scoped", "language_scoped",
+            "is_visible_on_product_page", "scopable",
             "mass_editable", "created_at", "updated_at")
-         values (?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         values (?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           a.id,
           a.key,
@@ -230,8 +230,9 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
           flags['is_promo_rule'] ?? false,
           flags['filter_position'] ?? 0,
           flags['is_visible_on_product_page'] ?? false,
-          flags['channel_scoped'] ?? false,
-          flags['language_scoped'] ?? false,
+          // Feature 174 (R15): the table this file reverts onto already carries the one flag that
+          // replaced 163's two; a legacy attribute with either flag is scopable.
+          (flags['channel_scoped'] ?? false) || (flags['language_scoped'] ?? false),
           flags['mass_editable'] ?? false,
           a.createdAt,
           a.createdAt,
@@ -271,7 +272,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
   it('re-applies migration 102 over legacy fixtures with full parity (SC-001)', async () => {
     await revert102();
     await seedLegacyFixtures();
-    await db.orm.getMigrator().up();
+    await db.orm.migrator.up();
 
     // --- Definitions: one per legacy attribute, content preserved.
     const defs = await conn().execute<
@@ -363,8 +364,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
         is_promo_rule: boolean;
         filter_position: number;
         is_visible_on_product_page: boolean;
-        channel_scoped: boolean;
-        language_scoped: boolean;
+        scopable: boolean;
         mass_editable: boolean;
       }>
     >(`select * from "product_attributes"`);
@@ -390,8 +390,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
       expect(ext!.is_promo_rule).toBe(flags['is_promo_rule'] ?? false);
       expect(ext!.filter_position).toBe(flags['filter_position'] ?? 0);
       expect(ext!.is_visible_on_product_page).toBe(flags['is_visible_on_product_page'] ?? false);
-      expect(ext!.channel_scoped).toBe(flags['channel_scoped'] ?? false);
-      expect(ext!.language_scoped).toBe(flags['language_scoped'] ?? false);
+      expect(ext!.scopable).toBe((flags['channel_scoped'] ?? false) || (flags['language_scoped'] ?? false));
       expect(ext!.mass_editable).toBe(flags['mass_editable'] ?? false);
     }
 
@@ -485,7 +484,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
       [randomUUID()],
     );
 
-    await expect(db.orm.getMigrator().up()).rejects.toThrow(/reserved|collid/i);
+    await expect(db.orm.migrator.up()).rejects.toThrow(/reserved|collid/i);
 
     // Atomic: still legacy shape, nothing partially migrated.
     const cols = await conn().execute<Array<{ column_name: string }>>(
@@ -502,7 +501,7 @@ describe('migration 102 — attributes on custom fields (SC-001 parity)', () => 
     // 102 is the only pending migration, `revert102` having reverted it alone,
     // so this `up()` runs exactly it.
     await conn().execute(`delete from "product_attributes" where "key" = 'name'`);
-    await db.orm.getMigrator().up();
+    await db.orm.migrator.up();
     const executed = await conn().execute<Array<{ name: string }>>(
       `select "name" from "mikro_orm_migrations"`,
     );

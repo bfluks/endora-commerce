@@ -30,38 +30,16 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { estateIds, runCheck } from '../check/index.js';
-import { NotAModulePackageError } from '../check/layout.js';
-import { runNewModule } from '../new-module/index.js';
-import { ScaffoldHostError, ScaffoldInputError } from '../new-module/spec.js';
-import { DeclarationLoadError } from '../inputs/declaration.js';
-import { inputForFlag } from '../inputs/resolve.js';
-import {
-  MissingInputsError,
-  runNewStorefront,
-  storefrontInputFlags,
-} from '../new-storefront/index.js';
-import { StorefrontHostError, StorefrontInputError } from '../new-storefront/reference.js';
-import {
-  InstanceHostError,
-  InstanceInputError,
-  runNewInstance,
-} from '../new-instance/index.js';
-import { InstallHostError, InstallInputError, runInstall } from '../install/index.js';
-import { DevHostError, DevInputError, runDev } from '../dev/index.js';
-import { runUpgrade, UpgradeHostError, UpgradeInputError } from '../upgrade/index.js';
-import {
-  generateFindingsRefusal,
-  generateReport,
-  GenerateHostError,
-  GenerateInputError,
-  runGenerate,
-} from '../generate/index.js';
+// Every verb's module is loaded by the verb that runs it, never up here. `check`'s
+// rules import the TypeScript compiler, and a static import of any verb reached
+// it: about two seconds of CPU before `endora dev` spawned its first layer, or
+// `--help` printed a line, for a compiler neither calls (issue #250).
 
-const USAGE = `endora — scaffolding and conformance tooling for Endora Commerce modules.
+const USAGE_TEMPLATE = `endora — scaffolding and conformance tooling for Endora Commerce modules.
 
 Usage:
   endora new module <id> --name <text> --description <text> [options]
+  endora new migration <moduleId> --name <slug> [--dry-run]
   endora new instance <dir> [--module <id>...] [--without <member>...] [--deployment <name>]
                             [--registry <url>] [--topology single-host|three-host] [--demo]
                             [--dry-run]
@@ -77,7 +55,9 @@ Usage:
                          [--topology single-host|three-host] [--non-interactive] [--dry-run]
   endora generate [--dry-run]
   endora dev [--storefront-dir <path>] [--no-storefront]
+  endora build overlays [--watch]
   endora upgrade [<version>] [--storefront-dir <path>] [--no-storefront] [--dry-run]
+  endora upgrade --finish [--dry-run]
   endora --help
 
 \`endora new module\` writes a module package that is composed by the platform,
@@ -87,10 +67,10 @@ rendered by the platform's own manifest generator, so the two cannot disagree.
 
 Inside an instance — the tree \`endora new instance\` wrote — it writes an
 overlay module instead: apps/<deployment>/modules/<id>/, which the instance
-composes with no build. It takes --name, --description, --depends, --permission,
---activation-setting, --non-deactivatable and --dry-run there, and refuses the
-flags that ask for what an overlay module cannot be (a table, an admin screen, a
-published port), naming why.
+composes from its deployment tree. It takes --name, --description, --depends,
+--permission, --entities, --tenant-scope, --activation-setting,
+--non-deactivatable and --dry-run there, and refuses the flags that ask for what
+an overlay module cannot be (an admin screen, a published port), naming why.
 
 Options for \`new module\`:
   --name <text>                 the module's human-readable name (required)
@@ -101,10 +81,7 @@ Options for \`new module\`:
   --permission <code>=<label>   a permission code and its operator-facing label (repeatable)
   --action <id>=<route>         a command-palette action and the admin route it opens (repeatable)
   --icon <KnownIconName>        the icon for the emitted actions (default: Boxes)
-  --admin <navSection>          emit the ./admin layer: a gated screen and the sidebar entry
-                                that opens it, in the named section (main, sales, catalog,
-                                inventory, pricing, customers, channels, content, messaging,
-                                newsletter, analyticsAds, system). Needs a --permission
+\${adminOption}
   --entities                    own a table: an entity, a migration and the ./migrations subpath
   --tenant-scope <scope>        org-scoped | customer-scoped | global (default: org-scoped)
   --ports                       publish a type-only ./ports subpath other modules resolve
@@ -114,6 +91,12 @@ Options for \`new module\`:
                                 (default: <id>.enabled)
   --non-deactivatable <reason>  declare that the platform cannot run without this module
   --dry-run                     report what would be written; write nothing
+
+\`endora new migration\` writes the next migration of an overlay module of the
+deployment this instance runs as: apps/<deployment>/modules/<id>/migrations/
+<YYYYMMDDTHHmmss>_<module>_<slug>.ts, with empty up() and down(). The platform reads
+that directory file by file, so the file is the whole of registering it. An
+installed package's migrations are its author's and are refused here.
 
 \`endora new instance\` writes the repository that composes this platform for one
 deployment: one workspace, one module list, and a copy of nothing. It is not a
@@ -274,11 +257,19 @@ Options for \`dev\`:
                                 beside the instance, when it exists)
   --no-storefront               start the API and the admin preview only
 
+\`endora build overlays\` compiles the instance's overlay modules (\`apps/<deployment>/
+modules/*\`) with its own \`tsc -p backend/tsconfig.apps.json\` into \`backend/dist/apps\`,
+after refusing a nested module or one that is a package in disguise, and mirrors their
+runtime assets (\`i18n/*.json\`) beside the code. The instance's \`build\` script runs it.
+
+Options for \`build overlays\`:
+  --watch                       recompile and re-mirror on every change (\`dev\`)
+
 \`endora upgrade\` is what an instance's \`pnpm run upgrade\` runs: it moves every package
 of the release this CLI belongs to — the platform, every module, the admin shell,
 the contracts — to one version, in every member of the instance and in the
 storefront beside it, then installs and runs the instance's own \`setup\` (generate,
-build, migrate, install any module the release adds). An exact pin stays exact and
+build, type-check, migrate, install any module the release adds). An exact pin stays exact and
 a caret stays a caret; a package that is not part of the release — a module versioned on its own, a
 third-party library — is left as written and named. Every precondition is checked
 before anything is written, every command is printed before it runs, and a failure
@@ -294,6 +285,11 @@ Options for \`upgrade\`:
   --dry-run                     report every range it would move, every lockfile
                                 entry it would drop and every command; write nothing
                                 and run nothing
+  --finish                      the second half, which \`upgrade\` hands to the CLI its
+                                install put in place: bring the wiring files (entry
+                                points, \`backend/tsconfig.apps.json\`, the build scripts)
+                                to this release's rendering — a file you edited is
+                                reported, not overwritten — then run \`setup\`
 
 \`endora generate\` renders the two files an instance's admin project is built
 from and commits neither: the contribution registry of the module packages this
@@ -302,7 +298,12 @@ classes survive Tailwind's scan. Both are facts about the install rather than
 about the tree, so they are regenerated after every \`pnpm install\` and are
 git-ignored. Run it anywhere inside the instance; it finds the workspace root
 upwards. It reports every package the discovery excluded, because a linked
-package is invisible to this instance's runtime discovery too.
+package is invisible to this instance's runtime discovery too. Before rendering,
+it declares in the root package.json — at the platform's range — and installs
+every package of this CLI's release carrying a module an installed module needs
+and the instance does not have yet, unless every deployment omits it: that is
+how a module a release newly requires reaches an instance \`pnpm run upgrade\`
+moved. With --dry-run it names them, and writes and runs nothing.
 
 \`endora new storefront\` copies the reference storefront into a directory you
 then own outright — out of this repository when it is run inside a checkout of
@@ -369,6 +370,38 @@ rule could not be read, or has no host in this build. \`findings=<n>\` is on the
 arithmetic line whatever the code is.
 `;
 
+/**
+ * The usage text, with the sidebar sections `--admin` accepts read from
+ * `AdminNavSectionNameSchema` — the set `new module` validates against — so the
+ * help cannot drift from the refusal again (issue #444: a hand-written list
+ * omitted `crm` and `work`). Loaded on demand, like every verb, so a run that
+ * prints no help never imports the contracts.
+ */
+/** Where an option's description starts in the usage text, and how wide it runs. */
+const USAGE_DESCRIPTION_COLUMN = 32;
+const USAGE_DESCRIPTION_WIDTH = 60;
+
+async function usage(): Promise<string> {
+  const { AdminNavSectionNameSchema } = await import('@endora-commerce/contracts');
+  const text =
+    'emit the ./admin layer: a gated screen and the sidebar entry that opens it, in the ' +
+    `named section (${AdminNavSectionNameSchema.options.join(', ')}). Needs a --permission`;
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    if (line !== '' && line.length + 1 + word.length > USAGE_DESCRIPTION_WIDTH) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line === '' ? word : `${line} ${word}`;
+    }
+  }
+  lines.push(line);
+  const option = '  --admin <navSection>'.padEnd(USAGE_DESCRIPTION_COLUMN);
+  const indent = ' '.repeat(USAGE_DESCRIPTION_COLUMN);
+  return USAGE_TEMPLATE.replace('${adminOption}', option + lines.join(`\n${indent}`));
+}
+
 interface Parsed {
   readonly values: Record<string, string | boolean | string[] | undefined>;
   readonly positionals: readonly string[];
@@ -421,6 +454,8 @@ function parse(argv: readonly string[], declaredInputFlags: readonly string[] = 
       topology: { type: 'string' },
       'non-interactive': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
+      watch: { type: 'boolean' },
+      finish: { type: 'boolean' },
       // `endora install` (feature 125). `--no-*` is a flag of its own rather
       // than a negation `parseArgs` understands: the library has no negation,
       // and a default that is `true` needs a name to be turned off by.
@@ -461,6 +496,55 @@ function asFlag(value: string | boolean | string[] | undefined): boolean {
 }
 
 /**
+ * `endora new migration <moduleId> --name <slug>` — the argv half
+ * (`specs/190-overlay-full-modules/` T101). Exit 1 for a refusal the author can
+ * act on, 2 for a tree that is not an instance.
+ */
+async function runNewMigrationCommand(
+  parsed: Parsed,
+  positionals: readonly string[],
+  cwd: string,
+): Promise<number> {
+  const { runNewMigration } = await import('../new-migration/index.js');
+  const { ScaffoldHostError, ScaffoldInputError } = await import('../new-module/spec.js');
+  if (positionals.length > 1) {
+    process.stderr.write(
+      `endora: \`new migration\` takes one module id; got ${String(positionals.length)} ` +
+        `(${positionals.join(', ')}).\n`,
+    );
+    return 1;
+  }
+  try {
+    const result = await runNewMigration({
+      id: positionals[0],
+      name: asString(parsed.values['name']),
+      dryRun: asFlag(parsed.values['dry-run']),
+      cwd,
+    });
+    process.stdout.write(
+      `endora new migration ${result.moduleId} — ${result.shownPath}` +
+        `${result.dryRun ? ' — dry run, nothing written' : ''}\n`,
+    );
+    if (result.dryRun) process.stdout.write(`\n${result.contents}`);
+    process.stdout.write('\nNext steps, inside this instance:\n');
+    result.nextSteps.forEach((step, index) => {
+      process.stdout.write(`  ${String(index + 1)}. ${step}\n`);
+    });
+    return 0;
+  } catch (error: unknown) {
+    if (error instanceof ScaffoldInputError) {
+      process.stderr.write(`endora: ${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof ScaffoldHostError) {
+      process.stderr.write(`endora: ${error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
+/**
  * `endora check` — the argv half.
  *
  * It resolves nothing and decides nothing: the package comes off the working
@@ -468,7 +552,13 @@ function asFlag(value: string | boolean | string[] | undefined): boolean {
  * code is `runCheck`'s. A flag that could change a verdict is the configuration
  * this program does not have.
  */
-function runCheckCommand(parsed: Parsed, positionals: readonly string[], cwd: string): number {
+async function runCheckCommand(
+  parsed: Parsed,
+  positionals: readonly string[],
+  cwd: string,
+): Promise<number> {
+  const { estateIds, runCheck } = await import('../check/index.js');
+  const { NotAModulePackageError } = await import('../check/layout.js');
   if (asFlag(parsed.values['list-rules'])) {
     for (const id of estateIds()) process.stdout.write(`${id}\n`);
     return 0;
@@ -531,6 +621,12 @@ async function runNewStorefrontCommand(
   declaredInputFlags: readonly string[],
   seams: MainSeams = {},
 ): Promise<number> {
+  const { inputForFlag } = await import('../inputs/resolve.js');
+  const { DeclarationLoadError } = await import('../inputs/declaration.js');
+  const { MissingInputsError, runNewStorefront } = await import('../new-storefront/index.js');
+  const { StorefrontHostError, StorefrontInputError } = await import(
+    '../new-storefront/reference.js'
+  );
   if (rest.length > 1) {
     process.stderr.write(
       `endora: \`new storefront\` takes one directory; got ${String(rest.length)} ` +
@@ -657,6 +753,14 @@ async function runGenerateCommand(
   rest: readonly string[],
   cwd: string,
 ): Promise<number> {
+  const {
+    generateFindingsRefusal,
+    generatePaletteRefusal,
+    generateReport,
+    GenerateHostError,
+    GenerateInputError,
+    runGenerate,
+  } = await import('../generate/index.js');
   if (rest.length > 0) {
     process.stderr.write(
       `endora: \`generate\` takes no argument; got ${rest.join(', ')}. It renders the ` +
@@ -665,7 +769,12 @@ async function runGenerateCommand(
     return 1;
   }
   try {
-    const result = await runGenerate({ cwd, dryRun: asFlag(parsed.values['dry-run']) });
+    const result = await runGenerate({
+      cwd,
+      dryRun: asFlag(parsed.values['dry-run']),
+      // Before a step runs, so the install's own output has a heading.
+      echo: (line) => process.stdout.write(`endora generate: ${line}\n`),
+    });
     process.stdout.write(
       `endora generate ${result.root}${result.dryRun ? ' — dry run, nothing written' : ''}\n`,
     );
@@ -674,11 +783,11 @@ async function runGenerateCommand(
       `  ${String(result.modules)} installed module package(s) in the population\n`,
     );
     // After the report, so the lines it refers to are already on the screen.
-    const refusal = generateFindingsRefusal(result);
-    if (refusal !== null) {
-      process.stderr.write(`endora: ${refusal}\n`);
-      return 1;
-    }
+    const refusals = [generateFindingsRefusal(result), generatePaletteRefusal(result)].filter(
+      (refusal): refusal is string => refusal !== null,
+    );
+    for (const refusal of refusals) process.stderr.write(`endora: ${refusal}\n`);
+    if (refusals.length > 0) return 1;
     return 0;
   } catch (error: unknown) {
     if (error instanceof GenerateInputError) {
@@ -698,6 +807,9 @@ async function runNewInstanceCommand(
   rest: readonly string[],
   cwd: string,
 ): Promise<number> {
+  const { InstanceHostError, InstanceInputError, runNewInstance } = await import(
+    '../new-instance/index.js'
+  );
   if (rest.length > 1) {
     process.stderr.write(
       `endora: \`new instance\` takes one directory; got ${String(rest.length)} ` +
@@ -785,6 +897,12 @@ async function runInstallCommand(
   cwd: string,
   seams: MainSeams = {},
 ): Promise<number> {
+  const { InstallHostError, InstallInputError, runInstall } = await import('../install/index.js');
+  const { InstanceHostError, InstanceInputError } = await import('../new-instance/index.js');
+  const { MissingInputsError } = await import('../new-storefront/index.js');
+  const { StorefrontHostError, StorefrontInputError } = await import(
+    '../new-storefront/reference.js'
+  );
   if (rest.length > 1) {
     process.stderr.write(
       `endora: \`install\` takes one directory; got ${String(rest.length)} ` +
@@ -918,6 +1036,7 @@ async function runDevCommand(
   rest: readonly string[],
   cwd: string,
 ): Promise<number> {
+  const { DevHostError, DevInputError, runDev } = await import('../dev/index.js');
   if (rest.length > 0) {
     process.stderr.write(
       `endora: \`dev\` takes no argument; got ${rest.join(', ')}. Run it from the root of ` +
@@ -970,6 +1089,30 @@ async function runUpgradeCommand(
   rest: readonly string[],
   cwd: string,
 ): Promise<number> {
+  const { runUpgrade, runUpgradeFinish, UpgradeHostError, UpgradeInputError } = await import(
+    '../upgrade/index.js'
+  );
+  // The second half of an upgrade, run by the CLI the first half installed (#1848).
+  if (asFlag(parsed.values['finish'])) {
+    if (rest.length > 0) {
+      process.stderr.write('endora: `upgrade --finish` takes no version: it finishes the one installed.\n');
+      return 1;
+    }
+    try {
+      const finished = await runUpgradeFinish({
+        cwd,
+        dryRun: asFlag(parsed.values['dry-run']),
+        echo: (line: string) => void process.stdout.write(`${line}\n`),
+      });
+      return finished.exitCode;
+    } catch (error: unknown) {
+      if (error instanceof UpgradeHostError) {
+        process.stderr.write(`endora: ${error.message}\n`);
+        return 2;
+      }
+      throw error;
+    }
+  }
   if (rest.length > 1) {
     process.stderr.write(
       `endora: \`upgrade\` takes one version at most; got ${rest.join(', ')}.\n`,
@@ -1027,6 +1170,9 @@ export async function main(
   // flag's *value* happens to read like a subcommand.
   let declaredInputFlags: readonly string[] = [];
   if (argv[0] === 'new' && argv[1] === 'storefront') {
+    const { storefrontInputFlags } = await import('../new-storefront/index.js');
+    const { StorefrontHostError } = await import('../new-storefront/reference.js');
+    const { DeclarationLoadError } = await import('../inputs/declaration.js');
     try {
       declaredInputFlags = await storefrontInputFlags(cwd, seams.packagedReferenceDir);
     } catch (error: unknown) {
@@ -1049,7 +1195,7 @@ export async function main(
 
   const [command, subject, ...rest] = parsed.positionals;
   if (asFlag(parsed.values['help']) || command === undefined) {
-    process.stdout.write(USAGE);
+    process.stdout.write(await usage());
     return command === undefined && !asFlag(parsed.values['help']) ? 1 : 0;
   }
 
@@ -1069,6 +1215,18 @@ export async function main(
     return runDevCommand(parsed, [subject, ...rest].filter((v) => v !== undefined), cwd);
   }
 
+  if (command === 'build') {
+    if (subject !== 'overlays' || rest.length > 0) {
+      process.stderr.write(
+        `endora: \`build\` builds one thing, \`overlays\`; got ` +
+          `${[subject, ...rest].filter((v) => v !== undefined).join(' ') || '<none>'}.\n`,
+      );
+      return 1;
+    }
+    const { runBuildOverlays } = await import('../build-overlays/index.js');
+    return runBuildOverlays({ cwd, watch: asFlag(parsed.values['watch']) });
+  }
+
   if (command === 'upgrade') {
     return runUpgradeCommand(parsed, [subject, ...rest].filter((v) => v !== undefined), cwd);
   }
@@ -1076,8 +1234,8 @@ export async function main(
   if (command !== 'new') {
     process.stderr.write(
       `endora: unknown command "${command}". This build provides \`new module\`, ` +
-        `\`new instance\`, \`new storefront\`, \`install\`, \`generate\`, \`dev\`, \`upgrade\` and ` +
-        `\`check\`.\n`,
+        `\`new instance\`, \`new storefront\`, \`install\`, \`generate\`, \`dev\`, ` +
+        `\`build overlays\`, \`upgrade\` and \`check\`.\n`,
     );
     return 1;
   }
@@ -1087,16 +1245,20 @@ export async function main(
   if (subject === 'instance') {
     return runNewInstanceCommand(parsed, rest, cwd);
   }
+  if (subject === 'migration') {
+    return runNewMigrationCommand(parsed, rest, cwd);
+  }
   if (subject !== 'module') {
     process.stderr.write(
       `endora: unknown subject "${subject ?? '<none>'}" for \`new\`. This build provides ` +
-        `\`new module\`, \`new instance\` and \`new storefront\`; the other generators named ` +
-        `in the ` +
-        `scaffolding contract are not delivered.\n`,
+        `\`new module\`, \`new migration\`, \`new instance\` and \`new storefront\`; the other ` +
+        `generators named in the scaffolding contract are not delivered.\n`,
     );
     return 1;
   }
 
+  const { runNewModule } = await import('../new-module/index.js');
+  const { ScaffoldHostError, ScaffoldInputError } = await import('../new-module/spec.js');
   const id = rest[0];
   if (rest.length > 1) {
     process.stderr.write(

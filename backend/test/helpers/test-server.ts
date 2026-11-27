@@ -8,12 +8,14 @@ import type { CredentialsService } from '../../../packages/modules/credentials/s
 import type { AdminNotificationService } from '../../../packages/modules/admin_notifications/src/backend/services/admin-notification-service.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { MikroORM, EntityManager } from '@mikro-orm/postgresql';
+import { FakeRegistryClients } from './fake-registry-clients.js';
 import type { Redis } from 'ioredis';
 
 import { buildServer, type ModulePlugin } from '@endora-commerce/platform/composition';
 import type { ApiInterceptorRegistry } from '@endora-commerce/platform/composition';
+import type { CommandHookRegistry } from '@endora-commerce/platform/composition';
 import { publishStateChanged, registryCache } from '@endora-commerce/platform/composition';
-import { effectiveState } from '@endora-commerce/platform/kernel';
+import { effectiveState, getResolvedChannel } from '@endora-commerce/platform/kernel';
 import { type TenantContext } from '@endora-commerce/platform/tenancy';
 // Feature 072 — the generated module list, composed in one pass exactly as
 // `src/composition.ts` composes it (D-45). Issue #52 — and contributed into
@@ -119,6 +121,9 @@ import type {
 import type { EmailCradle } from '../../../packages/modules/email/src/backend/index.js';
 import type { AdminUsersCradle } from '@endora-commerce/mod-admin-users/backend';
 import type { ShoppingListService } from '../../../packages/modules/shopping_lists/src/backend/services/shopping-list-service.js';
+// Feature 155 — the shopping-list bridge's skipped → droppedLines mapping, the
+// same function `composition.ts` calls.
+import { toCartDroppedLines } from '@endora-commerce/contracts';
 // `dist`, not `src`, and it is the type that matches the object (feature 080,
 // T040b, batch four). The container holds the **composed** cradle, which the
 // platform built out of `@endora-commerce/mod-invoices/backend` — i.e. out of
@@ -187,9 +192,10 @@ import type { CatalogAttributeReadService } from '../../../packages/modules/cata
 import type { PricingServiceContract } from '../../../packages/modules/price_lists/src/backend/services/pricing-service.interface.js';
 import { DefaultChannelReconciler } from '@endora-commerce/platform/composition';
 import { ManifestReconciler } from '@endora-commerce/platform/composition';
+import { backfillPlaintextSecrets } from '@endora-commerce/platform/composition';
 import type { CartService } from '../../../packages/modules/carts/src/backend/services/cart-service.js';
 import type { Mailer } from '../../../packages/modules/email/src/backend/services/mailer.js';
-import { seedUs1Catalog } from './seed-catalog.js';
+import { seedUs1Catalog, seedUs1CatalogSettings } from './seed-catalog.js';
 import { seedTestOrganizations, TEST_ORGANIZATION_TAX_ID } from './seed-organizations.js';
 import { seedUs2Commerce } from './seed-commerce.js';
 import { seedTestAdmins } from './seed-admins.js';
@@ -367,6 +373,25 @@ export interface BackendServerOptions {
    * nobody wrote one.
    */
   deployment?: string;
+  /**
+   * Issue #87 — resolve the anonymous actor the way the composed application
+   * resolves a request with no customer: `customerContextResolver`,
+   * `customerAccountIdResolver` and the RFQ resolver built on the first refuse
+   * with the composed resolver's 401 instead of answering the shared test
+   * customer.
+   *
+   * **Off by default, and the default is the harness's documented divergence**
+   * (see `customerResolver` at the bottom of this file): a great many route
+   * tests inject no cookie and rely on being the test customer, and turning it
+   * on everywhere would move them all at once. A test whose subject is what an
+   * anonymous request gets — a guest branch reached through the resolver
+   * throwing, as the storefront notify-when-available route's is — sets it.
+   *
+   * Only the anonymous actor changes. An admin or API-key actor reaching a
+   * customer resolver keeps the substitution, which is a separate divergence
+   * and not this option's.
+   */
+  anonymousAsComposed?: boolean;
 }
 
 export interface BackendServerHandle {
@@ -376,6 +401,12 @@ export interface BackendServerHandle {
   eventBus: EventBus;
   /** Feature 060 — the sealed API interceptor registry (execution plan via `.list()`). */
   apiInterceptors: ApiInterceptorRegistry;
+  /**
+   * `specs/176-command-hooks-outbox/` P3 — the sealed command-hook registry, so
+   * a test can drive the outbox drain over this composition's `afterCommit`
+   * handlers: the harness runs no worker.
+   */
+  commandHookRegistry: CommandHookRegistry;
   redis: Redis;
   /** Feature 072 (T073) — the module-state pub/sub client, disconnected at teardown. */
   redisSubscriber: Redis;
@@ -701,8 +732,6 @@ const SEEDED_TABLES = [
   'mfa_enrolments',
   'mfa_social_identities',
   'mfa_organization_policies',
-  'price_list_assignments',
-  'price_list_items',
   'price_lists',
   'customer_groups',
   'taxes',
@@ -944,6 +973,27 @@ async function loadTestSupport(
  * file that edits a bundle from leaking into the next one.
  */
 let cachedManifestRegistry: LoadedManifestRegistry | undefined;
+/**
+ * A deployment's registry, once per deployment and process
+ * (`specs/176-command-hooks-outbox/` T029). Bare core keeps the committed index
+ * above; a test composing `deployment: '<name>'` hands `_i18n` the deployment's
+ * resolved set — core plus its overlay modules — which is what `composeApp`
+ * hands it in production. Without it an overlay module's own bundle was never
+ * reconciled, so its declared error codes reached the envelope untranslated in
+ * every test, and only in tests.
+ */
+const cachedDeploymentRegistries = new Map<string, LoadedManifestRegistry>();
+function deploymentManifestRegistry(
+  deployment: string,
+  resolved: Parameters<typeof buildStaticRegistry>[0],
+): LoadedManifestRegistry {
+  let registry = cachedDeploymentRegistries.get(deployment);
+  if (registry === undefined) {
+    registry = buildStaticRegistry(resolved);
+    cachedDeploymentRegistries.set(deployment, registry);
+  }
+  return registry;
+}
 function harnessManifestRegistry(): LoadedManifestRegistry {
   // Handed over unmapped (feature 080, T036a): this map dropped both install
   // hooks and, once it existed, would have dropped the lifecycle participant —
@@ -1013,6 +1063,10 @@ async function dropStaleCaches(redis: Redis): Promise<void> {
   for (const pattern of [
     'session:*',
     'sales-channels:*',
+    // Feature 154 — an Organization's permitted channels, keyed by an
+    // Organization id the seeds reuse in every file while the channel ids
+    // behind it are new.
+    'sales-channel-access:*',
     'settings:v1:*',
     'admin-auth-throttle:*',
   ]) {
@@ -1178,7 +1232,10 @@ export async function setupBackendServer(
     resolveByEmail(
       email: string,
     ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-    autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null; preferredLanguage?: string | null },
+    ): Promise<{ id: string; organizationId: string | null } | null>;
   } =>
     (
       container.cradle as never as {
@@ -1186,21 +1243,14 @@ export async function setupBackendServer(
           resolveByEmail(
             email: string,
           ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-          autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+          autoCreate(
+            email: string,
+            context: { salesChannelId: string | null; preferredLanguage?: string | null },
+          ): Promise<{ id: string; organizationId: string | null } | null>;
         };
       }
     ).customerSocialLoginPort;
 
-  const salesRepScope = (): {
-    listAssignedOrganizationIds(adminUserId: string): Promise<string[]>;
-  } =>
-    (
-      container.cradle as never as {
-        organizationSalesRepScopePort: {
-          listAssignedOrganizationIds(adminUserId: string): Promise<string[]>;
-        };
-      }
-    ).organizationSalesRepScopePort;
 
   /**
    * Feature 026 US6 — admin orders/RFQ scope for the test harness. Mirrors
@@ -1209,20 +1259,18 @@ export async function setupBackendServer(
    */
   const resolveTestAdminOrdersScope = async (
     request: FastifyRequest,
-  ): Promise<{ allowAll: true } | { allowAll: false; allowedOrganizationIds: string[] }> => {
+  ): Promise<{ allowAll: boolean }> => {
     const actor = request.testActor;
     if (!actor || actor.kind !== 'admin') return { allowAll: true };
-    const knex = em().getKnex();
-    const roleRow = (await knex.raw(
+    const roleRow = await em().execute<Array<{ code: string | null }>>(
       `select ar."code" as code from "admin_users" au left join "admin_roles" ar on ar."id" = au."admin_role_id" where au."id" = ?`,
       [actor.adminUserId],
-    )) as { rows: Array<{ code: string | null }> };
-    const roleCode = roleRow.rows[0]?.code ?? null;
+    );
+    const roleCode = roleRow[0]?.code ?? null;
     if (roleCode !== 'sales_representative') return { allowAll: true };
-    return {
-      allowAll: false,
-      allowedOrganizationIds: await salesRepScope().listAssignedOrganizationIds(actor.adminUserId),
-    };
+    // Issue #305 — what the representative reaches is the ambient tenant
+    // context's (one reach rule), not a list this resolver reads.
+    return { allowAll: false };
   };
 
   const promptActionsCradle = (): PromptActionsCradle =>
@@ -1387,6 +1435,12 @@ export async function setupBackendServer(
     // drains decorations once; this asserts the resulting order was the intended
     // one and refuses when the two disagree.
     decorationOrder: divergenceDeclaration.decorationOrder,
+    // `specs/176-command-hooks-outbox/` FR-014 — and the command-hook tie-break
+    // from the same declaration, which the composer seals the hook registry against.
+    commandHookOrder: divergenceDeclaration.commandHookOrder,
+    // `specs/189-command-middleware/` FR-031 — and the `admit` middleware
+    // tie-break, from the same declaration, as `composition.ts` passes it.
+    commandMiddlewareOrder: divergenceDeclaration.commandMiddlewareOrder,
     // Feature 072 (T073) — the real subscriber client only where a test asks for
     // it. One armed subscription per composition, across ~225 files, is how this
     // harness accumulated ~1 GB of retention (task #32); the kit registers an
@@ -1778,6 +1832,11 @@ export async function setupBackendServer(
         // channel-scoped stock read at all. Registering it only in production is
         // what let the missing registration survive — see the note there.
         salesChannelResolutionPort: salesChannels.resolver,
+        // Feature 154 — mirrors `compose-app.ts`: the access rule for the
+        // sign-in paths and the access read, and the permitted-channel cache a
+        // channel delete drops.
+        salesChannelAccessPort: salesChannels.accessPolicy,
+        salesChannelAccessCache: salesChannels.accessCache,
       });
 
       // Feature 014 — CMS module. Reconcile seeded Hooks once; the storefront
@@ -1817,12 +1876,11 @@ export async function setupBackendServer(
       // Registered after `composeModules`, where the module declares its defaults.
       composedModules.contribute({
         organizationStatusResolver: async (orgId: string) => {
-          const row = (await em()
-            .getKnex()
-            .raw(`select "status" from "organizations" where "id" = ? and "deleted_at" is null`, [
-              orgId,
-            ])) as { rows: Array<{ status: string }> };
-          return row.rows[0]?.status ?? null;
+          const row = await em().execute<Array<{ status: string }>>(
+            `select "status" from "organizations" where "id" = ? and "deleted_at" is null`,
+            [orgId],
+          );
+          return row[0]?.status ?? null;
         },
         promotionRuleTargets: {
           salesChannels: async () => {
@@ -1838,27 +1896,16 @@ export async function setupBackendServer(
             return groups.map((g) => ({ id: g.id, code: g.code, name: g.name }));
           },
           organizations: async () => {
-            const res = (await em()
-              .getKnex()
-              .raw(
-                `select "id", "name", "tax_id" from "organizations" where "deleted_at" is null order by "name" asc limit 200`,
-              )) as { rows: Array<{ id: string; name: string; tax_id: string | null }> };
-            return res.rows.map((r) => ({ id: r.id, name: r.name, taxId: r.tax_id ?? null }));
+            const res = await em().execute<Array<{ id: string; name: string; tax_id: string | null }>>(
+              `select "id", "name", "tax_id" from "organizations" where "deleted_at" is null order by "name" asc limit 200`,
+            );
+            return res.map((r) => ({ id: r.id, name: r.name, taxId: r.tax_id ?? null }));
           },
           categories: async () => {
-            const res = (await em()
-              .getKnex()
-              .raw(
-                `select "id", "slug", "name", "parent_category_id" from "categories" where "deleted_at" is null order by "sort_order" asc`,
-              )) as {
-              rows: Array<{
-                id: string;
-                slug: string;
-                name: unknown;
-                parent_category_id: string | null;
-              }>;
-            };
-            return res.rows.map((r) => ({
+            const res = await em().execute<Array<{ id: string; slug: string; name: unknown; parent_category_id: string | null }>>(
+              `select "id", "slug", "name", "parent_category_id" from "categories" where "deleted_at" is null order by "sort_order" asc`,
+            );
+            return res.map((r) => ({
               id: r.id,
               slug: r.slug,
               name: testAnyLabel(r.name),
@@ -1866,20 +1913,16 @@ export async function setupBackendServer(
             }));
           },
           paymentMethods: async () => {
-            const res = (await em()
-              .getKnex()
-              .raw(
-                `select "id", "code", "name" from "payment_methods" where "status" = 'active' order by "code" asc`,
-              )) as { rows: Array<{ id: string; code: string; name: unknown }> };
-            return res.rows.map((r) => ({ id: r.id, code: r.code, name: testAnyLabel(r.name) }));
+            const res = await em().execute<Array<{ id: string; code: string; name: unknown }>>(
+              `select "id", "code", "name" from "payment_methods" where "status" = 'active' order by "code" asc`,
+            );
+            return res.map((r) => ({ id: r.id, code: r.code, name: testAnyLabel(r.name) }));
           },
           deliveryMethods: async () => {
-            const res = (await em()
-              .getKnex()
-              .raw(
-                `select "id", "code", "name" from "delivery_methods" where "status" = 'active' order by "code" asc`,
-              )) as { rows: Array<{ id: string; code: string; name: unknown }> };
-            return res.rows.map((r) => ({ id: r.id, code: r.code, name: testAnyLabel(r.name) }));
+            const res = await em().execute<Array<{ id: string; code: string; name: unknown }>>(
+              `select "id", "code", "name" from "delivery_methods" where "status" = 'active' order by "code" asc`,
+            );
+            return res.map((r) => ({ id: r.id, code: r.code, name: testAnyLabel(r.name) }));
           },
         },
       });
@@ -1949,7 +1992,8 @@ export async function setupBackendServer(
         // had configured), and one fixed password hash for every account it made.
         mfaSocialAccountResolvers: {
           resolveCustomerByEmail: (email: string) => customerSocialLogin().resolveByEmail(email),
-          autoCreateCustomer: (email: string) => customerSocialLogin().autoCreate(email),
+          autoCreateCustomer: (email: string, context: { salesChannelId: string; preferredLanguage?: string | null }) =>
+            customerSocialLogin().autoCreate(email, context),
           resolveAdminByEmail: async (email: string) => {
             // T052 — the same port production reads, rather than a second copy of
             // the read. The comment that stood here argued for the copy on the
@@ -2105,13 +2149,17 @@ export async function setupBackendServer(
         // each resolved actor onto both properties, which is why the surviving
         // implementation answers correctly here without reading `testActor`.
         // Feature 072 (wave 2) — mirrors `composition.ts`.
-        customerContextResolver: customerResolver,
+        customerContextResolver: (req: FastifyRequest) => customerResolver(req, options),
         // Feature 072 (wave 3) — how this composition names the calling customer as
         // an id. The four payment gateways read it; before their conversion this
         // harness composed none of them, which `harness-parity` recorded as an
         // accepted divergence.
-        customerAccountIdResolver: (req: FastifyRequest) =>
-          req.testActor?.kind === 'customer' ? req.testActor.customerAccountId : TEST_CUSTOMER_ID,
+        customerAccountIdResolver: (req: FastifyRequest) => {
+          refuseAnonymousAsComposed(req, options);
+          return req.testActor?.kind === 'customer'
+            ? req.testActor.customerAccountId
+            : TEST_CUSTOMER_ID;
+        },
         // Feature 072 (wave 2) — mirrors `composition.ts`, reading this harness's
         // own actor property. The ad modules resolve one name instead of each
         // taking its own identically-shaped `resolveAuditContext` option.
@@ -2159,7 +2207,10 @@ export async function setupBackendServer(
         // overwrite the root — which is exactly what happened, and the sitemap
         // silently fell through to `http://localhost:3000`.
         sitemapOptions: { staleAfterMs: 0, baseUrl: 'http://test.local' },
-        lifecycleManifestRegistry: () => harnessManifestRegistry(),
+        lifecycleManifestRegistry: () =>
+          options.deployment === undefined
+            ? harnessManifestRegistry()
+            : deploymentManifestRegistry(options.deployment, resolvedRegistry),
         // Feature 072 (T121) — the gate is the port's own now: `adminUserService`
         // is provided by `admin_users` and raises `ModuleDisabledError` when that
         // module is off, so no root hard-codes `isPresent('admin_users')` here.
@@ -2240,7 +2291,9 @@ export async function setupBackendServer(
       composedModules.contribute({
         transactionalEmailAssetUrl: async (assetId: string): Promise<string | null> => {
           try {
-            return (await assetsLibrary.handle.service.resolveUrl(assetId)).url;
+            // The embed form (specs/156-asset-stable-url/ R-8): an e-mail is a cached
+            // copy the platform never sees again, so the logo carries its marker.
+            return await assetsLibrary.handle.service.resolveEmbedUrl(assetId);
           } catch {
             return null;
           }
@@ -2294,6 +2347,8 @@ export async function setupBackendServer(
               customer: {
                 customerAccountId: request.testActor.customerAccountId,
                 organizationId: request.testActor.organizationId,
+                // As production's `cartActorResolver` (feature 170, R-15).
+                organizationRoleId: request.testActor.organizationRoleId ?? null,
               },
             };
           }
@@ -2331,15 +2386,14 @@ export async function setupBackendServer(
               },
               input.shoppingListId,
               undefined,
+              input.salesChannelId,
+              input.languageTag !== undefined ? { languageTag: input.languageTag } : {},
             );
             return {
               cartId: '',
               appendedLineCount: res.added,
-              droppedLines: res.skipped.map((it) => ({
-                productId: it.productId,
-                productName: it.productId,
-                reason: 'not_purchasable',
-              })),
+              // Feature 155 — the shared mapping, as `composition.ts`.
+              droppedLines: toCartDroppedLines(res.skipped),
             };
           },
         } satisfies CartShoppingListBridge,
@@ -2423,15 +2477,14 @@ export async function setupBackendServer(
       // asking, the organization's tax rate, and the subtree the RFQ admin scope
       // rolls up over.
       composedModules.contribute({
+        // `specs/170-organization-roles/` WP-05 — no legacy role read: the
+        // module asks `organizationPermissionPort` who sees the whole
+        // Organization (R-30), which reads the account's role itself.
         rfqCustomerContextResolver: async (request: FastifyRequest) => {
-          const ctx = customerResolver(request);
-          const account = await identityPorts().customerAccountReadPort.findById(
-            ctx.customerAccountId,
-          );
+          const ctx = customerResolver(request, options);
           return {
             customerAccountId: ctx.customerAccountId,
             organizationId: ctx.organizationId,
-            isOrgAdmin: account?.role === 'organization_admin',
           };
         },
         rfqAdminContextResolver: async (request: FastifyRequest) => {
@@ -2479,11 +2532,17 @@ export async function setupBackendServer(
           vies: new FakeVatValidator('vies'),
           mfPl: new FakeVatValidator('mf_pl'),
         },
+        // Feature 173 — the registration company lookup's three registries,
+        // deterministic by the number's second-to-last character and counting
+        // their calls (`fake-registry-clients.ts`). Read per lookup by the
+        // module, so a test reaches the instance through the container.
+        organizationsRegistryClients: new FakeRegistryClients(),
         organizationsLoginHook: async (loginCtx: {
           customerAccountId: string;
           organizationId: string | null;
           anonymousCartToken?: string;
           anonymousCompareToken?: string;
+          salesChannelId?: string;
         }) => {
           let result: Record<string, unknown> = {};
           if (loginCtx.anonymousCartToken && loginCtx.organizationId) {
@@ -2492,6 +2551,9 @@ export async function setupBackendServer(
             ).cartService.mergeAnonymousIntoCustomer(loginCtx.anonymousCartToken, {
               customerAccountId: loginCtx.customerAccountId,
               organizationId: loginCtx.organizationId,
+              // Mirrors composition.ts: the sign-in request's channel, or the
+              // one a federated callback names (issue #1188).
+              salesChannelId: loginCtx.salesChannelId ?? getResolvedChannel().id,
             });
             result = { cartMerge };
           }
@@ -2543,10 +2605,7 @@ export async function setupBackendServer(
             ? await ports.adminRolePort.getById(adminUser.adminRoleId)
             : null;
           const isPlatformAdmin = role?.code !== 'sales_representative';
-          const allowedOrganizationIds = isPlatformAdmin
-            ? []
-            : await salesRepScope().listAssignedOrganizationIds(adminUserId);
-          return { adminUserId, isPlatformAdmin, allowedOrganizationIds };
+          return { adminUserId, isPlatformAdmin };
         },
       });
 
@@ -2738,6 +2797,17 @@ export async function setupBackendServer(
       await new ManifestReconciler(em()).apply(
         settingsManifestCollectionPort().collect(deploymentShippedEntries(resolvedRegistry)),
       );
+      // Issue #700 — the boot step production runs after the reconcile: encrypt
+      // any plaintext a `secret` setting still stores. Nothing is cached yet at
+      // this point, so there is no cache to drop.
+      await backfillPlaintextSecrets(em(), {
+        secretEncryptionKey: process.env['SETTINGS_SECRET_ENCRYPTION_KEY'] || undefined,
+      });
+      // Issue #492 — the seeded VIP channel's guest display mode, which needs
+      // the setting row the reconcile above has just written.
+      if ((options.seed ?? 'us1-catalog') === 'us1-catalog') {
+        await seedUs1CatalogSettings(em());
+      }
     },
     afterReady: async () => {
       // `_i18n` reconciles from its `ctx.routes` callback, so the bundles are on
@@ -2778,6 +2848,8 @@ export async function setupBackendServer(
     em,
     eventBus,
     apiInterceptors,
+    commandHookRegistry: (container.cradle as never as { commandHookRegistry: CommandHookRegistry })
+      .commandHookRegistry,
     redis,
     redisSubscriber: handle.redisSubscriber,
     pubSubArmed: handle.pubSubArmed,
@@ -2914,11 +2986,31 @@ export async function setupBackendServer(
   };
 }
 
-function customerResolver(request: FastifyRequest): {
+/**
+ * Issue #87 — the composed resolver's refusal, for the anonymous actor of a
+ * harness built with {@link BackendServerOptions.anonymousAsComposed}. The
+ * status, code and message are `compose-app.ts`' own, so a test asserting the
+ * refusal asserts what production answers.
+ */
+function refuseAnonymousAsComposed(
+  request: FastifyRequest,
+  options: Pick<BackendServerOptions, 'anonymousAsComposed'>,
+): void {
+  if (options.anonymousAsComposed === true && request.testActor?.kind === 'anonymous') {
+    throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Customer session required.');
+  }
+}
+
+function customerResolver(
+  request: FastifyRequest,
+  options: Pick<BackendServerOptions, 'anonymousAsComposed'>,
+): {
   customerAccountId: string;
   organizationId: string;
   impersonatorAdminUserId?: string | null;
+  organizationRoleId?: string | null;
 } {
+  refuseAnonymousAsComposed(request, options);
   if (request.testActor?.kind !== 'customer') {
     return { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
   }
@@ -2933,6 +3025,8 @@ function customerResolver(request: FastifyRequest): {
     customerAccountId: request.testActor.customerAccountId,
     organizationId: request.testActor.organizationId ?? TEST_ORGANIZATION_ID,
     impersonatorAdminUserId: request.testActor.impersonatorAdminUserId,
+    // As production's `customerContextResolver` (feature 170, R-15).
+    organizationRoleId: request.testActor.organizationRoleId ?? null,
   };
 }
 

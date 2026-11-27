@@ -1,55 +1,98 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { NotFoundError, raw } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   adminPatchOrganizationRequestSchema,
   adminRecoverOrgAccessRequestSchema,
-  adminDirectMemberRequestSchema,
-  adminPatchMemberRoleRequestSchema,
+  adminDirectMemberToRoleRequestSchema,
+  adminAssignMemberRoleRequestSchema,
   adminPatchMemberProfileRequestSchema,
   adminSetMemberRollupRequestSchema,
   assignOrganizationParentRequestSchema,
   setCreditInheritanceModeRequestSchema,
-  inviteMemberRequestSchema,
+  inviteMemberToRoleRequestSchema,
+  customFieldFilterUnavailable,
+  customFieldFiltersQueryParamSchema,
+  isCustomFieldFilterUnavailableFailure,
   isCustomFieldValidationFailure,
   type AddressServicePort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterCondition,
+  type CustomFieldListFilterPort,
   type CustomFieldValuePort,
-  type CustomerAccountMemberWritePort,
+  type CustomerAccountCommandPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
-  type CustomerRolePort,
+  type OrganizationRoleReadPort,
+  type OrganizationRoleRef,
+  type AdminOrganization,
+  type AdminOrganizationDetail,
+  type AdminOrganizationListResponse,
+  adminOrganizationListPageQuerySchema,
+  type AdminOrganizationMember,
+  AdminOrganizationCreateBodySchema,
+  adminTaxIdScopeSetBodySchema,
+  adminOrganizationConvertToCompanyBodySchema,
+  adminOrganizationChangeTaxIdBodySchema,
+  normalizeTaxId,
+  type AdminTaxIdScopeResponse,
+  OrganizationSalesChannelsUpdateBodySchema,
+  type DictionaryValidator,
+  type OrganizationSalesChannelsResponse,
+  type SalesRepAssignmentPort,
+  isUuidShape,
+  ExtensionsQuerySchema,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
-import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import { getTenantContext, orgScopeWhere } from '@endora-commerce/platform/tenancy';
 import type { OrganizationTreeService } from './services/organization-tree-service.js';
-import { hasChildrenRefusal } from './services/organization-tree-service.js';
-import { makeSetParentCommand } from './commands/set-parent.command.js';
-import { makeMoveCommand } from './commands/move.command.js';
+import { makePlaceInTreeCommand } from './commands/set-parent.command.js';
 import { makeSetCreditModeCommand } from './commands/set-credit-mode.command.js';
-import { Organization } from './entities/organization.entity.js';
+import { makeDeleteOrganizationCommand } from './commands/delete-organization.command.js';
+import { makeCreateOrganizationCommand } from './commands/create-organization.command.js';
+import { makeSetSalesChannelsCommand } from './commands/set-sales-channels.command.js';
+import { assertCountryAvailable, assertSalesChannelsExist } from './services/organization-write-guards.js';
+import { makeSetTaxIdScopeCommand } from './commands/set-tax-id-scope.command.js';
+import { makeConvertToCompanyCommand } from './commands/convert-to-company.command.js';
+import { makeChangeTaxIdCommand } from './commands/change-tax-id.command.js';
+import type { OrganizationRoleCache } from './services/organization-role-cache.js';
+import { TaxIdScopeService } from './services/tax-id-scope-service.js';
+import { runOrganizationWrite, taxIdExistsRefusal } from './services/organization-write.js';
+import { taxIdSharedAcrossTreesRefusal } from './services/organization-tree-service.js';
+import { makeAdminPatchOrganizationCommand } from './commands/admin-patch-organization.command.js';
+import { Organization, type OrganizationStatus } from './entities/organization.entity.js';
+import { adminActorOf, organizationInReach as organizationInReachPreHandler } from './organization-reach.js';
+import { OrganizationRole } from './entities/organization-role.entity.js';
+import { predefinedRoleIdOn } from './services/organization-role-store.js';
+import { memberRoleRef } from './services/member-role-views.js';
+import { organizationsProse, type OrganizationsTranslate } from './services/organizations-prose.js';
 import type { RequireAdminAnyFactory } from '@endora-commerce/platform/kernel';
 import type { InvitationService } from './services/invitation-service.js';
 import {
   emitCustomerAccountCreated,
   type OrganizationEventBus,
 } from './services/registration-service.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import {
+  SalesChannel,
+  type AuditPort,
+  type SalesChannelMembershipPort,
+} from '@endora-commerce/platform/kernel';
 import type {
   OrganizationModerationService} from './services/organization-moderation-service.js';
-import {
-  OrganizationNotFoundError,
-  OrganizationStatusGuardError,
-  OrganizationVersionMismatchError,
-} from './services/organization-moderation-service.js';
+import { OrganizationStatusGuardError } from './services/organization-moderation-service.js';
 import type {
   OrganizationRestrictionService} from './services/organization-restriction-service.js';
 import {
-  OrganizationVersionMismatchError as RestrictionVersionMismatchError,
-} from './services/organization-restriction-service.js';
+  moderationHttpError as mapModerationError,
+  restrictionHttpError as mapRestrictionError,
+  statusGuardRefusal,
+} from './services/organization-refusals.js';
 import type { OrganizationEffectivePriceListsService } from './services/organization-effective-pricelists-service.js';
 import type { OrganizationTaxIdValidationService } from './services/organization-tax-id-validation-service.js';
+import { serializeTaxIdValidation } from './registry-lookup/validation-record.js';
 import {
   approveOrganizationSchema,
   rejectOrganizationSchema,
@@ -60,7 +103,12 @@ import {
   triggerVatValidationSchema,
 } from './schemas/organization.js';
 import { normalizeOrganizationName } from './services/normalize-name.js';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import {
+  memberAuditState,
+  memberCreatedAuditState,
+  memberUpdatedAuditState,
+} from './services/organization-audit-state.js';
+import type { RequireAdminFactory, SchemaExtensionReads } from '@endora-commerce/platform/kernel';
 
 /**
  * Admin /admin/organizations — platform staff operations (003).
@@ -75,26 +123,21 @@ const listQuerySchema = z.object({
   // `includePersonal=true` to see them (string compare — z.coerce.boolean would
   // treat the string "false" as true).
   includePersonal: z.string().optional(),
+  // `specs/177-tax-id-scope/` — one kind only (the conversion screen's picker
+  // asks for personal organizations); with `includePersonal=true`.
+  'filter[isPersonal]': z.enum(['true', 'false']).optional(),
+  // `specs/178-extensible-columns/` FR-051 — extension attributes on request.
+  ...ExtensionsQuerySchema.shape,
+  // Issue #1473 — the admin list screen's offset paging.
+  ...adminOrganizationListPageQuerySchema.shape,
+  // Issue #1903 — the custom fields marked as list filters, as JSON
+  // (`specs/157-custom-fields-list-filters/contracts/list-filter-api.md` §1.2).
+  customFieldFilters: customFieldFiltersQueryParamSchema,
 });
 
-/**
- * The acting admin, or `null` for any other actor.
- *
- * `request.actor` is not on `FastifyRequest`: it is a declaration-merging
- * augmentation the `auth` module contributes (`modules/auth/plugin.ts`). Inside
- * `backend/src` it arrived ambiently through the host's own `types` graph, so
- * nothing in this module ever named it; a package compiles against its own
- * manifest and `auth` publishes nothing a package can name, so the property is
- * simply not there (TS2339). Read structurally and narrowed rather than
- * asserted — an absent actor answers `null`, which is the "record nothing"
- * branch this call site already had.
- */
-function adminActorOf(request: FastifyRequest): { adminUserId: string } | null {
-  const { actor } = request as FastifyRequest & {
-    actor?: { kind?: string; adminUserId?: string };
-  };
-  if (actor?.kind !== 'admin' || typeof actor.adminUserId !== 'string') return null;
-  return { adminUserId: actor.adminUserId };
+/** The module ids `?extensions=` names, in order, or none. */
+function requestedExtensions(raw: string | undefined): string[] {
+  return raw === undefined ? [] : raw.split(',');
 }
 
 export interface AdminOrgsDeps {
@@ -102,20 +145,31 @@ export interface AdminOrgsDeps {
   requireAdmin: RequireAdminFactory;
   requireAdminAny: RequireAdminAnyFactory;
   invitationService: InvitationService;
-  roleService: CustomerRolePort;
   /**
-   * `customer_accounts`' published read and member write (feature 075, Phase
-   * C). Every member endpoint below used to load, create and mutate that
-   * module's entity directly; the writes moved to its side of the port and the
-   * audit row stayed here, because the operation being audited is an admin
-   * edit on *this* module's member panel.
+   * `customer_accounts`' published read and its aggregate port (feature 075,
+   * Phase C; `specs/186-aggregate-ports/` US3, issue #1822). Every member
+   * endpoint below used to load, create and mutate that module's entity
+   * directly; the writes are that module's Commands now — `customer_account.create`,
+   * `.change_role`, `.set_subtree_rollup`, `.update_profile`, `.remove_member` —
+   * run through the port a server-side caller uses, so both see one write
+   * path. The `customer_account.admin_*` entries stay here, because the
+   * operation they record is an admin edit on *this* module's member panel.
    *
    * With `customer_accounts` off the member endpoints fail closed. The module
    * is non-deactivatable, so that is a statement about direction rather than a
    * reachable state.
    */
   customerAccountRead: CustomerAccountReadPort;
-  customerAccountWrite: CustomerAccountMemberWritePort;
+  customerAccountCommandPort: Pick<
+    CustomerAccountCommandPort,
+    'create' | 'changeRole' | 'setSubtreeRollup' | 'updateProfile' | 'removeMember'
+  >;
+  /**
+   * `specs/170-organization-roles/` WP-03 — the role every member answer names
+   * (FR-008, FR-073); `customer_account.change_role` assigns a role under
+   * `customers:manage` alone (FR-062).
+   */
+  organizationRoles: Pick<OrganizationRoleReadPort, 'roleRef'>;
   auditLogService: AuditPort;
   /**
    * Optional — when provided, the admin direct-member-create endpoint emits
@@ -140,12 +194,59 @@ export interface AdminOrgsDeps {
    */
   customFieldValues?: CustomFieldValuePort;
   /**
-   * Feature 056 — when both are provided, mounts the org-hierarchy endpoints
+   * Issue #1903 — `custom_fields`' `customFieldListFilterPort`: the
+   * Organization custom fields the admin list offers as filters, and a
+   * request's filters as one condition. Absent, the list offers none and
+   * refuses any it is sent.
+   */
+  customFieldListFilter?: Pick<CustomFieldListFilterPort, 'condition' | 'listFilterable'>;
+  /**
+   * Feature 056 — when provided, mounts the org-hierarchy endpoints
    * (assign/move parent, subtree/ancestors read, delete-with-children guard).
    * Tree mutations run through the Command Bus (Principle XIII).
    */
   treeService?: OrganizationTreeService;
-  commandBus?: CommandBus;
+  /** The Command Bus (Principle XIII): the tree, the admin create and the member role Commands. */
+  commandBus: CommandBus;
+  /**
+   * Feature 154 — the kernel's audited channel-membership writer. When provided,
+   * mounts the Organization's *Sales channels* endpoints, and — with
+   * `commandBus` — the admin create, which assigns channels in its own
+   * transaction.
+   */
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
+  /** Feature 154 — validates the country of an Organization an operator creates. */
+  dictionaryValidator?: DictionaryValidator;
+  /**
+   * Issue #698 — the sales-representative visibility rule every `/:id` route
+   * answers by (`organizationInReach` below): this module's one
+   * `organizationSalesRepScopePort`, built with the roll-up deps (#108).
+   */
+  salesRepScope: Pick<SalesRepAssignmentPort, 'canSeeOrganization'>;
+  /**
+   * `specs/177-tax-id-scope/` — the role cache entry a conversion drops and
+   * announces after it commits: role management now applies to the
+   * Organization. Absent: nothing is cached to drop.
+   */
+  roleCache?: Pick<OrganizationRoleCache, 'dropAndAnnounce'>;
+  /**
+   * `specs/178-extensible-columns/` FR-051 — the platform's extension-attribute
+   * reader. `organizations` is an extensible host: an installed module may
+   * declare `x_<module>_*` columns on its table, and the detail and list reads
+   * attach them when the request names that module in `?extensions=`. Optional
+   * so a composition without it serves the reads unchanged; the platform
+   * registers it in every composition it builds.
+   */
+  schemaExtensionReads?: SchemaExtensionReads;
+  /**
+   * Issue #629 (#86) — this module's bundle, for the status labels the
+   * moderation status refusal names in the reader's language. Absent, the
+   * English labels.
+   */
+  translate?: OrganizationsTranslate;
 }
 
 export async function registerOrganizationsAdminRoutes(
@@ -157,7 +258,6 @@ export async function registerOrganizationsAdminRoutes(
     requireAdminAny,
     emFactory,
     invitationService,
-    roleService,
     auditLogService,
   } = deps;
   const moderationService = deps.moderationService;
@@ -165,8 +265,93 @@ export async function registerOrganizationsAdminRoutes(
   const effectivePriceListsService = deps.effectivePriceListsService;
   const taxIdValidationService = deps.taxIdValidationService;
   const customFieldValues = deps.customFieldValues;
+  const customFieldListFilter = deps.customFieldListFilter;
 
   const customersRead = requireAdminAny(['customers:read', 'customers:manage']);
+
+  /**
+   * Issue #1903 — the list's custom-field filters as one condition, or `null`
+   * when none is asked for. A field the list does not offer — or any field,
+   * without the port — is refused as 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`
+   * naming it; an operator that does not apply is the port's ZodError, 400.
+   */
+  const customFieldCondition = async (
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null> => {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    try {
+      if (!customFieldListFilter) throw customFieldFilterUnavailable(Object.keys(filters));
+      return await customFieldListFilter.condition('organization', filters);
+    } catch (error) {
+      if (isCustomFieldFilterUnavailableFailure(error)) {
+        throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+          key: error.keys[0] ?? '',
+          keys: [...error.keys],
+        });
+      }
+      throw error;
+    }
+  };
+
+  /**
+   * Issue #629 (#86) — a moderation failure as its HTTP refusal. The status
+   * guard's sentence names both statuses by their labels in the language the
+   * response is answered in, which only the request knows.
+   */
+  const moderationRefusal = async (err: unknown, request: FastifyRequest): Promise<HttpError> => {
+    if (!(err instanceof OrganizationStatusGuardError)) return mapModerationError(err);
+    const language = await request.responseLanguage();
+    const label = (status: OrganizationStatus) =>
+      organizationsProse(deps.translate, `status.${status}`, language);
+    return statusGuardRefusal(err, await label(err.currentStatus), await label(err.requiredStatus));
+  };
+
+  /**
+   * Issue #698 — every `/:id` route here answers only for an Organization the
+   * acting administrator may see; the rule, and why it is not the tenant
+   * reach, are on {@link organizationInReachPreHandler}. Shared since #856 with
+   * `routes.sales-reps.ts`, so the two files cannot answer by two rules.
+   */
+  const organizationInReach = organizationInReachPreHandler({
+    emFactory,
+    salesRepScope: deps.salesRepScope,
+    param: 'id',
+  });
+
+  /**
+   * `specs/178-extensible-columns/` FR-051, FR-052 — attach the requested
+   * modules' extension attributes to records this route already authorised.
+   * Without the parameter the records are returned as they are, so the
+   * response is byte-identical to a platform without the feature; with it,
+   * every record carries `extensions`, holding only the modules that declare
+   * this host with `adminReads` and are present (one query per module).
+   */
+  const withExtensions = async <T extends AdminOrganization>(
+    em: EntityManager,
+    orgs: readonly Organization[],
+    serialized: T[],
+    requested: readonly string[],
+  ): Promise<T[]> => {
+    if (requested.length === 0) return serialized;
+    const attributes =
+      deps.schemaExtensionReads === undefined
+        ? new Map<string, Record<string, unknown>>()
+        : await deps.schemaExtensionReads.attach(em, 'organizations', orgs, requested);
+    return serialized.map((record, index) => ({ ...record, extensions: attributes.get(orgs[index]!.id) ?? {} }));
+  };
+
+  /** A member as the operator's screens show it: its role, not the legacy enum (FR-008, FR-073). */
+  const memberDetail = async (member: CustomerAccountRecord, language: string): Promise<AdminOrganizationMember> =>
+    serializeMemberDetail(member, await memberRoleRef(deps.organizationRoles, member, language));
+
+  /** The member as it is after a Command changed it. */
+  const reloadMember = async (organizationId: string, customerAccountId: string): Promise<CustomerAccountRecord> => {
+    const updated = await deps.customerAccountRead.findInOrganization(customerAccountId, organizationId, {
+      activeOnly: true,
+    });
+    if (!updated) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
+    return updated;
+  };
 
   const audit = async (
     request: FastifyRequest,
@@ -190,6 +375,30 @@ export async function registerOrganizationsAdminRoutes(
     });
   };
 
+  /**
+   * Feature 175 (FR-018) — a new member's custom-field bag, validated as a
+   * merge onto an empty account so a `required` definition is enforced at
+   * creation. `{}` without the value port, as before the feature.
+   */
+  const validatedCustomerValues = async (
+    values: Record<string, unknown> | undefined,
+  ): Promise<Record<string, unknown>> => {
+    if (!customFieldValues) return {};
+    try {
+      return await customFieldValues.validateAndMerge('customer', {}, values ?? {});
+    } catch (err) {
+      if (isCustomFieldValidationFailure(err)) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.CUSTOM_FIELD_VALUE_INVALID,
+          'One or more custom fields are invalid.',
+          err.errors.map((e) => ({ path: e.field, issue: e.message })),
+        );
+      }
+      throw err;
+    }
+  };
+
   const assertVersion = (current: Date, expectedIso?: string): void => {
     if (!expectedIso) return;
     const expected = new Date(expectedIso);
@@ -202,15 +411,69 @@ export async function registerOrganizationsAdminRoutes(
     }
   };
 
+  /** D-260 — refuses unless the acting administrator is unscoped (`mode === 'all'`). */
+  const assertUnscoped = (message: string): void => {
+    const ctx = getTenantContext();
+    if (!ctx || ctx.mode !== 'all') throw new HttpError(403, ERROR_CODES.FORBIDDEN, message);
+  };
+
+  // ── Tax-ID scope (`specs/177-tax-id-scope/`, FR-014 … FR-017) ──────────────
+  // A static segment, registered before the `/:id` routes. The code alone is
+  // not enough: the scope is installation-wide, so a scoped administrator —
+  // whose reach is a subset of the installation — is refused (D-260's idiom).
+  const taxIdScopes = new TaxIdScopeService(emFactory);
+  const manageTaxIdScope = requireAdmin('organizations:manage-tax-id-scope');
+  const taxIdScopeResponse = async (): Promise<AdminTaxIdScopeResponse> => {
+    const status = await taxIdScopes.status();
+    return {
+      data: {
+        scope: status.scope,
+        updatedAt: status.updatedAt.toISOString(),
+        updatedByAdminUserId: status.updatedByAdminUserId,
+        sharedTaxIdCount: status.sharedTaxIdCount,
+        enforcement: status.enforcement,
+      },
+    };
+  };
+  const unscopedMessage = 'Only a platform administrator can read or change the tax-ID scope.';
+
+  app.get('/api/v1/admin/organizations/tax-id-scope', { preHandler: manageTaxIdScope }, async () => {
+    assertUnscoped(unscopedMessage);
+    return taxIdScopeResponse();
+  });
+
+  app.put(
+    '/api/v1/admin/organizations/tax-id-scope',
+    { preHandler: manageTaxIdScope, schema: { body: adminTaxIdScopeSetBodySchema } },
+    async (request) => {
+      assertUnscoped(unscopedMessage);
+      const body = adminTaxIdScopeSetBodySchema.parse(request.body);
+      await runOrganizationWrite(deps.commandBus, makeSetTaxIdScopeCommand({ scopes: taxIdScopes }, { scope: body.scope }));
+      return taxIdScopeResponse();
+    },
+  );
+
+  // Issue #1903 — the Organization custom fields the list offers as filters
+  // (`specs/157-custom-fields-list-filters/`). A static path, so it is never
+  // read as an Organization id.
+  app.get('/api/v1/admin/organizations/custom-field-filters', { preHandler: customersRead }, async () => ({
+    data: (await customFieldListFilter?.listFilterable('organization')) ?? [],
+  }));
+
   app.get(
     '/api/v1/admin/organizations',
     { preHandler: customersRead },
-    async (request) => {
+    async (request): Promise<AdminOrganizationListResponse> => {
       const query = listQuerySchema.parse(request.query);
       const em = emFactory();
-      const where: Record<string, unknown> = { deletedAt: null };
+      // Issue #305 (owner ruling 2026-11-07) — the list narrows to the reach
+      // rule the `/:id` routes answer by, so no row opens a 404. `Organization`
+      // is global, so it is filtered explicitly on its own key; a platform
+      // administrator's fragment is empty.
+      const where: Record<string, unknown> = { deletedAt: null, ...orgScopeWhere('id') };
       // Feature 051 — exclude personal (B2C) orgs from the B2B admin list by default.
       if (query.includePersonal !== 'true') where['isPersonal'] = false;
+      else if (query['filter[isPersonal]']) where['isPersonal'] = query['filter[isPersonal]'] === 'true';
       if (query['filter[status]']) where['status'] = query['filter[status]'];
       if (query['filter[vatStatus]']) where['vatStatus'] = query['filter[vatStatus]'];
       if (query.q) {
@@ -220,27 +483,48 @@ export async function registerOrganizationsAdminRoutes(
         // entity. Falls back to taxId ILIKE so admins can also paste a
         // tax-id fragment.
         const normalized = normalizeOrganizationName(query.q);
+        // Stored tax IDs are normalised (`specs/177-tax-id-scope/` OD-11), so
+        // the tax-ID branch matches the normalised text.
+        const taxIdText = normalizeTaxId(query.q);
         where['$or'] = [
           { nameSearch: { $ilike: `%${normalized}%` } },
-          { taxId: { $ilike: `%${query.q}%` } },
+          ...(taxIdText ? [{ taxId: { $ilike: `%${taxIdText}%` } }] : []),
         ];
       }
-      const orgs = await em.find(Organization, where, {
-        limit: query.limit,
-        orderBy: { createdAt: 'desc' },
+      // Issue #1903 — the custom-field filters: an id sub-select over
+      // `organizations`, ANDed with the reach fragment above (never assigned
+      // to `where.id`, which that fragment may hold), so it narrows the
+      // reachable set and never widens it. `findAndCount` applies it to the
+      // page and the total alike.
+      const custom = await customFieldCondition(query.customFieldFilters);
+      if (custom) where['$and'] = [{ id: { $in: raw(`(${custom.sql})`, [...custom.params]) } }];
+      // Issue #1473 — an offset page and the total across all of them, for the
+      // list screen's pager. `pageSize` falls back to `limit`, so a caller that
+      // names neither (the pickers) keeps its one first page. `id` breaks a
+      // `createdAt` tie, or a page boundary could repeat a row and skip another.
+      const pageSize = query.pageSize ?? query.limit;
+      const [orgs, total] = await em.findAndCount(Organization, where, {
+        limit: pageSize,
+        offset: (query.page - 1) * pageSize,
+        orderBy: { createdAt: 'desc', id: 'desc' },
       });
       return {
-        data: orgs.map(serializeOrg),
-        pagination: { cursor: null, hasMore: false, limit: query.limit },
+        data: await withExtensions(em, orgs, orgs.map(serializeOrg), requestedExtensions(query.extensions)),
+        meta: { page: query.page, pageSize, total },
+        pagination: { cursor: null, hasMore: query.page * pageSize < total, limit: pageSize },
       };
     },
   );
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id',
-    { preHandler: customersRead },
-    async (request) => {
+    { preHandler: [customersRead, organizationInReach] },
+    async (request): Promise<{ data: AdminOrganizationDetail }> => {
+      const { extensions } = ExtensionsQuerySchema.parse(request.query);
       const em = emFactory();
+      if (!isUuidShape(request.params.id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
       const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
       if (!org) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
@@ -248,12 +532,33 @@ export async function registerOrganizationsAdminRoutes(
       const members = await deps.customerAccountRead.listByOrganization(org.id, {
         activeOnly: true,
       });
-      return {
-        data: {
-          ...serializeOrg(org),
-          members: members.map(serializeMemberDetail),
-        },
-      };
+      const language = await request.responseLanguage();
+      // The two predefined roles, so the member role select can offer
+      // Administrator and Member to an operator who may assign roles
+      // (`customers:manage`, FR-062) but not read the role list
+      // (`contracts/operator-api.md` §5; WP-03, additive).
+      const predefinedRoles = await Promise.all(
+        (['administrator', 'member'] as const).map(async (kind) =>
+          memberRoleRef(
+            deps.organizationRoles,
+            { organizationId: org.id, organizationRoleId: await predefinedRoleIdOn(em, org.id, kind) },
+            language,
+          ),
+        ),
+      );
+      const [data] = await withExtensions<AdminOrganizationDetail>(
+        em,
+        [org],
+        [
+          {
+            ...serializeOrg(org),
+            members: await Promise.all(members.map((member) => memberDetail(member, language))),
+            predefinedRoles,
+          },
+        ],
+        requestedExtensions(extensions),
+      );
+      return { data: data! };
     },
   );
 
@@ -263,7 +568,7 @@ export async function registerOrganizationsAdminRoutes(
     const addressService = deps.addressService;
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/addresses',
-      { preHandler: customersRead },
+      { preHandler: [customersRead, organizationInReach] },
       async (request) => {
         const rows = await addressService.list(request.params.id);
         return {
@@ -287,62 +592,295 @@ export async function registerOrganizationsAdminRoutes(
   app.patch<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id',
     {
-      preHandler: requireAdmin('customers:manage'),
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
       schema: { body: adminPatchOrganizationRequestSchema },
     },
     async (request) => {
-      const em = emFactory();
       const body = adminPatchOrganizationRequestSchema.parse(request.body);
-      const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
-      if (!org) {
-        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-      }
-      assertVersion(org.updatedAt, body.expectedUpdatedAt);
-      const before = serializeOrg(org);
-      if (body.name !== undefined) org.name = body.name;
-      if (body.vatStatus !== undefined) org.vatStatus = body.vatStatus;
-      if (body.status !== undefined) org.status = body.status;
-      if (body.orderConfirmationEmails !== undefined) org.orderConfirmationEmails = body.orderConfirmationEmails;
-      if (body.fulfilmentStrategy !== undefined) org.fulfilmentStrategy = body.fulfilmentStrategy;
-      if (body.fulfilmentStrategyWarehouseOrder !== undefined) {
-        org.fulfilmentStrategyWarehouseOrder = body.fulfilmentStrategyWarehouseOrder;
-      }
-      // Feature 055 — validate + merge custom-field values; the org module owns
-      // the write, the value service only validates (Principle XIV).
-      if (body.customFieldValues !== undefined && customFieldValues) {
-        try {
-          org.customFieldValues = await customFieldValues.validateAndMerge(
-            'organization',
-            org.customFieldValues ?? {},
-            body.customFieldValues,
-          );
-        } catch (err) {
-          // Narrowed structurally rather than by `instanceof`: the constructor
-          // is a file in `custom_fields`' directory, and the guard is what
-          // `@endora-commerce/contracts` publishes in its place. `customFieldValueService`
-          // is a gated port, so this re-throws anything that is not the
-          // validation failure — a `ModuleDisabledError` included.
-          if (isCustomFieldValidationFailure(err)) {
-            throw new HttpError(
-              422,
-              ERROR_CODES.CUSTOM_FIELD_VALUE_INVALID,
-              'One or more custom fields are invalid.',
-              err.errors.map((e) => ({ path: e.field, issue: e.message })),
-            );
-          }
-          throw err;
-        }
-      }
-      await em.flush();
-      await audit(
-        request,
-        'organization.admin_patch',
-        'organization',
-        org.id,
-        before,
-        serializeOrg(org) as Record<string, unknown>,
+      const { customFieldValues: patchValues, expectedUpdatedAt, ...changes } = body;
+      // One Command, `organization.admin_patch`: the version check, the column
+      // changes and the custom-field merge on one transaction, with the one
+      // audit entry this edit has always recorded — naming what changed, never
+      // a value (D-288, #470 O-2). The merge is the step
+      // `organizationCustomFieldWritePort` runs, so the two writes of the bag
+      // cannot drift. Feature 055 — the value service only validates; this
+      // module owns the write (Principle XIV).
+      const valueService = customFieldValues;
+      const mergeCustomFieldValues =
+        patchValues !== undefined && valueService
+          ? async (current: Record<string, unknown>): Promise<Record<string, unknown>> => {
+              try {
+                return await valueService.validateAndMerge('organization', current, patchValues);
+              } catch (err) {
+                // Narrowed structurally rather than by `instanceof`: the
+                // constructor is a file in `custom_fields`' directory, and the
+                // guard is what `@endora-commerce/contracts` publishes in its
+                // place. `customFieldValueService` is a gated port, so this
+                // re-throws anything that is not the validation failure — a
+                // `ModuleDisabledError` included.
+                if (isCustomFieldValidationFailure(err)) {
+                  throw new HttpError(
+                    422,
+                    ERROR_CODES.CUSTOM_FIELD_VALUE_INVALID,
+                    'One or more custom fields are invalid.',
+                    err.errors.map((e) => ({ path: e.field, issue: e.message })),
+                  );
+                }
+                throw err;
+              }
+            }
+          : undefined;
+      const org = await deps.commandBus.run(
+        makeAdminPatchOrganizationCommand({
+          organizationId: request.params.id,
+          changes,
+          assertCurrent: (current) => assertVersion(current.updatedAt, expectedUpdatedAt),
+          mergeCustomFieldValues,
+        }),
       );
       return { data: serializeOrg(org) };
+    },
+  );
+
+  // ── Sales channels (feature 154) ───────────────────────────────────────
+  // The stores an Organization's members may sign in and shop on, managed from
+  // the Organization's own page, and the admin create that chooses them.
+  // `specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2–§3.
+
+  if (deps.salesChannelMembership) {
+    const membership = deps.salesChannelMembership;
+
+    /**
+     * The assignment and every channel it may hold — inactive ones included and
+     * flagged, since an Organization may be assigned to one and a form that
+     * could not show it would drop it on the next save. Answered here, behind
+     * this module's read codes, so the panel needs no `sales_channels:read`:
+     * the delivery-methods precedent (`/api/v1/admin/delivery-methods/sales-channels`).
+     */
+    const channelOptions = async (
+      em: EntityManager,
+    ): Promise<OrganizationSalesChannelsResponse['data']['options']> =>
+      (await em.find(SalesChannel, {}, { orderBy: { code: 'asc' } })).map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        active: c.active,
+        systemDefault: c.systemDefault,
+      }));
+
+    const channelAssignmentOf = async (
+      em: EntityManager,
+      organizationId: string,
+    ): Promise<OrganizationSalesChannelsResponse['data']> => {
+      const [assigned, options] = await Promise.all([
+        membership.listChannelsForEntity('organization', organizationId),
+        channelOptions(em),
+      ]);
+      return {
+        organizationId,
+        assignedSalesChannelIds: assigned.map((c) => c.id).sort(),
+        options,
+      };
+    };
+
+    /**
+     * The Organization, when it exists. Who may reach it (issue #515) is the
+     * route's `organizationInReach` preHandler, as on every `/:id` route here
+     * (#698).
+     */
+    const requireOrganization = async (em: EntityManager, id: string): Promise<Organization> => {
+      if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      const org = await em.findOne(Organization, { id, deletedAt: null });
+      if (!org) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      return org;
+    };
+
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      { preHandler: [customersRead, organizationInReach] },
+      async (request) => {
+        const em = emFactory();
+        await requireOrganization(em, request.params.id);
+        return { data: await channelAssignmentOf(em, request.params.id) };
+      },
+    );
+
+    /**
+     * Replace the whole set: `organization.sales_channels.set`, the Command
+     * `organizationCommandPort.setSalesChannels` runs too
+     * (`specs/186-aggregate-ports/` T029, research R-16.1). The kernel's
+     * membership writer enlists in the Command's transaction — one
+     * `sales_channel.membership.changed` entry per membership added or
+     * removed, with the acting admin, beside the Command's own `organization`
+     * entry — and drops the access cache after the commit, so the
+     * Organization's next request is decided on the new set. The same set
+     * again is a no-op that records nothing.
+     */
+    app.put<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      {
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
+        schema: { body: OrganizationSalesChannelsUpdateBodySchema },
+      },
+      async (request) => {
+        const body = OrganizationSalesChannelsUpdateBodySchema.parse(request.body);
+        await deps.commandBus.run(
+          makeSetSalesChannelsCommand(
+            { membership },
+            { organizationId: request.params.id, salesChannelIds: body.salesChannelIds },
+          ),
+        );
+        return { data: await channelAssignmentOf(emFactory(), request.params.id) };
+      },
+    );
+
+    if (deps.commandBus) {
+      const commandBus = deps.commandBus;
+      const dictionaryValidator = deps.dictionaryValidator;
+
+      // The options of the *New organization* form's *Sales channels* field,
+      // before there is an Organization to ask about. Gated on the create's own
+      // code: the form is its only reader. A static segment, so it is matched
+      // ahead of `/:id`.
+      app.get(
+        '/api/v1/admin/organizations/sales-channel-options',
+        { preHandler: requireAdmin('customers:manage') },
+        async () => ({ data: await channelOptions(emFactory()) }),
+      );
+
+      app.post(
+        '/api/v1/admin/organizations',
+        {
+          preHandler: requireAdmin('customers:manage'),
+          schema: { body: AdminOrganizationCreateBodySchema },
+        },
+        async (request, reply) => {
+          const body = AdminOrganizationCreateBodySchema.parse(request.body);
+          // `specs/177-tax-id-scope/` FR-018 — naming a parent is parentage, the
+          // tenancy graph: an unscoped administrator only (D-260, as the parent
+          // route below).
+          if (body.parentId !== undefined) assertUnscoped('Only a platform administrator can create an organization under a parent.');
+          await assertCountryAvailable(dictionaryValidator, body.registeredAddress.country);
+          await assertSalesChannelsExist(emFactory(), body.salesChannelIds);
+          const org = await runOrganizationWrite(
+            commandBus,
+            makeCreateOrganizationCommand(
+              {
+                membership,
+                ...(deps.treeService ? { tree: deps.treeService } : {}),
+                ...(customFieldValues ? { customFieldValues } : {}),
+              },
+              body,
+            ),
+            () => taxIdExistsRefusal(),
+          );
+          reply.status(201);
+          return { data: serializeOrg(org) };
+        },
+      );
+    }
+  }
+
+  // ── Personal → company conversion (`specs/177-tax-id-scope/`, FR-030 … FR-041) ──
+  // The gate is the preHandler (`module-admin-surfaces.md` item 3); the VAT
+  // validation, when asked for, runs after the conversion committed and never
+  // rolls it back (D-290 / OD-2). No reverse route exists (FR-041).
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/organizations/:id/convert-to-company',
+    {
+      preHandler: [
+        requireAdmin('organizations:convert-to-company'),
+        organizationInReach,
+        // `validateTaxId` runs a VAT validation, a `customers:manage` write
+        // (`POST …/vat-validations`); the conversion code alone does not
+        // carry it (review finding 6).
+        async (request, reply) => {
+          if ((request.body as { validateTaxId?: unknown } | undefined)?.validateTaxId === true) {
+            await requireAdmin('customers:manage')(request, reply);
+          }
+        },
+      ],
+      schema: { body: adminOrganizationConvertToCompanyBodySchema },
+    },
+    async (request) => {
+      if (!isUuidShape(request.params.id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
+      const { validateTaxId, ...input } = adminOrganizationConvertToCompanyBodySchema.parse(request.body);
+      await assertCountryAvailable(deps.dictionaryValidator, input.registeredAddress.country);
+      const org = await runOrganizationWrite(
+        deps.commandBus,
+        makeConvertToCompanyCommand(
+          { accounts: deps.customerAccountRead },
+          { organizationId: request.params.id, input },
+        ),
+        () => taxIdExistsRefusal(),
+      );
+      // The conversion has committed; a cache that cannot be dropped is the
+      // role cache's own expiry to repair, not a failed request (review finding 7).
+      await deps.roleCache?.dropAndAnnounce(org.id).catch((err: unknown) => {
+        request.log.warn({ err, organizationId: org.id }, 'organizations: role cache not dropped after a conversion');
+      });
+      let vatValidation: { outcome: string; provider: string | null } | null = null;
+      if (validateTaxId && taxIdValidationService) {
+        try {
+          const result = await taxIdValidationService.trigger(org.id, {
+            providerHint: 'auto',
+            actorAdminUserId: resolveAdminUserId(request),
+          });
+          vatValidation = { outcome: result.record.outcome, provider: result.record.provider ?? null };
+        } catch (err) {
+          request.log.warn({ err, organizationId: org.id }, 'organizations: VAT validation after a conversion failed');
+          vatValidation = { outcome: 'failed', provider: null };
+        }
+      }
+      const fresh = await emFactory().findOneOrFail(Organization, { id: org.id });
+      return { data: serializeOrg(fresh), vatValidation };
+    },
+  );
+
+  // ── Tax-ID correction (issue #1040, follow-up to `specs/177-tax-id-scope/`) ──
+  // A live company's tax ID, corrected in place. The gate is the preHandler
+  // (`module-admin-surfaces.md` item 3); the VAT validation, when asked for,
+  // runs after the change committed and never rolls it back (D-290 / OD-2).
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/organizations/:id/change-tax-id',
+    {
+      preHandler: [
+        requireAdmin('organizations:change-tax-id'),
+        organizationInReach,
+        // As the conversion: `validateTaxId` runs a VAT validation, a
+        // `customers:manage` write the change-tax-id code alone does not carry.
+        async (request, reply) => {
+          if ((request.body as { validateTaxId?: unknown } | undefined)?.validateTaxId === true) {
+            await requireAdmin('customers:manage')(request, reply);
+          }
+        },
+      ],
+      schema: { body: adminOrganizationChangeTaxIdBodySchema },
+    },
+    async (request) => {
+      const { validateTaxId, ...input } = adminOrganizationChangeTaxIdBodySchema.parse(request.body);
+      const { organization, changed } = await runOrganizationWrite(
+        deps.commandBus,
+        makeChangeTaxIdCommand({ organizationId: request.params.id, input }),
+        () => taxIdExistsRefusal(),
+      );
+      let vatValidation: { outcome: string; provider: string | null } | null = null;
+      if (validateTaxId && taxIdValidationService) {
+        try {
+          const result = await taxIdValidationService.trigger(organization.id, {
+            providerHint: 'auto',
+            actorAdminUserId: resolveAdminUserId(request),
+          });
+          vatValidation = { outcome: result.record.outcome, provider: result.record.provider ?? null };
+        } catch (err) {
+          request.log.warn({ err, organizationId: organization.id }, 'organizations: VAT validation after a tax-ID change failed');
+          vatValidation = { outcome: 'failed', provider: null };
+        }
+      }
+      const fresh = await emFactory().findOneOrFail(Organization, { id: organization.id });
+      return { data: serializeOrg(fresh), changed, vatValidation };
     },
   );
 
@@ -354,21 +892,18 @@ export async function registerOrganizationsAdminRoutes(
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/approve',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: approveOrganizationSchema },
       },
       async (request) => {
         const body = approveOrganizationSchema.parse(request.body);
-        const rid = request.headers['x-request-id'];
         try {
           const org = await moderationService.approve(request.params.id, {
             expectedVersion: body.expectedVersion,
-            actorAdminUserId: resolveAdminUserId(request),
-            requestId: typeof rid === 'string' ? rid : null,
           });
           return { data: serializeOrg(org) };
         } catch (err) {
-          throw mapModerationError(err);
+          throw await moderationRefusal(err, request);
         }
       },
     );
@@ -376,23 +911,20 @@ export async function registerOrganizationsAdminRoutes(
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/reject',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: rejectOrganizationSchema },
       },
       async (request) => {
         const body = rejectOrganizationSchema.parse(request.body);
-        const rid = request.headers['x-request-id'];
         try {
           const org = await moderationService.reject(request.params.id, {
             expectedVersion: body.expectedVersion,
             reason: body.reason,
             notifyCustomerEmail: body.notifyCustomerEmail,
-            actorAdminUserId: resolveAdminUserId(request),
-            requestId: typeof rid === 'string' ? rid : null,
           });
           return { data: serializeOrg(org) };
         } catch (err) {
-          throw mapModerationError(err);
+          throw await moderationRefusal(err, request);
         }
       },
     );
@@ -400,22 +932,19 @@ export async function registerOrganizationsAdminRoutes(
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/block',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: blockOrganizationSchema },
       },
       async (request) => {
         const body = blockOrganizationSchema.parse(request.body);
-        const rid = request.headers['x-request-id'];
         try {
           const org = await moderationService.block(request.params.id, {
             expectedVersion: body.expectedVersion,
             reason: body.reason ?? null,
-            actorAdminUserId: resolveAdminUserId(request),
-            requestId: typeof rid === 'string' ? rid : null,
           });
           return { data: serializeOrg(org) };
         } catch (err) {
-          throw mapModerationError(err);
+          throw await moderationRefusal(err, request);
         }
       },
     );
@@ -423,21 +952,18 @@ export async function registerOrganizationsAdminRoutes(
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/unblock',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: unblockOrganizationSchema },
       },
       async (request) => {
         const body = unblockOrganizationSchema.parse(request.body);
-        const rid = request.headers['x-request-id'];
         try {
           const org = await moderationService.unblock(request.params.id, {
             expectedVersion: body.expectedVersion,
-            actorAdminUserId: resolveAdminUserId(request),
-            requestId: typeof rid === 'string' ? rid : null,
           });
           return { data: serializeOrg(org) };
         } catch (err) {
-          throw mapModerationError(err);
+          throw await moderationRefusal(err, request);
         }
       },
     );
@@ -449,9 +975,12 @@ export async function registerOrganizationsAdminRoutes(
   if (restrictionService) {
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/restrictions',
-      { preHandler: requireAdmin('customers:manage') },
+      { preHandler: [requireAdmin('customers:manage'), organizationInReach] },
       async (request) => {
-        const data = await restrictionService.readAllowLists(request.params.id);
+        assertOrganizationIdShape(request.params.id);
+        const data = await restrictionService
+          .readAllowLists(request.params.id)
+          .catch(rethrowOrganizationNotFound);
         return { data };
       },
     );
@@ -459,7 +988,7 @@ export async function registerOrganizationsAdminRoutes(
     app.put<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/restrictions',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: replaceOrgRestrictionsSchema },
       },
       async (request) => {
@@ -480,7 +1009,7 @@ export async function registerOrganizationsAdminRoutes(
       app.patch<{ Params: { id: string } }>(
         url,
         {
-          preHandler: requireAdmin('customers:manage'),
+          preHandler: [requireAdmin('customers:manage'), organizationInReach],
           schema: { body: patchOrgRestrictionsSchema },
         },
         async (request) => {
@@ -506,7 +1035,7 @@ export async function registerOrganizationsAdminRoutes(
   if (effectivePriceListsService) {
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/applicable-price-lists',
-      { preHandler: requireAdmin('customers:manage') },
+      { preHandler: [requireAdmin('customers:manage'), organizationInReach] },
       async (request) => {
         const items = await effectivePriceListsService.listApplicable(request.params.id);
         return { items };
@@ -521,48 +1050,34 @@ export async function registerOrganizationsAdminRoutes(
   if (taxIdValidationService) {
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/vat-validations',
-      { preHandler: requireAdmin('customers:manage') },
+      { preHandler: [requireAdmin('customers:manage'), organizationInReach] },
       async (request) => {
         const items = await taxIdValidationService.listForOrganization(request.params.id);
-        return {
-          items: items.map((r) => ({
-            id: r.id,
-            provider: r.provider,
-            outcome: r.outcome,
-            taxIdValue: r.taxIdValue,
-            legalNameReturned: r.legalNameReturned ?? null,
-            addressReturned: r.addressReturned ?? null,
-            errorKind: r.errorKind ?? null,
-            requestedByAdminUserId: r.requestedByAdminUserId ?? null,
-            createdAt: r.createdAt.toISOString(),
-          })),
-        };
+        // Feature 173 — typed by `organizationTaxIdValidationRecordSchema`, with
+        // where the row came from, a registration row's registry snapshot and
+        // submitted values, and the divergence computed on read (research R-14).
+        return { items: items.map(serializeTaxIdValidation) };
       },
     );
 
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/vat-validations',
       {
-        preHandler: requireAdmin('customers:manage'),
+        preHandler: [requireAdmin('customers:manage'), organizationInReach],
         schema: { body: triggerVatValidationSchema },
       },
       async (request) => {
         const body = triggerVatValidationSchema.parse(request.body ?? {});
-        const result = await taxIdValidationService.trigger(request.params.id, {
-          providerHint: body.providerHint,
-          applyAutoFill: body.applyAutoFill,
-          actorAdminUserId: resolveAdminUserId(request),
-        });
+        assertOrganizationIdShape(request.params.id);
+        const result = await taxIdValidationService
+          .trigger(request.params.id, {
+            providerHint: body.providerHint,
+            applyAutoFill: body.applyAutoFill,
+            actorAdminUserId: resolveAdminUserId(request),
+          })
+          .catch(rethrowOrganizationNotFound);
         return {
-          id: result.record.id,
-          provider: result.record.provider,
-          outcome: result.record.outcome,
-          taxIdValue: result.record.taxIdValue,
-          legalNameReturned: result.record.legalNameReturned ?? null,
-          addressReturned: result.record.addressReturned ?? null,
-          errorKind: result.record.errorKind ?? null,
-          requestedByAdminUserId: result.record.requestedByAdminUserId ?? null,
-          createdAt: result.record.createdAt.toISOString(),
+          ...serializeTaxIdValidation(result.record),
           organization: result.organization,
         };
       },
@@ -572,22 +1087,24 @@ export async function registerOrganizationsAdminRoutes(
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id/members/invite',
     {
-      preHandler: requireAdmin('customers:manage'),
-      schema: { body: inviteMemberRequestSchema },
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
+      schema: { body: inviteMemberToRoleRequestSchema },
     },
     async (request, reply) => {
-      const body = inviteMemberRequestSchema.parse(request.body);
+      const body = inviteMemberToRoleRequestSchema.parse(request.body);
+      const em = emFactory();
+      // The Organization must be one the operator can see; the invitation
+      // Command then audits against it, naming the operator (FR-065).
+      if (!isUuidShape(request.params.id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
+      const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
+      if (!org) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
       const result = await invitationService.invite(
-        { organizationId: request.params.id, customerAccountId: null },
-        { email: body.email, ...(body.role ? { role: body.role } : {}) },
-      );
-      await audit(
-        request,
-        'organization.invite_sent',
-        'organization_invitation',
-        result.invitation.id,
-        null,
-        { invitationId: result.invitation.id, email: result.invitation.email },
+        { organizationId: org.id, customerAccountId: null },
+        { email: body.email, ...(body.roleId ? { roleId: body.roleId } : {}) },
       );
       reply.status(201);
       return {
@@ -602,29 +1119,47 @@ export async function registerOrganizationsAdminRoutes(
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id/members',
     {
-      preHandler: requireAdmin('customers:manage'),
-      schema: { body: adminDirectMemberRequestSchema },
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
+      schema: { body: adminDirectMemberToRoleRequestSchema },
     },
     async (request, reply) => {
       const em = emFactory();
-      const body = adminDirectMemberRequestSchema.parse(request.body);
+      const body = adminDirectMemberToRoleRequestSchema.parse(request.body);
+      if (!isUuidShape(request.params.id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
       const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
       if (!org) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
       }
       // Feature 051 — a personal (B2C) org is single-member; no direct add.
       if (org.isPersonal) {
+        // Issue #629 (#86) — the organization refuses a well-formed request: a
+        // code of its own, the token naming the action.
         throw new HttpError(
           422,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.ORGANIZATION_PERSONAL,
           'A personal (individual) organization cannot have additional members.',
+          { code: 'add_member', organizationId: org.id, organizationName: org.name },
         );
       }
-      const role = body.role ?? 'regular_user';
+      // The role named — a role of this Organization, `404` for any other
+      // (FR-005) — else its *Member* role (`specs/170-organization-roles/`
+      // WP-03, FR-062).
+      const role = body.roleId
+        ? await em.findOne(OrganizationRole, { id: body.roleId, organizationId: org.id })
+        : await em.findOne(OrganizationRole, { id: await predefinedRoleIdOn(em, org.id, 'member'), organizationId: org.id });
+      if (!role) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization role not found.');
+      }
+      // Feature 175 (FR-018) — the member's values, validated with the
+      // administrator's rules **before** the account write, so a refusal
+      // creates nothing; `customer_accounts` stores the result as given.
+      const memberValues = await validatedCustomerValues(body.customFieldValues);
       // The duplicate check and the argon2 hash both moved to the owner's side
       // of the port with the write; `create` raises the same 409
       // `EMAIL_ALREADY_REGISTERED`.
-      const customer = await deps.customerAccountWrite.create({
+      const customer = await deps.customerAccountCommandPort.create({
         organizationId: org.id,
         // Handed over as typed: the write port folds it, so this surface
         // cannot disagree with the one the buyer registers through.
@@ -632,7 +1167,8 @@ export async function registerOrganizationsAdminRoutes(
         password: body.password,
         firstName: body.firstName,
         lastName: body.lastName,
-        role,
+        organizationRoleId: role.id,
+        customFieldValues: memberValues,
       });
       if (deps.eventBus) {
         emitCustomerAccountCreated(deps.eventBus, customer.id, org.id);
@@ -643,21 +1179,24 @@ export async function registerOrganizationsAdminRoutes(
         'customer_account',
         customer.id,
         null,
-        { organizationId: org.id, email: customer.email, role: customer.role },
+        // The names of what it was created with, never the address, the
+        // names or the Organization (`specs/conventions/audit-state.md`,
+        // D-288); feature 175 (FR-021) — the custom-field keys stored.
+        memberCreatedAuditState(customer, Object.keys(memberValues)),
       );
       reply.status(201);
-      return { data: serializeMemberDetail(customer) };
+      return { data: await memberDetail(customer, await request.responseLanguage()) };
     },
   );
 
   app.patch<{ Params: { id: string; customerAccountId: string } }>(
     '/api/v1/admin/organizations/:id/members/:customerAccountId/role',
     {
-      preHandler: requireAdmin('customers:manage'),
-      schema: { body: adminPatchMemberRoleRequestSchema },
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
+      schema: { body: adminAssignMemberRoleRequestSchema },
     },
     async (request) => {
-      const body = adminPatchMemberRoleRequestSchema.parse(request.body);
+      const body = adminAssignMemberRoleRequestSchema.parse(request.body);
       const member = await deps.customerAccountRead.findInOrganization(
         request.params.customerAccountId,
         request.params.id,
@@ -667,17 +1206,13 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
-      const updated = await roleService.changeRole(request.params.id, member.id, body.role);
-      await audit(
-        request,
-        'customer_account.admin_role_change',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
-      );
-      return { data: serializeMemberDetail(updated) };
+      // `customer_account.change_role` (`specs/170-organization-roles/` WP-03,
+      // FR-062, FR-065): the role of another Organization is `404`, the last
+      // administrator's demotion `409`, and its one audit entry — against the
+      // Organization, naming the operator — is the record of this change.
+      await deps.customerAccountCommandPort.changeRole(member.id, { organizationRoleId: body.roleId });
+      const updated = await reloadMember(member.organizationId, member.id);
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -686,7 +1221,7 @@ export async function registerOrganizationsAdminRoutes(
   app.patch<{ Params: { id: string; customerAccountId: string } }>(
     '/api/v1/admin/organizations/:id/members/:customerAccountId/rollup',
     {
-      preHandler: requireAdmin('customers:manage'),
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
       schema: { body: adminSetMemberRollupRequestSchema },
     },
     async (request) => {
@@ -700,27 +1235,20 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
-      const updated = await deps.customerAccountWrite.setSubtreeRollup(
-        member.id,
-        body.subtreeRollupEnabled,
-      );
-      await audit(
-        request,
-        'customer_account.admin_rollup_change',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
-      );
-      return { data: serializeMemberDetail(updated) };
+      // `customer_account.set_subtree_rollup` (issue #1338): the owner's
+      // Command, whose one audit entry — naming the operator — commits with
+      // the write and replaces the hand audit `.admin_rollup_change`.
+      const updated = await deps.customerAccountCommandPort.setSubtreeRollup(member.id, {
+        enabled: body.subtreeRollupEnabled,
+      });
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
   app.patch<{ Params: { id: string; customerAccountId: string } }>(
     '/api/v1/admin/organizations/:id/members/:customerAccountId',
     {
-      preHandler: requireAdmin('customers:manage'),
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
       schema: { body: adminPatchMemberProfileRequestSchema },
     },
     async (request) => {
@@ -734,30 +1262,24 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
       // The uniqueness check, the lower-casing and the "a changed address is
       // no longer verified" rule all went with the write: they are properties
       // of the column, not of this screen.
-      const updated = await deps.customerAccountWrite.updateProfile(member.id, {
+      const updated = await deps.customerAccountCommandPort.updateProfile(member.id, {
         ...(body.email !== undefined ? { email: body.email } : {}),
         ...(body.firstName !== undefined ? { firstName: body.firstName } : {}),
         ...(body.lastName !== undefined ? { lastName: body.lastName } : {}),
       });
-      await audit(
-        request,
-        'customer_account.admin_profile_update',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
-      );
-      return { data: serializeMemberDetail(updated) };
+      // The names of what changed, never the address or the names (D-288).
+      const state = memberUpdatedAuditState(member, updated);
+      await audit(request, 'customer_account.admin_profile_update', 'customer_account', updated.id, state.before, state.after);
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
   app.delete<{ Params: { id: string; customerAccountId: string } }>(
     '/api/v1/admin/organizations/:id/members/:customerAccountId',
-    { preHandler: requireAdmin('customers:manage') },
+    { preHandler: [requireAdmin('customers:manage'), organizationInReach] },
     async (request, reply) => {
       const member = await deps.customerAccountRead.findInOrganization(
         request.params.customerAccountId,
@@ -767,14 +1289,15 @@ export async function registerOrganizationsAdminRoutes(
       if (!member) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
-      const before = serializeMemberDetail(member);
-      await roleService.removeMember(request.params.id, member.id);
+      const before = memberAuditState(member);
+      // `customer_account.remove_member`, recorded against the Organization.
+      await deps.customerAccountCommandPort.removeMember(member.id);
       await audit(
         request,
         'customer_account.admin_remove',
         'customer_account',
         member.id,
-        before as Record<string, unknown>,
+        before,
         null,
       );
       return reply.status(204).send();
@@ -784,7 +1307,7 @@ export async function registerOrganizationsAdminRoutes(
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id/recover-admin-access',
     {
-      preHandler: requireAdmin('customers:manage'),
+      preHandler: [requireAdmin('customers:manage'), organizationInReach],
       schema: { body: adminRecoverOrgAccessRequestSchema },
     },
     async (request) => {
@@ -797,21 +1320,16 @@ export async function registerOrganizationsAdminRoutes(
       if (!member) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
-      const before = serializeMemberDetail(member);
-      // Deliberately not `roleService.changeRole`: this is the break-glass
-      // path an operator reaches *because* the organisation has no admin left,
-      // and that method writes its own `customer_account.change_role` audit
-      // row, which would double-count the one below.
-      const updated = await deps.customerAccountWrite.promoteToOrganizationAdmin(member.id);
-      await audit(
-        request,
-        'organization.break_glass_admin_promoted',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
-      );
-      return { data: serializeMemberDetail(updated) };
+      // The break-glass path an operator reaches *because* the organisation
+      // has no administrator left: the administrator-kind role, assigned
+      // through `customer_account.change_role` (`contracts/operator-api.md`
+      // §3), whose audit entry is the record of the promotion. Promoting to
+      // Administrator never trips the last-administrator guard.
+      await deps.customerAccountCommandPort.changeRole(member.id, {
+        organizationRoleId: await predefinedRoleIdOn(emFactory(), member.organizationId, 'administrator'),
+      });
+      const updated = await reloadMember(member.organizationId, member.id);
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -850,20 +1368,19 @@ export async function registerOrganizationsAdminRoutes(
           );
         }
         const body = assignOrganizationParentRequestSchema.parse(request.body);
-        const em = emFactory();
-        const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
-        if (!org) {
-          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-        }
         // A distinct command action for a clean audit label: first-assign /
-        // detach ⇒ set_parent; re-parent of an existing child ⇒ move.
-        const input = { organizationId: request.params.id, parentId: body.parentId };
-        const wasChild = (org.parentId ?? null) !== null;
-        const command =
-          wasChild && body.parentId !== null
-            ? makeMoveCommand({ tree: treeService }, input)
-            : makeSetParentCommand({ tree: treeService }, input);
-        const updated = await commandBus.run(command);
+        // detach ⇒ set_parent; re-parent of an existing child ⇒ move. The
+        // choice is shared with `organizationCommandPort.setParent`.
+        const command = await makePlaceInTreeCommand(
+          emFactory(),
+          { tree: treeService },
+          { organizationId: request.params.id, parentId: body.parentId },
+        );
+        // The deferred `per-tree-root` constraint answers at commit, as the
+        // pre-check would have (`specs/177-tax-id-scope/` FR-021).
+        const updated = await runOrganizationWrite(commandBus, command, () =>
+          taxIdSharedAcrossTreesRefusal([]),
+        );
         return { data: serializeOrg(updated) };
       },
     );
@@ -871,9 +1388,12 @@ export async function registerOrganizationsAdminRoutes(
     // Read the subtree (descendants incl. self), pre-order.
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/subtree',
-      { preHandler: customersRead },
+      { preHandler: [customersRead, organizationInReach] },
       async (request) => {
         const em = emFactory();
+        if (!isUuidShape(request.params.id)) {
+          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+        }
         const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
         if (!org) {
           throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
@@ -886,9 +1406,12 @@ export async function registerOrganizationsAdminRoutes(
     // Read the ancestor chain, nearest-first.
     app.get<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id/ancestors',
-      { preHandler: customersRead },
+      { preHandler: [customersRead, organizationInReach] },
       async (request) => {
         const em = emFactory();
+        if (!isUuidShape(request.params.id)) {
+          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+        }
         const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
         if (!org) {
           throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
@@ -918,6 +1441,9 @@ export async function registerOrganizationsAdminRoutes(
         }
         const body = setCreditInheritanceModeRequestSchema.parse(request.body);
         const em = emFactory();
+        if (!isUuidShape(request.params.id)) {
+          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+        }
         const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
         if (!org) {
           throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
@@ -933,36 +1459,24 @@ export async function registerOrganizationsAdminRoutes(
     // exists (FR-010). Backed by the DB `parent_id ON DELETE RESTRICT`.
     app.delete<{ Params: { id: string } }>(
       '/api/v1/admin/organizations/:id',
-      { preHandler: requireAdmin('customers:manage') },
+      { preHandler: [requireAdmin('customers:manage'), organizationInReach] },
       async (request, reply) => {
-        const em = emFactory();
-        const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
-        if (!org) {
-          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-        }
-        const childCount = await em.count(Organization, {
-          parentId: request.params.id,
-          deletedAt: null,
-        });
-        if (childCount > 0) {
-          throw hasChildrenRefusal();
-        }
-        const before = serializeOrg(org);
-        org.deletedAt = new Date();
-        await em.flush();
-        await audit(request, 'organization.delete', 'organization', org.id, before, null);
+        // The soft delete and its one audit entry commit together (issue #1338).
+        await commandBus.run(makeDeleteOrganizationCommand({ organizationId: request.params.id }));
         return reply.status(204).send();
       },
     );
   }
 }
 
-function serializeOrg(o: Organization): Record<string, unknown> {
+/** The published `adminOrganizationSchema` (issue #599). */
+function serializeOrg(o: Organization): AdminOrganization {
   return {
     id: o.id,
     name: o.name,
     legalName: o.legalName ?? null,
-    taxId: o.taxId,
+    // `null` for a personal organization (`specs/177-tax-id-scope/` O7).
+    taxId: o.taxId ?? null,
     status: o.status,
     vatStatus: o.vatStatus,
     isPersonal: o.isPersonal,
@@ -992,13 +1506,12 @@ function serializeOrg(o: Organization): Record<string, unknown> {
   };
 }
 
-function serializeMemberDetail(m: CustomerAccountRecord): Record<string, unknown> {
+function memberFields(m: CustomerAccountRecord): Omit<AdminOrganizationMember, 'organizationRole'> {
   return {
     id: m.id,
     email: m.email,
     firstName: m.firstName,
     lastName: m.lastName,
-    role: m.role,
     subtreeRollupEnabled: m.subtreeRollupEnabled,
     emailVerifiedAt: m.emailVerifiedAt?.toISOString() ?? null,
     twoFactorEnabled: m.twoFactorEnabled,
@@ -1007,6 +1520,15 @@ function serializeMemberDetail(m: CustomerAccountRecord): Record<string, unknown
     updatedAt: m.updatedAt.toISOString(),
   };
 }
+
+/**
+ * A member as an answer shows it (`specs/170-organization-roles/` WP-03; FR-008,
+ * FR-073) — the published `adminOrganizationMemberSchema` (issue #599).
+ */
+function serializeMemberDetail(m: CustomerAccountRecord, organizationRole: OrganizationRoleRef): AdminOrganizationMember {
+  return { ...memberFields(m), organizationRole };
+}
+
 
 /**
  * Reads the admin user id from whichever actor decoration is available.
@@ -1037,55 +1559,27 @@ function resolveAdminUserId(request: FastifyRequest): string | null {
  * Maps OrganizationRestrictionService errors to HTTP. Same 409 contract as
  * the moderation endpoints (the body carries `currentVersion`).
  */
-function mapRestrictionError(err: unknown): HttpError {
-  if (err instanceof RestrictionVersionMismatchError) {
-    return new HttpError(
-      409,
-      ERROR_CODES.VERSION_CONFLICT,
-      'Organization was modified by another request. Refresh and retry.',
-      {
-        code: 'organization_version_mismatch',
-        currentVersion: err.currentVersion,
-      },
-    );
+/**
+ * Issue #793 — an id that is not a UUID names no Organization: `404`, before
+ * PostgreSQL turns it into a 500 (`invalid input syntax for type uuid`).
+ */
+function assertOrganizationIdShape(id: string): void {
+  if (!isUuidShape(id)) {
+    throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
   }
-  if (err instanceof HttpError) return err;
-  return new HttpError(
-    500,
-    ERROR_CODES.INTERNAL,
-    err instanceof Error ? err.message : 'Internal error.',
-  );
 }
 
-function mapModerationError(err: unknown): HttpError {
-  if (err instanceof OrganizationVersionMismatchError) {
-    return new HttpError(
-      409,
-      ERROR_CODES.VERSION_CONFLICT,
-      'Organization was modified by another request. Refresh and retry.',
-      {
-        code: 'organization_version_mismatch',
-        currentVersion: err.currentVersion,
-      },
-    );
+/**
+ * Issue #793 — the services read the Organization with `findOneOrFail`, whose
+ * `NotFoundError` reached the error handler unmapped and answered 500. An
+ * unknown or soft-deleted Organization is the route's `404`, as on every other
+ * Organization route; anything else is rethrown as it was.
+ */
+function rethrowOrganizationNotFound(err: unknown): never {
+  if (err instanceof NotFoundError) {
+    throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
   }
-  if (err instanceof OrganizationStatusGuardError) {
-    return new HttpError(
-      422,
-      ERROR_CODES.VALIDATION_FAILED,
-      `Organization is in status '${err.currentStatus}', cannot perform an action that requires '${err.requiredStatus}'.`,
-      { currentStatus: err.currentStatus, requiredStatus: err.requiredStatus },
-    );
-  }
-  if (err instanceof OrganizationNotFoundError) {
-    return new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-  }
-  if (err instanceof HttpError) return err;
-  return new HttpError(
-    500,
-    ERROR_CODES.INTERNAL,
-    err instanceof Error ? err.message : 'Internal error.',
-  );
+  throw err;
 }
 
 void (null as FastifyRequest | null);

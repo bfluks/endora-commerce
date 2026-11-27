@@ -22,6 +22,12 @@ export const CUSTOMER_ITEM_KEYS = [
   'taxRate',
   'packagingUnitName',
   'packagingUnitBaseQuantity',
+  // Feature 155 — the catalogue unit the line resolved to (analyze F14).
+  'packagingUnitId',
+  // Feature 159 — the line's group (one of the reply's non-empty `itemGroups`)
+  // and its order within its section.
+  'groupId',
+  'position',
 ] as const;
 
 /** The event keys a customer reply carries; `payload` is filtered on its own. */
@@ -64,18 +70,37 @@ export const CUSTOMER_PAYLOAD_KEYS = new Set([
  * quote PDF to — possibly someone other than the requester — and is the
  * administrators' record of the send, shown on the admin History only.
  */
-export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent']);
+export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent', 'custom-field-carry-skipped']);
 
-/** The stored events a customer may see. */
-export function customerEventsOf<T extends { readonly eventType: string }>(events: readonly T[]): T[] {
-  return events.filter((event) => !ADMIN_ONLY_EVENT_TYPES.has(event.eventType));
+/**
+ * The stored events a customer may see, in their stored order.
+ *
+ * `specs/192-quote-request-draft-share/` (FR-012, research R-14) — for a quote
+ * an operator shared (`sharedAt` set), the customer's history starts at the
+ * `shared` event: the creation, the automatic note and every edit made while
+ * the quote was unshared are the operators' alone. The cut is by position, not
+ * by comparing timestamps, which two statements write. A shared quote without
+ * its `shared` event shows nothing from before it — none can be told apart.
+ */
+export function customerEventsOf<T extends { readonly eventType: string }>(
+  events: readonly T[],
+  sharedAt: Date | null = null,
+): T[] {
+  const from = sharedAt === null ? 0 : events.findIndex((event) => event.eventType === 'shared');
+  const visible = from < 0 ? [] : events.slice(from);
+  return visible.filter((event) => !ADMIN_ONLY_EVENT_TYPES.has(event.eventType));
 }
 
-/** The keys of one `payload.diff` entry (`RfqDiffEntry`). */
+/**
+ * The keys of one `payload.diff` entry (`RfqDiffEntry`). `groupName` (feature
+ * 159, research N-32) names the group of a product on several lines — a group
+ * the customer was shown on that revision.
+ */
 export const CUSTOMER_DIFF_KEYS = new Set([
   'kind',
   'productId',
   'productName',
+  'groupName',
   'quantity',
   'agreedUnitPrice',
   'before',

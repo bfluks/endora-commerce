@@ -1,6 +1,7 @@
-import { purchaseConversionClaimResponseSchema } from '@endora-commerce/contracts';
+import { purchaseConversionClaimResponseSchema, type OrderPayer } from '@endora-commerce/contracts';
 import { apiGetAuthed, apiMutate } from './mutations';
 import type { RequestContext } from './client';
+import type { CheckoutBelowMinimumLine } from '../cartMinimum';
 
 /*
  * Which calls in this file carry the sales channel, and why the others do not.
@@ -73,6 +74,17 @@ export interface OrderItem {
   lineTotal: number;
   productSnapshot: { sku: string; name: string; primaryAssetUrl: string | null };
   variantSnapshot: { sku: string; label: string } | null;
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId?: string | null;
+  /** Feature 159 — 0-based order within the line's section. */
+  position?: number;
+}
+
+/** Feature 159 — a named group of an order's lines, read-only after placement. */
+export interface OrderItemGroup {
+  id: string;
+  name: string;
+  position: number;
 }
 
 export interface OrderSummary {
@@ -95,6 +107,9 @@ export interface OrderSummary {
   } | null;
   deliveryMethod: { id: string; code: string; name: Record<string, string>; cost: number };
   paymentMethod: { id: string; code: string; name: Record<string, string>; kind: string };
+  /** Feature 159 — the order's groups, in order; absent on an older backend. */
+  itemGroups?: OrderItemGroup[];
+  /** In display order: each group's lines, then the ungrouped ones. */
   items: OrderItem[];
   subtotal: number;
   taxTotal: number;
@@ -103,6 +118,8 @@ export interface OrderSummary {
   total: number;
   currency: string;
   customerNote: string | null;
+  /** `specs/182-related-payers/` FR-073 — the Organization billed, when not the buyer; absent on an older backend. */
+  payer?: OrderPayer | null;
   placedAt: string;
   nextAction: NextAction | null;
   /**
@@ -148,7 +165,23 @@ export interface OrderTotalPreview {
   discountTotal: number;
   total: number;
   currency: string;
+  /**
+   * Feature 155 — basket lines placement will refuse (contract §8): below a minimum, or
+   * `product_unavailable` (the product record is gone, no name or minimum). A line breaking
+   * two minima appears twice. Absent from an older backend; read as none.
+   */
+  belowMinimumLines?: CheckoutBelowMinimumLine[];
+  /**
+   * Issue #167 — set when the basket is priced at a quote placement will no longer honour
+   * (`410 QUOTE_VALIDITY_ENDED`): `lapsed` (its validity date passed), `withdrawn` (it no longer
+   * applies), `unavailable` (quote prices cannot be confirmed at all). Absent from an older
+   * backend; read as none.
+   */
+  quoteCommitmentRefusal?: QuoteCommitmentRefusal | null;
 }
+
+/** `quoteCommitmentRefusalSchema` in `@endora-commerce/contracts`. */
+export type QuoteCommitmentRefusal = 'lapsed' | 'withdrawn' | 'unavailable';
 
 /**
  * `ctx` is required for the reason {@link placeOrder} gives: the preview is for
@@ -156,7 +189,13 @@ export interface OrderTotalPreview {
  */
 export async function previewOrderTotal(
   sessionCookie: string,
-  payload: { deliveryMethodId: string; paymentMethodId: string; billingAddressId?: string },
+  payload: {
+    deliveryMethodId: string;
+    paymentMethodId: string;
+    billingAddressId?: string;
+    /** `specs/182-related-payers/` FR-064 — preview as placement with this payer. */
+    payerOrganizationId?: string;
+  },
   ctx: RequestContext,
 ): Promise<OrderTotalPreview> {
   const result = await apiMutate<OrderTotalPreview>({

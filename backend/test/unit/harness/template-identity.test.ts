@@ -12,6 +12,7 @@ import {
   templateIdentity,
   type MigrationSourceRoot,
 } from '../../template-identity.js';
+import { templateTaxIdScope } from '../../template-seed.js';
 import {
   configuredMigrations,
   type RegisteredMigration,
@@ -161,7 +162,13 @@ describe('the migration set this run has', () => {
     // Every registered migration has a file, so the walk is never short of the
     // registry — that reconciliation is the refusal proven below.
     expect(identity.migrationFiles).toBeGreaterThanOrEqual(MIGRATION_NAMES.length);
-    expect(identity.sources.length).toBe(identity.migrationFiles + TEMPLATE_SEED_SOURCES.length);
+    // `specs/177-tax-id-scope/` R-16: a `per-tree-root` run also records the
+    // scope as one `env:` source, proven by the scope case below.
+    const envSources = identity.sources.filter((source) => source.path.startsWith('env:')).length;
+    expect(envSources).toBe(templateTaxIdScope() === 'global' ? 0 : 1);
+    expect(identity.sources.length).toBe(
+      identity.migrationFiles + TEMPLATE_SEED_SOURCES.length + envSources,
+    );
   });
 
   it('floors every origin the registry names, on its own', async () => {
@@ -211,6 +218,30 @@ describe('the migration set this run has', () => {
     const identity = await templateIdentity();
     for (const declared of TEMPLATE_SEED_SOURCES) {
       expect(identity.sources.map((source) => source.path)).toContain(declared);
+    }
+  });
+
+  /**
+   * `specs/177-tax-id-scope/` R-16 — `ORGANIZATIONS_TAX_ID_SCOPE=per-tree-root`
+   * builds a template in that scope, so it must be a template of its own: a
+   * clone of the `global` one would run the per-tree-root job in `global`.
+   */
+  it('moves with the tax-ID scope the template is built in, and refuses an unknown one', async () => {
+    const previous = process.env['ORGANIZATIONS_TAX_ID_SCOPE'];
+    try {
+      delete process.env['ORGANIZATIONS_TAX_ID_SCOPE'];
+      const unset = await templateIdentity();
+      process.env['ORGANIZATIONS_TAX_ID_SCOPE'] = 'global';
+      expect((await templateIdentity()).digest).toBe(unset.digest);
+      process.env['ORGANIZATIONS_TAX_ID_SCOPE'] = 'per-tree-root';
+      const perTreeRoot = await templateIdentity();
+      expect(perTreeRoot.digest).not.toBe(unset.digest);
+      expect(perTreeRoot.sources.map((source) => source.path)).toContain('env:ORGANIZATIONS_TAX_ID_SCOPE');
+      process.env['ORGANIZATIONS_TAX_ID_SCOPE'] = 'per-branch';
+      await expect(templateIdentity()).rejects.toThrow(/not a tax-ID scope/);
+    } finally {
+      if (previous === undefined) delete process.env['ORGANIZATIONS_TAX_ID_SCOPE'];
+      else process.env['ORGANIZATIONS_TAX_ID_SCOPE'] = previous;
     }
   });
 });
@@ -499,6 +530,66 @@ describe('the harness reads the order the platform runs', () => {
     expect(REGISTERED_MIGRATIONS.map((migration) => migration.name)).toEqual(MIGRATION_NAMES);
     expect(new Set(REGISTERED_MIGRATIONS.map((migration) => migration.origin))).toEqual(
       new Set(MIGRATION_REGISTRY.map((entry) => entry.origin ?? 'core')),
+    );
+  });
+});
+
+/**
+ * `specs/190-overlay-full-modules/` FR-039 – FR-040 (T077) — a deployment whose
+ * overlay modules ship migrations is a different platform, so a test that
+ * selects it in-process gets a template of its own, and a bare-core test in the
+ * same process keeps the bare-core one. No suite leg runs with the deployment
+ * selected (OR-13); the few tests that need overlay tables ask for it here.
+ *
+ * `example` ships `overlay_notes_fixture`, the reference overlay module that owns
+ * a table, so its identity holds one origin more than bare core's.
+ */
+describe('a deployment selected in-process is identified as its own platform', () => {
+  const EXAMPLE: NodeJS.ProcessEnv = { ...process.env, DEPLOYMENT: 'example' };
+  const BARE: NodeJS.ProcessEnv = { ...process.env, DEPLOYMENT: '' };
+
+  it('`DEPLOYMENT=example` digests differently from bare core, and bare core keeps its digest', async () => {
+    const bare = await templateIdentity({ env: BARE });
+    const example = await templateIdentity({ env: EXAMPLE });
+    const bareAgain = await templateIdentity({ env: BARE });
+
+    expect(example.digest).not.toBe(bare.digest);
+    expect(bareAgain.digest).toBe(bare.digest);
+    expect(bare.origins.map((population) => population.origin)).not.toContain('overlay');
+  });
+
+  it('floors the overlay migrations as their own origin, read from the overlay module itself', async () => {
+    const example = await templateIdentity({ env: EXAMPLE });
+    const overlay = example.origins.find((population) => population.origin === 'overlay');
+    expect(overlay).toBeDefined();
+    expect(overlay!.registered).toBeGreaterThan(0);
+    expect(overlay!.migrationFiles).toBe(overlay!.registered);
+    expect(example.sources.map((source) => source.path)).toContainEqual(
+      expect.stringMatching(/^src\/apps\/example\/modules\/overlay_notes_fixture\/migrations\/\d{8}T\d{6}_overlay_notes_fixture_[a-z0-9_]+\.ts$/),
+    );
+    expect(example.migrations).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Migration\d{8}T\d{6}OverlayNotesFixture/)]),
+    );
+  });
+
+  it('identifies a generated schema-extension step by its name and the generator, not by a file (FR-065)', async () => {
+    // `overlay_notes_fixture` declares an `x_*` column, so `example` registers a
+    // step no file holds: its class is synthesised from the declarations, whose
+    // hash its name carries. It is floored at zero, and what turns those
+    // declarations into DDL is read into the digest instead.
+    const example = await templateIdentity({ env: EXAMPLE });
+    const generated = example.origins.find((population) => population.origin === 'generated');
+    expect(generated).toEqual({ origin: 'generated', registered: 1, migrationFiles: 0, sourceFiles: 0 });
+    expect(example.migrations).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Migration10000101T000000OverlayNotesFixtureSchemaExtensions[0-9a-f]{12}$/)]),
+    );
+    expect(example.sources.map((source) => source.path)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/schema-extension-migration\.ts$/)]),
+    );
+    const bare = await templateIdentity({ env: BARE });
+    expect(bare.origins.map((population) => population.origin)).not.toContain('generated');
+    expect(bare.sources.map((source) => source.path)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/schema-extension-migration\.ts$/)]),
     );
   });
 });

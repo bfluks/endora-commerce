@@ -32,6 +32,18 @@ zabezpieczenia cyklu życia chroniące platformę przed danymi bez kanału.
   `tax`, `customer`, `promotion`, `cms-page`. (`inventory-location` jest zarezerwowane na czas, gdy
   moduł inventory wprowadzi tę tabelę).
 
+- **Otwarty dla niezalogowanych odwiedzających** — flaga kanału (`anonymousAccess`, domyślnie
+  włączona). Gdy jest wyłączona, sklep obsługuje wyłącznie zalogowanych klientów. To, czy
+  niezalogowani odwiedzający widzą *ceny* w otwartym sklepie, nie jest flagą kanału: decyduje o tym
+  tryb wyświetlania cen dla niezalogowanych (`pricing.unauthenticated_display_mode`), który można
+  ustawić dla jednego kanału — `none` ukrywa ceny do czasu zalogowania. Dawna flaga kanału
+  `isPublic`, która ukrywała ceny także przed zalogowanymi klientami, została wycofana na jego
+  rzecz.
+
+- **Dostęp klientów** — organizacje obsługiwane przez kanał (przypisanie `organization`) to kanały,
+  w których członkowie danej organizacji mogą się logować i kupować. Brak przypisania oznacza brak
+  dostępu.
+
 - **Przynależność** — relacja wiele-do-jednego dla zamówień i zapytań ofertowych. Każdy wiersz jest w
   chwili złożenia przypisywany do dokładnie jednego kanału, a ze względu na audyt tego przypisania
   nie można zmienić.
@@ -63,6 +75,67 @@ nigdy nie jest używany.
 Każda odpowiedź ma nagłówek `X-Sales-Channel: <resolvedCode>`, aby pamięć podręczna HTTP mogła
 uwzględniać go w `Vary`.
 
+## Kto może korzystać z kanału
+
+Gdy żądanie ma już wyznaczony kanał, jedna reguła rozstrzyga, czy wywołujący może z niego korzystać:
+
+| Wywołujący | Przyjmowany, gdy | W przeciwnym razie |
+|---|---|---|
+| Niezalogowany odwiedzający | kanał jest otwarty dla niezalogowanych odwiedzających | `403 SALES_CHANNEL_SIGN_IN_REQUIRED` |
+| Zalogowany klient (także gdy administrator działa w jego imieniu) | kanał jest przypisany do organizacji klienta | `403 SALES_CHANNEL_NOT_PERMITTED` |
+| Administrator, klucz API | zawsze — ścieżki administracyjne nie są wywołaniami storefrontu, a klucz API jest już powiązany ze swoim kanałem | — |
+
+Odmowa wskazuje kanał w `details.channelCode`, a odpowiedź nadal ma nagłówek `X-Sales-Channel`,
+więc klient wie, który sklep jej odmówił. Nieznany lub nieaktywny kanał jest odrzucany wcześniej,
+tak jak dotąd.
+
+Kilka tras pozostaje dostępnych w każdym aktywnym kanale, bo wywołujący nie jest kupującym w tym
+sklepie albo musi do nich dotrzeć, żeby nim zostać: logowanie, wylogowanie, reset hasła, weryfikacja
+adresu e-mail, rejestracja firmy, zaproszenia, odczyty tożsamości kanału, konfiguracja języków,
+polityka robotów, feedy produktowe i linki newslettera w wiadomościach e-mail. Nie należy do nich
+samodzielna rejestracja klienta indywidualnego (B2C): od razu loguje nowe konto, więc w sklepie
+zamkniętym dla niezalogowanych odwiedzających jest odrzucana.
+
+Logowanie jest sprawdzane według tej samej reguły po potwierdzeniu konta hasłem (lub przez
+zewnętrznego dostawcę tożsamości), a przed utworzeniem sesji, więc klient, którego organizacja nie
+może korzystać ze sklepu, dowiaduje się o tym w formularzu logowania i nie zostaje zalogowany.
+Storefront pokazuje te trzy sytuacje jako stronę logowania z komunikatem, błąd formularza logowania
+i ekran „Brak dostępu do tego sklepu” z listą sklepów, z których konto może korzystać.
+
+Przypisania są przechowywane w przypisaniu `organization` kanału i zarządza się nimi na stronie
+organizacji w panelu administracyjnym. Zmiana obowiązuje od razu na serwerze, który ją zapisał, a na
+każdym innym serwerze w ciągu 30 sekund. Nowa organizacja dostaje kanał sklepu, w którym się
+zarejestrowała; organizacja utworzona w panelu — kanały wybrane w formularzu tworzenia; każda inna
+ścieżka tworzenia — domyślny kanał systemowy. Przyjęcie zaproszenia nie zmienia żadnego
+przypisania.
+
+Przy wprowadzeniu tej reguły każda istniejąca organizacja otrzymała domyślny kanał systemowy oraz
+każdy kanał, w którym miała już zamówienia, więc dotychczasowi klienci zachowali dostęp.
+
+## Język w adresach sklepu {#language-in-urls}
+
+Adres strony sklepu wskazuje jej język pierwszym segmentem ścieżki: `/pl/p/wiertarka`,
+`/en/p/drill`, `/en/c/tools`. Dzięki temu adres oznacza jeden język dla każdego
+odwiedzającego i każdej wyszukiwarki, niezależnie od ustawień przeglądarki czy ciasteczka.
+
+- **Prefiksy są wyliczane, nie wpisywane.** Każdy język kanału dostaje podstawowy kod języka
+  małymi literami (`pl`, `en`); gdy kanał ma dwa warianty jednego języka (`en-US`, `en-GB`),
+  oba dostają pełny kod (`/en-us`, `/en-gb`), a krótki `/en` nadal działa, przekierowując do
+  jednego z nich.
+- **Prefiks języka domyślnego w adresach URL** (dla każdego kanału) decyduje, czy język
+  domyślny też ma prefiks. **Włączone** — każdy adres ma prefiks, a adres bez prefiksu jest
+  przekierowywany (307) do języka wskazanego przez `?lang=`, potem ciasteczko `lang`, potem
+  języki przeglądarki, a na końcu język domyślny. **Wyłączone** — adres bez prefiksu oznacza
+  język domyślny i nigdy nie jest przekierowywany ze względu na język; `/<prefiks domyślny>/…`
+  odpowiada trwałym przekierowaniem (308) na adres bez prefiksu; pozostałe języki mają prefiks.
+- Nowe kanały startują z ustawieniem **włączonym**. Kanały istniejące w chwili aktualizacji
+  platformy do tego zachowania zostały ustawione na **wyłączone**, więc ich adresy się nie
+  zmieniły.
+- Stare linki nadal działają: linki bez prefiksu i dawne linki produktów z `?lang=` są
+  przekierowywane na właściwą stronę we właściwym języku.
+- Linki kanoniczne i `hreflang`, mapy witryny, feedy produktowe i e-maile używają adresów z
+  prefiksem; `x-default` to adres bez prefiksu.
+
 ## Motyw storefrontu
 
 `themeCode` kanału określa, którym zestawem tokenów projektowych storefront się wyświetla — kolory,
@@ -76,8 +149,21 @@ Storefront odczytuje go przez publiczny endpoint kanału:
 GET /api/v1/storefront/sales-channel
 ```
 
-który zwraca kanał **wyznaczony** dla żądania — kod, nazwę wyświetlaną, języki i waluty, `themeCode`
-i `logoUrl` — bez pól przeznaczonych tylko dla panelu (`id`, `active`, `systemDefault`, `version`).
+który zwraca kanał **wyznaczony** dla żądania — kod, nazwę wyświetlaną, języki i waluty, `themeCode`,
+`logoUrl` i `anonymousAccess` — bez pól przeznaczonych tylko dla panelu (`id`, `active`,
+`systemDefault`, `version`). Odpowiada w każdym aktywnym kanale, także zamkniętym dla
+niezalogowanych odwiedzających.
+
+Drugi odczyt odpowiada w imieniu oglądającego, a nie sklepu:
+
+```text
+GET /api/v1/storefront/sales-channel/access
+```
+
+Zwraca, czy wywołujący może korzystać z tego kanału, a jeśli nie — dlaczego (`sign_in_required`
+lub `not_permitted`), a zalogowanemu klientowi także aktywne kanały, z których może korzystać jego
+organizacja: każdy z nazwą i — gdy ustawienie **Storefront URL** kanału jest wypełnione — adresem.
+Odpowiedź nigdy nie trafia do pamięci podręcznej (`Cache-Control: private, no-store`).
 Storefront stosuje motyw po stronie serwera już przy pierwszym renderowaniu, więc pierwszy kod HTML,
 który dostaje przeglądarka kupującego, ma już wygląd marki kanału.
 

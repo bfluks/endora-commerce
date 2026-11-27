@@ -53,7 +53,11 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `import-stock` | `/inventory/import` | `inventory:write` |
 | `open-inventory` | `/inventory` | `inventory:read` |
+| `open-low-stock` | `/inventory/low-stock` | `inventory:read` |
+| `open-stock-notifications` | `/inventory/notifications` | `inventory:read` |
+| `open-warehouses` | `/warehouses` | `inventory:read` |
 
 ## Ustawienia
 

@@ -42,6 +42,7 @@ import {
   PREFIX as BLOCK_RENDERERS_PREFIX,
 } from '../rules/block-renderers.js';
 import { checkBundlePairing, type ModuleUnderCheck } from '../rules/bundle-pairing.js';
+import { checkExtensibleTables, publishedBindings } from '../rules/extensible-tables.js';
 import {
   analyzeSource as commandCoverageAnalyse,
   collectScannedFiles,
@@ -51,6 +52,11 @@ import {
   analyzeSource as containerAnalyse,
   collectModuleFiles,
 } from '../rules/container-imports.js';
+import {
+  analyzeSource as entityDecoratorsAnalyse,
+  collectSourceFiles as collectEntityDecoratorFiles,
+  findingMessage as entityDecoratorsMessage,
+} from '../rules/entity-decorators.js';
 import {
   checkNulBytes,
   isScannablePath,
@@ -90,6 +96,7 @@ import {
 import {
   checkPlatformSurface,
   collectPlatformSurfaceSources,
+  collectPlatformSurfaceTestSources,
   keyOf as platformSurfaceKeyOf,
   remedyOf as platformSurfaceRemedy,
 } from '../rules/platform-surface.js';
@@ -452,6 +459,39 @@ const bundlePairing: PackageRuleHost = (layout) => {
       key: `${finding.kind}|${finding.language ?? '-'}|${layout.keyOf(finding.path)}`,
       location: layout.keyOf(finding.path),
       message: `${finding.kind}: ${finding.detail}`,
+    })),
+  );
+};
+
+/* -------------------------------------------------------- entity-decorators */
+
+const entityDecorators: PackageRuleHost = (layout) => {
+  const id = 'check:entity-decorators';
+  const entry = entryOf(id);
+  const files = collectEntityDecoratorFiles([layout.sourceRoot]);
+  const coverage = coverageOf(layout, files, opensTypeScript);
+  if (isRefusal(coverage)) return unreadable(id, coverage.refusal, null);
+  if (coverage === null) return notApplicable(id, absentDeclaration(entry));
+
+  const readSize: ReadSizeInput = {
+    prefix: '[entity-decorators]',
+    files: files.length,
+    coverage: [coverage],
+  };
+  const short = readSizeOrShortWalk(id, readSize);
+  if (!short.ok) return short.result;
+
+  const findings = files.flatMap((file) =>
+    entityDecoratorsAnalyse(readFileSync(file, 'utf8'), layout.keyOf(file)),
+  );
+  return ran(
+    id,
+    readSize,
+    findings.map((finding) => ({
+      rule: id,
+      key: `${finding.file}|${finding.name}|${finding.specifier}`,
+      location: `${finding.file}:${finding.line}`,
+      message: entityDecoratorsMessage(finding),
     })),
   );
 };
@@ -944,7 +984,15 @@ const platformSurface: PackageRuleHost = (layout) => {
     );
   }
 
-  const sources = new Map(files.map((file) => [layout.keyOf(file), readFileSync(file, 'utf8')]));
+  // The package's tests join the population after the coverage floor, which is
+  // about its production sources: a test is judged on the host subpaths it
+  // names and on nothing else (issue #114).
+  const sources = new Map(
+    [...files, ...collectPlatformSurfaceTestSources(layout.sourceRoot)].map((file) => [
+      layout.keyOf(file),
+      readFileSync(file, 'utf8'),
+    ]),
+  );
   const readSize: ReadSizeInput = {
     prefix: '[platform-surface]',
     files: sources.size,
@@ -1757,6 +1805,65 @@ function ownProvidedNames(sources: ReadonlyMap<string, string>): ReadonlySet<str
   return names;
 }
 
+/* -------------------------------------------------------- extensible-tables */
+
+/**
+ * `specs/178-extensible-columns/` FR-072 over one module package: no migration
+ * of a module owning an extensible table rebuilds it. The subject is derived
+ * from the published bindings, so a package whose module owns none is
+ * `not-applicable` with the sentence saying why; one that owns some and ships
+ * no migration source is `unreadable` — every extensible table is created by a
+ * migration of its owner.
+ */
+const extensibleTables: PackageRuleHost = (layout) => {
+  const id = 'check:extensible-tables';
+  const entry = entryOf(id);
+  const bindings = publishedBindings().filter((binding) => binding.ownerModuleId === layout.moduleId);
+  if (bindings.length === 0) return notApplicable(id, absentDeclaration(entry));
+
+  const directory = join(layout.sourceRoot, 'migrations');
+  let names: string[] = [];
+  try {
+    names = readdirSync(directory).sort();
+  } catch {
+    names = [];
+  }
+  const files = names
+    .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts') && name !== 'index.ts')
+    .map((name) => join(directory, name));
+  if (files.length === 0) {
+    return unreadable(
+      id,
+      `module "${layout.moduleId}" owns ${bindings.map((binding) => `"${binding.table}"`).join(', ')}, which ` +
+        `every instance creates from its migrations, and no migration source was found under ` +
+        `${layout.keyOf(directory)}. Supply the sources, or this rule has nothing to judge.`,
+      null,
+    );
+  }
+  const result = checkExtensibleTables({
+    migrations: new Map(
+      files.map((file) => [layout.keyOf(file), { moduleId: layout.moduleId, text: readFileSync(file, 'utf8') }]),
+    ),
+    bindings,
+    owners: null,
+  });
+  const readSize: ReadSizeInput = {
+    prefix: '[extensible-tables]',
+    files: result.files,
+    sites: result.sites,
+    coverage: [{ source: 'extensible-owners', expected: result.owners.expected, covered: result.owners.covered }],
+  };
+  const short = readSizeOrShortWalk(id, readSize);
+  if (!short.ok) return short.result;
+  const findings: Finding[] = result.findings.map((finding) => ({
+    rule: id,
+    key: `${finding.location.replace(/:\d+$/, '')}:${finding.table}`,
+    location: finding.location,
+    message: finding.message,
+  }));
+  return ran(id, readSize, findings);
+};
+
 export const PACKAGE_HOSTS: ReadonlyMap<string, PackageRuleHost> = new Map<
   string,
   PackageRuleHost
@@ -1768,9 +1875,11 @@ export const PACKAGE_HOSTS: ReadonlyMap<string, PackageRuleHost> = new Map<
   ['check:command-coverage', commandCoverage],
   ['check:container-imports', containerImports],
   ['check:default-language-prose', defaultLanguageProse],
+  ['check:entity-decorators', entityDecorators],
   ['check:entry-presence', entryPresence],
   ['check:diacritic-folds', diacriticFolds],
   ['check:entry-scope', entryScope],
+  ['check:extensible-tables', extensibleTables],
   ['check:kernel-boundary', kernelBoundary],
   ['check:nul-bytes', nulBytes],
   ['check:platform-surface', platformSurface],

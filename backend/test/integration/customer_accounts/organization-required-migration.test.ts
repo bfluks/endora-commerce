@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'node:crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
-import { Migration20260825T141659CustomerAccountsOrganizationRequired } from '@endora-commerce/mod-customer-accounts/migrations';
+import {
+  Migration20260825T141659CustomerAccountsOrganizationRequired,
+  Migration20261103T190132CustomerAccountsOrganizationRoleAssignment,
+} from '@endora-commerce/mod-customer-accounts/migrations';
+import {
+  Migration20261110T135922OrganizationsPersonalTaxIdRemoval,
+  Migration20261110T183238OrganizationsTaxIdNormalise,
+} from '@endora-commerce/mod-organizations/migrations';
 
 /**
  * D-178 — the tightening migration, executed rather than described.
@@ -45,6 +52,25 @@ describe('D-178 — customer_accounts.organization_id becomes NOT NULL', () => {
     // transaction reproduces the tree the migration meets; the rollback puts it
     // back.
     await em.execute('alter table "customer_accounts" alter column "organization_id" drop not null');
+    // A later migration (`specs/170-organization-roles/` M3) gives every account
+    // a not-null role of its Organization, which an account without one cannot
+    // hold; its own `down()` puts the column back to before it, as the replay
+    // does.
+    const later = new Migration20261103T190132CustomerAccountsOrganizationRoleAssignment(em.getDriver(), em.config);
+    await later.down();
+    for (const query of later.getQueries()) await em.execute(query as unknown as string);
+    // `specs/177-tax-id-scope/` M4 holds tax IDs to the normalised form, which
+    // the lower-case placeholder is not; its `down()` drops that check, as a
+    // rollback past it does.
+    const normalise = new Migration20261110T183238OrganizationsTaxIdNormalise(em.getDriver(), em.config);
+    await normalise.down();
+    for (const query of normalise.getQueries()) await em.execute(query as unknown as string);
+    // And `specs/177-tax-id-scope/` M1 took the placeholder tax ID off personal
+    // organisations, which this migration still writes; its `down()` restores
+    // the shape this migration was written against.
+    const taxIdRemoval = new Migration20261110T135922OrganizationsPersonalTaxIdRemoval(em.getDriver(), em.config);
+    await taxIdRemoval.down();
+    for (const query of taxIdRemoval.getQueries()) await em.execute(query as unknown as string);
   });
   afterEach(async () => db.rollbackTx());
   afterAll(async () => db.close());

@@ -44,9 +44,9 @@ describe('languages — repairing a sales channel created with the bare `en` cod
     await em.execute(
       `insert into "sales_channels"
          ("id","code","name","languages","default_language","currencies","default_currency",
-          "active","system_default","version","is_public","status","created_at","updated_at")
+          "active","system_default","version","status","created_at","updated_at")
        values (gen_random_uuid(), ?, '{"en":"Fixture"}'::jsonb, ?::jsonb, ?, '["EUR"]'::jsonb, 'EUR',
-               true, false, ?, false, 'active', now(), now())`,
+               true, false, ?, 'active', now(), now())`,
       [code, JSON.stringify(languages), defaultLanguage, version],
     );
   }
@@ -141,7 +141,7 @@ describe('languages — repairing a sales channel created with the bare `en` cod
   });
 
   it('leaves the channel alone when there is no `en-US` to repair it to', async () => {
-    await em.execute(`update "languages" set "is_default" = false`);
+    await em.execute(`update "languages" set "is_default" = false where "code" = 'en-US'`);
     await em.execute(`delete from "languages" where "code" = 'en-US'`);
     await insertChannel('chlang-no-target', ['en'], 'en');
 

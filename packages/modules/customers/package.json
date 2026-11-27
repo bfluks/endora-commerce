@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-customers",
-  "version": "0.106.0",
+  "version": "0.112.0",
   "type": "module",
   "sideEffects": false,
   "description": "Customer lifecycle business logic: registration, self-service, blocking, impersonation, groups, deletion, and presence.",
@@ -41,13 +41,14 @@
     "dist",
     "i18n",
     "docs",
-    "tailwind.css"
+    "tailwind.css",
+    "!dist/**/*.map"
   ],
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -55,12 +56,16 @@
   "peerDependencies": {
     "@endora-commerce/admin-kit": "workspace:*",
     "@endora-commerce/contracts": "workspace:*",
+    "@endora-commerce/email-components": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
     "@fastify/cookie": "^11",
-    "@mikro-orm/core": "^6",
-    "@mikro-orm/migrations": "^6",
-    "@mikro-orm/postgresql": "^6",
+    "@mikro-orm/core": "^7.2.11",
+    "@mikro-orm/decorators": "^7.2.11",
+    "@mikro-orm/migrations": "^7.2.11",
+    "@mikro-orm/postgresql": "^7.2.11",
+    "bullmq": "^5",
     "fastify": "^5.11.0",
+    "ioredis": "^5",
     "lucide-react": "^1",
     "react": "^19",
     "react-router-dom": "^7",
@@ -83,19 +88,24 @@
   "devDependencies": {
     "@endora-commerce/admin-kit": "workspace:*",
     "@endora-commerce/contracts": "workspace:*",
+    "@endora-commerce/email-components": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
+    "@endora-commerce/test-kit": "workspace:*",
     "@fastify/cookie": "^11.0.2",
-    "@mikro-orm/core": "^6.6.13",
-    "@mikro-orm/migrations": "^6.6.13",
-    "@mikro-orm/postgresql": "^6.6.13",
+    "@mikro-orm/core": "^7.2.11",
+    "@mikro-orm/decorators": "^7.2.11",
+    "@mikro-orm/migrations": "^7.2.11",
+    "@mikro-orm/postgresql": "^7.2.11",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
-    "fastify": "^5.12.5",
+    "bullmq": "^5.76.1",
+    "fastify": "^5.12.8",
+    "ioredis": "^5.10.1",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "zod": "^4.2.0"
   }
 }

@@ -1,9 +1,7 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { sanitiseNext } from '../../../lib/auth/next-path';
 import { loginCustomer } from '../../../lib/api/auth';
 import { beginMfaSetupTicket } from '../../../lib/api/mfa';
-import { StorefrontApiError } from '../../../lib/api/client';
 import {
   clearAnonCartCookie,
   setCartMergeFlash,
@@ -16,7 +14,11 @@ import { SocialLoginButtons } from '../../../components/SocialLoginButtons';
 import { getServerContext } from '../../../lib/server-context';
 import { getFederatedSignInProviders } from '../../../lib/api/federated-sign-in';
 import type { Metadata } from 'next';
-import { backendBaseUrl } from '../../../lib/env.mjs';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { signInErrorMessage, signInErrorParam } from '../../../lib/auth/sign-in-errors';
+import { SIGN_IN_REQUIRED_REASON } from '../../../lib/channel/closed-store';
+import { localeRedirect, localizedPath } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -36,10 +38,9 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; reason?: string }>;
 }): Promise<ReactNode> {
   const params = await searchParams;
-  const error = params.error;
   const nextPath = sanitiseNext(params.next);
 
   // Issue #193 — the federated block is decided **before the HTML is sent**, so
@@ -52,7 +53,15 @@ export default async function LoginPage({
   // hard-code a module list), and the provider list is the channel-scoped
   // "configured AND enabled" answer. Both settings default to `false`, so the
   // honest default rendering is nothing at all.
-  const { ctx, locale, modules } = await getServerContext();
+  const { ctx, locale, modules, anonymousAccess } = await getServerContext();
+  const t = tForLocale(locale);
+  // `specs/154-sales-channel-access/`, issue #745 — every refusal arrives as a
+  // code (the federated callback's own sentences excepted, which are looked up,
+  // never printed) and is shown translated; anything else as the failure.
+  const error = signInErrorMessage(params.error, locale);
+  // The middleware sends an anonymous visitor of a store closed to them here.
+  // Shown only while the store is closed, so a stale link cannot claim it is.
+  const signInRequired = params.reason === SIGN_IN_REQUIRED_REASON && !anonymousAccess;
   const mfaPresent = modules.isPresent('mfa');
   const federatedProviders = mfaPresent
     ? await getFederatedSignInProviders(ctx)
@@ -62,17 +71,26 @@ export default async function LoginPage({
     <>
       <Hook code="login.top" />
       <div className="b2b-auth">
-        <h1>Sign in</h1>
-        <p>Use your work email and password.</p>
-        {error ? <div className="b2b-auth__error">{error}</div> : null}
+        <h1>{t('auth.login.heading')}</h1>
+        <p>{t('auth.login.intro')}</p>
+        {signInRequired ? (
+          <p className="b2b-auth__notice" role="status">
+            {t('auth.login.signInRequired')}
+          </p>
+        ) : null}
+        {error ? (
+          <div className="b2b-auth__error" role="alert">
+            {error}
+          </div>
+        ) : null}
         <form action={loginAction} className="b2b-auth__form">
           <input type="hidden" name="next" value={nextPath} />
           <div className="b2b-auth__field">
-            <label htmlFor="login-email">Email</label>
+            <label htmlFor="login-email">{t('auth.field.email')}</label>
             <input id="login-email" name="email" type="email" required autoComplete="email" placeholder=" " />
           </div>
           <div className="b2b-auth__field">
-            <label htmlFor="login-password">Password</label>
+            <label htmlFor="login-password">{t('auth.field.password')}</label>
             <input
               id="login-password"
               name="password"
@@ -83,21 +101,24 @@ export default async function LoginPage({
             />
           </div>
           <div className="b2b-auth__actions">
-            <button type="submit">Sign in</button>
+            <button type="submit">{t('auth.login.submit')}</button>
           </div>
         </form>
         <SocialLoginButtons
-          backendBaseUrl={backendBaseUrl()}
-          next={nextPath}
+          // Feature 167 — the return address under this page's prefix, from which the
+          // backend learns the language to come back in.
+          next={await localizedPath(nextPath)}
           locale={locale}
           modulePresent={mfaPresent}
           availableProviders={federatedProviders}
         />
         <p className="b2b-auth__hint">
-          Forgot your password? <Link href="/password-reset/request">Reset it</Link>.
+          {t('auth.login.forgotPrompt')}{' '}
+          <LocalizedLink href="/password-reset/request">{t('auth.login.forgotLink')}</LocalizedLink>.
         </p>
         <p className="b2b-auth__hint">
-          New here? <Link href="/register">Create an account</Link>.
+          {t('auth.login.newPrompt')}{' '}
+          <LocalizedLink href="/register">{t('auth.login.registerLink')}</LocalizedLink>.
         </p>
       </div>
       <Hook code="login.bottom" />
@@ -110,23 +131,25 @@ async function loginAction(formData: FormData): Promise<void> {
   const email = (formData.get('email') as string) ?? '';
   const password = (formData.get('password') as string) ?? '';
   const next = sanitiseNext((formData.get('next') as string) ?? '/account');
+  // Issue #1323 — the context carries the page language as `Accept-Language`, from which
+  // the backend records the account's e-mail language while it has none.
+  const { ctx } = await getServerContext();
 
   // Only the network/auth call is wrapped — the `redirect()` calls below must
   // stay OUTSIDE the try, otherwise Next's `NEXT_REDIRECT` control-flow throw
   // is caught here and re-routed into the error branch, blanking the page.
   let result;
   try {
-    result = await loginCustomer({ email, password });
+    result = await loginCustomer({ email, password }, ctx);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Sign-in failed. Please try again.';
-    redirect(`/login?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
+    // Issue #745 — a code travels, never the backend's sentence.
+    return await localeRedirect(`/login?error=${signInErrorParam(err, 'LOGIN_FAILED')}&next=${encodeURIComponent(next)}`);
   }
   // Feature 042 — two-step login. An account with active 2FA gets routed to the
   // second-step code screen; the opaque challenge id rides in an httpOnly cookie.
   if (result.status === 'mfaRequired') {
     await setMfaChallengeCookie(result.challengeId);
-    redirect(`/login/mfa?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login/mfa?next=${encodeURIComponent(next)}`);
   }
   if (result.status === 'mfaSetupRequired') {
     // Enforced-but-unenrolled — begin enrolment with the ticket and route to the
@@ -135,8 +158,8 @@ async function loginAction(formData: FormData): Promise<void> {
     try {
       begun = await beginMfaSetupTicket(result.setupTicket);
     } catch {
-      redirect(
-        `/login?error=${encodeURIComponent('Could not start two-factor setup. Please try again.')}&next=${encodeURIComponent(next)}`,
+      return await localeRedirect(
+        `/login?error=SETUP_START_FAILED&next=${encodeURIComponent(next)}`,
       );
     }
     await setMfaSetupTicketCookie({
@@ -144,11 +167,11 @@ async function loginAction(formData: FormData): Promise<void> {
       secret: begun.secret,
       otpauthUri: begun.otpauthUri,
     });
-    redirect(`/login/setup?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login/setup?next=${encodeURIComponent(next)}`);
   }
   if (!result.sessionCookieValue) {
-    redirect(
-      `/login?error=${encodeURIComponent('Sign-in failed. Please try again.')}&next=${encodeURIComponent(next)}`,
+    return await localeRedirect(
+      `/login?error=LOGIN_FAILED&next=${encodeURIComponent(next)}`,
     );
   }
   await setSessionCookie(result.sessionCookieValue);
@@ -167,12 +190,7 @@ async function loginAction(formData: FormData): Promise<void> {
     await clearAnonCartCookie();
     await setCartMergeFlash(result.cartMerge.outcome);
   }
-  redirect(next);
+  return await localeRedirect(next);
 }
 
 /** Only allow same-origin paths in `?next=` to defend against open-redirect. */
-function sanitiseNext(input: string | undefined): string {
-  if (!input) return '/account';
-  if (!input.startsWith('/') || input.startsWith('//')) return '/account';
-  return input;
-}

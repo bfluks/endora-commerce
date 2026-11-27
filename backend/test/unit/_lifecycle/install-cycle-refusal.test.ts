@@ -68,8 +68,12 @@ class FakeEm {
     return this.rows.find((r) => r.moduleId === where.moduleId) ?? null;
   }
   async flush(): Promise<void> {}
-  async persistAndFlush(payload: FakeRow): Promise<void> {
-    this.rows.push(payload);
+  persist(payload: FakeRow) {
+    return {
+      flush: async (): Promise<void> => {
+        this.rows.push(payload);
+      },
+    };
   }
   create(_entity: unknown, payload: FakeRow): FakeRow {
     return payload;
@@ -79,7 +83,7 @@ class FakeEm {
 class FakeMigrator {
   pending: Array<{ name: string }> = [];
   applied: string[] = [];
-  async getPendingMigrations(): Promise<Array<{ name: string }>> {
+  async getPending(): Promise<Array<{ name: string }>> {
     return this.pending;
   }
   async up(): Promise<Array<{ name: string }>> {

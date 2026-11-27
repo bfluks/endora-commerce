@@ -1,4 +1,5 @@
-import { Entity, OptionalProps, PrimaryKey, Property, Unique } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -7,8 +8,9 @@ import { randomUUID } from 'crypto';
  * are screaming-snake `module:action` strings (e.g. `catalog:write`,
  * `orders:read`, `customers:impersonate`). Stored as JSONB array.
  *
- * `requiresTwoFactor` flips the requireAdmin pre-handler into a strict mode
- * (T188 hook) — accounts mapped to such a Role MUST have 2FA confirmed.
+ * The two-factor flag is read by `mfa` at sign-in (`MfaPolicyResolver`, issue
+ * #349): a holder must complete or enrol TOTP. It has no effect while `mfa` is
+ * absent (D-96), and `mfa` cannot be switched off while any role sets it.
  */
 @GlobalEntity()
 @Entity({ tableName: 'admin_roles' })

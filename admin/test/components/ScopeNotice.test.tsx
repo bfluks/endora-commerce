@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
-import { ScopeNotice } from '../../../packages/admin-shell/src/components/scope-notice/ScopeNotice';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
+import { ScopeNotice } from '@endora-commerce/admin-kit/components';
 
 /**
  * The sentence is the deliverable (feature 087, owner decision of 2026-08-29),
@@ -39,7 +39,7 @@ describe('<ScopeNotice>', () => {
     expect(
       screen.getByText('These records are not assigned to an organization yet'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('alert').textContent).toContain(
+    expect(screen.getByRole('status').textContent).toContain(
       'None of these records names an organization yet, so none of them can appear here.',
     );
   });
@@ -49,14 +49,14 @@ describe('<ScopeNotice>', () => {
     expect(
       screen.getByText('Te rekordy nie są jeszcze przypisane do organizacji'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('alert').textContent).toContain(
+    expect(screen.getByRole('status').textContent).toContain(
       'Żaden z tych rekordów nie wskazuje jeszcze organizacji',
     );
   });
 
   it('says nothing about permissions, and does not name the machinery', () => {
     renderIn('en', 'ORGANIZATION_ATTRIBUTION_PENDING');
-    const text = screen.getByRole('alert').textContent ?? '';
+    const text = screen.getByRole('status').textContent ?? '';
     // The operator does not know what a tenant, a scope or a filter is, and
     // telling them they lack a permission would be false — they do not.
     for (const word of ['tenant', 'scope', 'filter', 'permission']) {
@@ -70,7 +70,7 @@ describe('<ScopeNotice>', () => {
     // branch they always take — the screen mounts the component unconditionally
     // and the component decides.
     expect(container).toBeEmptyDOMElement();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('renders nothing when the notice is absent from the envelope', () => {

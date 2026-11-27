@@ -548,7 +548,9 @@ describe('check-language.sh', () => {
  * The footprint gate (Constitution IV). It had no test and two silent exits:
  * a missing `du` and an uninstalled `pdfmake` both printed "skipping" and
  * returned 0, so the one situation in which it measures nothing was also the
- * one in which it reported success. Both now exit 2.
+ * one in which it reported success. Both now exit 2 — the first as a
+ * measurement that is not a number, since the gate no longer uses `du` at all
+ * (issue #315).
  */
 describe('check-pdfmake-footprint.sh', () => {
   const MAX_BYTES = 32 * 1024 * 1024;
@@ -558,6 +560,15 @@ describe('check-pdfmake-footprint.sh', () => {
     const result = fixture.run('check-pdfmake-footprint.sh');
     expect(result.status).toBe(0);
     expect(result.output).toContain('OK');
+  });
+
+  it('reports the size it measured, not zero', () => {
+    // Issue #315: `du -sb` does not exist in BSD `du`, so on macOS the
+    // measurement came back empty and the gate printed "OK — 0.0 MB" over an
+    // install it never measured. A pass must carry the install's real size.
+    fixture.installPdfmake(15 * 1024 * 1024);
+    const result = fixture.run('check-pdfmake-footprint.sh');
+    expect(result.output).toContain('on-disk size 15.0 MB');
   });
 
   it('goes red when the install grows past the threshold', () => {

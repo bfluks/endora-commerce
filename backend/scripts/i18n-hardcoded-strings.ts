@@ -159,6 +159,115 @@ export function defaultRoots(): readonly string[] {
   return adminScanRoots().map((root) => root.dir);
 }
 
+const STOREFRONT_MEMBER = 'storefront';
+
+/**
+ * The storefront application's directory, or `null` for a workspace with none
+ * (issue #85).
+ *
+ * The storefront renders to buyers and carried literals no check counted: 92 of
+ * its `.ts`/`.tsx` files held Polish on the day this root was added, among them
+ * the quote-request actions and the cookie-consent banner, which a shop running
+ * in English showed in Polish. It is the workspace member named `storefront` —
+ * `check-rsc-discipline.ts`' precedent, and the name `pnpm --filter storefront`
+ * already depends on — so a renamed application drops the `storefront` source
+ * token from the read line rather than silently narrowing the walk.
+ */
+export function storefrontScanRoot(): string | null {
+  const members = workspaceMembers(REPO_ROOT, nodeWorkspaceFs());
+  return members.find((member) => member.name === STOREFRONT_MEMBER)?.dir ?? null;
+}
+
+/**
+ * Directories under the storefront that render nothing: its test harness, its
+ * build scripts (`.mjs`, so outside the extension filter anyway) and its static
+ * assets.
+ */
+const STOREFRONT_SKIPPED_DIRS = new Set(['test', 'scripts', 'public']);
+
+/**
+ * The storefront's sources: `.ts` **and** `.tsx`, unlike the admin walk.
+ *
+ * The admin walk is JSX-only because the admin's literals were JSX; the
+ * storefront's are not — `cart/page.tsx` builds its whole label table as an
+ * object of Polish strings handed to a component, and
+ * `quote-requests/describe-diff.ts` composes Polish sentences in a template. A
+ * walk that opened `.tsx` alone would read the first and miss the second.
+ * Tests and declaration files are skipped: a test's expected Polish sentence
+ * is the assertion that the catalogue rendered, not a literal the buyer sees.
+ */
+export function collectStorefrontFiles(root: string, out: string[]): void {
+  const walk = (dir: string, topLevel: boolean): void => {
+    for (const entry of readdirSync(dir)) {
+      if (entry === 'node_modules' || entry.startsWith('.')) continue;
+      const full = join(dir, entry);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        if (topLevel && STOREFRONT_SKIPPED_DIRS.has(entry)) continue;
+        walk(full, false);
+      } else if (st.isFile() && isStorefrontSource(entry)) {
+        out.push(full);
+      }
+    }
+  };
+  walk(root, true);
+}
+
+function isStorefrontSource(name: string): boolean {
+  if (!name.endsWith('.ts') && !name.endsWith('.tsx')) return false;
+  if (name.endsWith('.d.ts')) return false;
+  return !/\.(test|spec)\.tsx?$/.test(name);
+}
+
+/** The whole default population, walked and analysed — what `main` and the companion test share. */
+export interface DefaultTreeScan {
+  /** Every file the walk opened, admin roots first. */
+  readonly files: readonly string[];
+  readonly findings: readonly Finding[];
+  /** The admin roots, as {@link adminScanRoots} declares them. */
+  readonly adminRoots: readonly AdminScanRoot[];
+  /** Files opened under each admin root, in the order of `adminRoots`. */
+  readonly perAdminRoot: readonly number[];
+  /** The storefront directory, or `null` where the workspace has none. */
+  readonly storefront: string | null;
+  /** Files opened under the storefront. */
+  readonly storefrontFiles: number;
+}
+
+/**
+ * Walk and analyse the default population (issue #85).
+ *
+ * One call, exported, because the companion test asks the same question as the
+ * CLI and has twice been caught asking a similar one instead (see its last
+ * case). The storefront is analysed with {@link AnalyzeOptions.polishLiterals};
+ * the admin roots are not, which keep the admin shapes and the admin ledger.
+ */
+export function scanDefaultTree(): DefaultTreeScan {
+  const adminRoots = adminScanRoots();
+  const files: string[] = [];
+  const findings: Finding[] = [];
+  const perAdminRoot: number[] = [];
+  for (const root of adminRoots) {
+    const before = files.length;
+    if (existsSync(root.dir)) collectTsxFiles(root.dir, files);
+    perAdminRoot.push(files.length - before);
+  }
+  for (const file of files) walkFile(file, findings);
+
+  const storefront = storefrontScanRoot();
+  const storefrontFiles: string[] = [];
+  if (storefront !== null) collectStorefrontFiles(storefront, storefrontFiles);
+  for (const file of storefrontFiles) walkFile(file, findings, STOREFRONT_ANALYSIS);
+  return {
+    files: [...files, ...storefrontFiles],
+    findings,
+    adminRoots,
+    perAdminRoot,
+    storefront,
+    storefrontFiles: storefrontFiles.length,
+  };
+}
+
 /**
  * How many of the admin layers the generated registry names this walk opened as
  * a root (feature 091 fallout; `contracts/admin-registry.md` R13b).
@@ -229,16 +338,56 @@ export function moduleAdminFloorRefusal(
  * `pnpm --filter backend run i18n:hardcoded [-- <path>… | --strict | --list]` — feature 021.
  *
  * Walks the admin SPA's `.tsx` source for hard-coded user-visible strings.
- * Flags two shapes:
+ * Flags six shapes:
  *   1. JSX text nodes whose trimmed value contains a non-whitespace English
- *      letter (a-z), e.g. `<Button>Save changes</Button>`.
+ *      letter (a-z), e.g. `<Button>Save changes</Button>` — and, since issue
+ *      #1316, a single capitalised word, `<Button>Delete</Button>`.
  *   2. JSX attribute values whose attribute name is in `USER_VISIBLE_ATTRS`
- *      (title, aria-label, placeholder, alt) and whose value is a string
- *      literal, e.g. `<input placeholder="Search…" />`.
+ *      (title, aria-label, placeholder, alt), in the storefront's wider set or
+ *      named for copy (`description`, `label`, `emptyLabel`), e.g.
+ *      `<input placeholder="Search…" />` — read through `{…}`, conditionals
+ *      and fallbacks since issue #1316 (`jsx-attr`).
+ *   3. A literal rendered as a JSX child, `{error ?? 'Not found.'}`
+ *      (`jsx-expression`, issue #1316).
+ *   4. Prose handed to a state setter, `setError('Delete failed.')`
+ *      (`setter-literal`, issue #1316).
+ *   5. A literal under a copy-named property, default prop or variable —
+ *      `confirm({ title: 'Delete?' })`, `{ label = 'Drag a file here' }`,
+ *      `const emptyMessage = … ?? 'No rows.'` — and the rest of a label table
+ *      one of whose values is copy (`copy-property`, issue #1433).
+ *   6. A fallback sentence handed to an error helper or kept behind `??` /
+ *      `||`, `formatError(err, 'Save failed.')` (`fallback-literal`, issue
+ *      #1433).
  *
- * False-positive controls:
+ * The storefront (issue #85) is walked as well, over `.ts` and `.tsx`, and is
+ * judged strictly ({@link STOREFRONT_ANALYSIS}) — six kinds, each literal
+ * reported once, under the first that claims it:
+ *   - `jsx-text`: any JSX text with a letter, single words included (`Koszyk`);
+ *     `<code>`, `<kbd>`, `<samp>`, `<script>`, `<style>` and SVG text exempt.
+ *   - `jsx-attr`: a visible attribute — the four above, `label`, the
+ *     text-bearing `aria-*`, a prop named for copy (`removeLabel`) — read
+ *     through `{…}`, parentheses, conditional branches, `&&`, `||`, `??`, `+`
+ *     and templates, never through a call.
+ *   - `jsx-expression`: a literal rendered as a JSX child, `{ok ? 'A' : 'B'}`.
+ *   - `copy-property`: a literal under a property named for copy (`title`,
+ *     `description`, `label`, `qtyLabel`, … — Next's `metadata`, label
+ *     tables), and the word-shaped siblings of a value that was reported.
+ *   - `prose-literal`: any other prose-shaped literal (a capital and two
+ *     words, or a sentence ending), outside diagnostics, comparisons, keys,
+ *     catalogue calls, styling, HTTP headers, URLs, MIME types and SVG paths.
+ *   - `polish-literal`: a literal with a Polish diacritic none of those claimed.
+ *   All of them skip a per-language structure (an object literal with two or
+ *   more locale-keyed properties — the message catalogue's shape). The bound is
+ *   declared: a lone word outside every named context (`const unit = 'szt.'`)
+ *   and copy reaching the page only through a call argument are invisible.
+ *
+ * False-positive controls (the admin's shapes; the storefront's are on
+ * {@link analyzeStrict} and its helpers):
  *   - Ignore strings made entirely of code-style characters: identifiers
- *     with dots or underscores, paths, regex shapes, UUID/hex.
+ *     with dots or underscores, paths, regex shapes, UUID/hex — but not a
+ *     single capitalised word, which is a label (issue #1316).
+ *   - Ignore a literal value that is not copy whatever holds it (a URL, a
+ *     catalogue key, a colour), styling attributes, and a setter's state value.
  *   - Ignore JSX inside <code>...</code> (technical identifier display).
  *   - Ignore very short strings (single character, punctuation only).
  *   - Ignore strings already wrapped in `t(...)` — they are JSX expressions,
@@ -270,12 +419,123 @@ const USER_VISIBLE_ATTRS = new Set([
   'alt',
 ]);
 
+/**
+ * The finding vocabulary. The first two are the admin's; the storefront is
+ * judged by all six (see {@link AnalyzeOptions.strictShapes}).
+ *
+ * - `jsx-text` — a JSX text node.
+ * - `jsx-attr` — the value of an attribute the user reads or hears.
+ * - `jsx-expression` — a literal rendered as a JSX child: `{ok ? 'Saved' : 'Failed'}`.
+ * - `copy-property` — a literal under a property named for rendered copy:
+ *   `{ title: 'Cart' }`, `metadata.description`, a label table's `qtyLabel`.
+ * - `prose-literal` — a literal shaped like prose anywhere else.
+ * - `polish-literal` — a literal carrying a Polish diacritic that none of the
+ *   above reported.
+ * - `setter-literal` — the admin's: prose handed to a state setter,
+ *   `setError('Delete failed.')` (issue #1316).
+ * - `fallback-literal` — the admin's: a fallback sentence handed to an error
+ *   helper or kept behind `??` / `||`, `formatError(err, 'Save failed.')`,
+ *   `res.reason ?? 'Unknown failure.'` (issue #1433). The admin reads
+ *   `copy-property` too since that issue, over its own copy test.
+ */
+export type FindingKind =
+  | 'jsx-text'
+  | 'jsx-attr'
+  | 'jsx-expression'
+  | 'copy-property'
+  | 'prose-literal'
+  | 'polish-literal'
+  | 'setter-literal'
+  | 'fallback-literal';
+
 export interface Finding {
   filePath: string;
   line: number;
   column: number;
   text: string;
-  kind: 'jsx-text' | 'jsx-attr';
+  kind: FindingKind;
+}
+
+/** What {@link analyzeSource} asks beyond the admin shapes. */
+export interface AnalyzeOptions {
+  /**
+   * Also flag a Polish string or template literal outside JSX text (issue #85).
+   * On for the storefront, off for the admin roots, whose ledger was measured
+   * over the admin shapes alone.
+   */
+  readonly polishLiterals?: boolean;
+  /**
+   * The storefront's strict shapes (issue #85): every JSX text node with a
+   * letter in it, a wider set of visible attributes read through `{…}`, literals
+   * rendered as JSX children, copy-named properties and prose-shaped literals.
+   * Off for the admin roots, so `HARDCODED_STRINGS_BASELINE` is counted by the
+   * rule it was measured with. See {@link analyzeStrict}.
+   */
+  readonly strictShapes?: boolean;
+}
+
+/** How the storefront is analysed, by the default scan and by the draining mode alike. */
+export const STOREFRONT_ANALYSIS: AnalyzeOptions = { polishLiterals: true, strictShapes: true };
+
+const POLISH_DIACRITIC = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
+
+/** A property key that names a language or a locale: `pl`, `en`, `pl-PL`, `en_US`. */
+const LOCALE_KEY = /^[a-z]{2,3}(?:[-_][A-Za-z]{2,4})?$/;
+
+function propertyKeyText(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  return null;
+}
+
+/**
+ * Whether `node` sits under a property of a per-language structure: an object
+ * literal at least two of whose properties are keyed by a locale. One short key
+ * alone (`{ id: '…' }`) is not a language map, so it does not exempt.
+ */
+function insidePerLanguageStructure(node: ts.Node): boolean {
+  let p: ts.Node | undefined = node.parent;
+  while (p) {
+    if (ts.isPropertyAssignment(p) && ts.isObjectLiteralExpression(p.parent)) {
+      const key = propertyKeyText(p.name);
+      if (key !== null && LOCALE_KEY.test(key)) {
+        const localeKeyed = p.parent.properties.filter((prop) => {
+          if (!ts.isPropertyAssignment(prop)) return false;
+          const k = propertyKeyText(prop.name);
+          return k !== null && LOCALE_KEY.test(k);
+        }).length;
+        if (localeKeyed >= 2) return true;
+      }
+    }
+    p = p.parent;
+  }
+  return false;
+}
+
+/** A literal that is not a value the program renders — an import path, a type. */
+function isNonValueLiteral(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  return (
+    ts.isLiteralTypeNode(parent) ||
+    ts.isImportDeclaration(parent) ||
+    ts.isExportDeclaration(parent) ||
+    ts.isExternalModuleReference(parent)
+  );
+}
+
+/** A `title`/`aria-label`/… attribute value — already reported as `jsx-attr`. */
+function isUserVisibleAttributeValue(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    parent !== undefined &&
+    ts.isJsxAttribute(parent) &&
+    ts.isIdentifier(parent.name) &&
+    USER_VISIBLE_ATTRS.has(parent.name.text)
+  );
+}
+
+function templateText(node: ts.TemplateExpression): string {
+  return [node.head.text, ...node.templateSpans.map((span) => span.literal.text)].join('${…}');
 }
 
 function isLikelyCodeIdentifier(s: string): boolean {
@@ -287,8 +547,191 @@ function isLikelyCodeIdentifier(s: string): boolean {
   return false;
 }
 
-function walkFile(filePath: string, findings: Finding[]): void {
-  findings.push(...analyzeSource(readFileSync(filePath, 'utf8'), filePath));
+/**
+ * One capitalised word, optionally hyphenated and with a closing mark:
+ * `Delete`, `Inactive`, `Re-activate`, `E-mail`, `Saved.` (issue #1316).
+ *
+ * {@link isLikelyCodeIdentifier} reads every one of them as a code token,
+ * because a single word has nothing but letters in it — so every one-word
+ * button and badge in the admin went unreported. A code token that survives
+ * this is still skipped: lower-case (`px`, `order_id`), all capitals (`SKU`,
+ * `GET`), camel-cased (`ItemList`), or carrying `_`, `.`, `/` or digits.
+ */
+const ONE_WORD_LABEL = /^\p{Lu}\p{Ll}+(?:-\p{L}\p{Ll}*)*[.!?…:]?$/u;
+
+/** The admin's code-token test: {@link isLikelyCodeIdentifier}, minus a one-word label. */
+function isAdminCodeToken(s: string): boolean {
+  return isLikelyCodeIdentifier(s) && !ONE_WORD_LABEL.test(s.trim());
+}
+
+/** A value the admin renders as copy: neither a code token nor a non-copy value. */
+function isAdminCopy(text: string): boolean {
+  return !isAdminCodeToken(text) && !isNonCopyValue(text);
+}
+
+/** A React state setter by the `useState` naming convention: `setError`, `setNotice`. */
+const STATE_SETTER = /^set[A-Z]\w*$/;
+
+/**
+ * The admin's literal shapes (issue #1316), each reached through
+ * {@link passThroughTop} so a literal in a conditional, a `??` fallback or a
+ * `{…}` counts as the context it lands in:
+ *
+ * - `jsx-attr`: the four visible attributes, plus the storefront's wider set and
+ *   every prop named for copy (`description`, `label`, `emptyLabel`, …) — the
+ *   page header's `description` was invisible to the plain-string rule.
+ * - `jsx-expression`: a literal rendered as a JSX child,
+ *   `{error ?? 'Channel not found.'}`.
+ * - `setter-literal`: a prose-shaped literal or one-word label handed to a state
+ *   setter, `setError('Delete failed.')` — state the screen renders. A value
+ *   that is not prose (`setStatus('idle')`, `setTab('general')`) is state, not
+ *   copy, and stays unreported.
+ *
+ * Issue #1433 added the fallbacks the audit found English behind:
+ *
+ * - `copy-property`: a literal under a property named for copy
+ *   (`confirm({ title: 'Delete?' })`, `{ label: 'Countries' }`), a copy-named
+ *   default prop (`{ label = 'Drag a file here' }`) and a copy-named variable's
+ *   initialiser (`const emptyMessage = props.emptyMessage ?? 'No rows.'`) — and,
+ *   in {@link analyzeSource}, the other word-shaped values of a label table one
+ *   of whose values was reported, which is a component's `DEFAULT_LABELS`.
+ * - `fallback-literal`: prose or a one-word label handed to an error helper
+ *   (`formatError(err, 'Save failed.')`: a callee named for an error or a
+ *   message), and a prose-shaped literal kept behind `??` / `||` that no other
+ *   shape claimed (`res.reason ?? 'Unknown failure.'`), outside a developer's
+ *   diagnostic, a `throw` and a comparison.
+ *
+ * What it still cannot see is declared: a word or sentence reaching the page
+ * through any other call argument (`toast('Saved')`) or through a constant
+ * whose name says nothing (`const unit = 'pcs'`), and a one-word `??` fallback
+ * (`status ?? 'Draft'`), which is as often a state value as a label.
+ */
+function classifyAdminLiteral(
+  literal: TextLiteral,
+  text: string,
+  insideCode: (node: ts.Node) => boolean,
+): FindingKind | null {
+  if (isNonValueLiteral(literal)) return null;
+  const top = passThroughTop(literal);
+  const ctx = top.parent;
+  if (!ctx) return null;
+  // A template is judged with each substitution read as one plain word, so a
+  // generated id (`select-${id}`, `${prefix}-country`) is the code token it
+  // is, and `Remove ${name}` is the sentence it is.
+  // The static parts alone have to carry a letter, though: `${a} · ${b}` is
+  // punctuation around two values, not a word.
+  const probe = ts.isTemplateExpression(literal) ? text.replace(/\$\{…\}/g, 'x') : text;
+  if (!LETTER.test(text.replace(/\$\{…\}/g, ''))) return null;
+  if (ts.isJsxAttribute(ctx)) {
+    const name = ts.isIdentifier(ctx.name) ? ctx.name.text : ctx.name.getText();
+    if (STYLING_ATTRS.has(name)) return null;
+    if (!STRICT_VISIBLE_ATTRS.has(name) && !namesRenderedCopy(name)) return null;
+    return isAdminCopy(probe) ? 'jsx-attr' : null;
+  }
+  if (
+    ts.isJsxExpression(ctx) &&
+    ctx.parent !== undefined &&
+    (ts.isJsxElement(ctx.parent) || ts.isJsxFragment(ctx.parent))
+  ) {
+    // `<style>{`:host{…}`}</style>` is CSS, and `<code>` is technical text.
+    if (insideCode(ctx) || isInsideElement(ctx, NON_PROSE_ELEMENTS)) return null;
+    return isAdminCopy(probe) ? 'jsx-expression' : null;
+  }
+  if (
+    ts.isCallExpression(ctx) &&
+    ts.isIdentifier(ctx.expression) &&
+    STATE_SETTER.test(ctx.expression.text) &&
+    ctx.arguments.includes(top as ts.Expression)
+  ) {
+    return isProseShaped(text) || ONE_WORD_LABEL.test(text.trim()) ? 'setter-literal' : null;
+  }
+  if (insidePerLanguageStructure(literal)) return null;
+  const copyName = copyNameHolding(ctx, top);
+  if (copyName !== null) {
+    if (copyName.kind === 'property' && isStyleObject(copyName.object)) return null;
+    return isAdminCopy(probe) ? 'copy-property' : null;
+  }
+  if (
+    ts.isCallExpression(ctx) &&
+    ctx.arguments.includes(top as ts.Expression) &&
+    isErrorHelperCall(ctx)
+  ) {
+    return isProseShaped(text) || ONE_WORD_LABEL.test(text.trim()) ? 'fallback-literal' : null;
+  }
+  if (isBehindFallbackOperator(literal, top) && isProseShaped(text)) {
+    return isNonRenderedContext(literal, top) ? null : 'fallback-literal';
+  }
+  return null;
+}
+
+/**
+ * The copy-named place `top` is the value of, if any: a property assignment
+ * (`{ title: … }`), a binding element's default (`{ label = … }`,
+ * `{ ariaLabel: name = … }`), a parameter's default or a variable's initialiser
+ * — each judged by the name the value is written under (issue #1433).
+ */
+function copyNameHolding(
+  ctx: ts.Node,
+  top: ts.Node,
+):
+  | { kind: 'property'; object: ts.ObjectLiteralExpression }
+  | { kind: 'binding' }
+  | null {
+  if (ts.isPropertyAssignment(ctx) && ctx.initializer === top) {
+    const key = propertyKeyText(ctx.name);
+    if (key === null || !namesRenderedCopy(key)) return null;
+    return ts.isObjectLiteralExpression(ctx.parent) ? { kind: 'property', object: ctx.parent } : null;
+  }
+  if (ts.isBindingElement(ctx) && ctx.initializer === top) {
+    const nameNode = ctx.propertyName ?? ctx.name;
+    const name = ts.isIdentifier(nameNode) ? nameNode.text : null;
+    return name !== null && namesRenderedCopy(name) ? { kind: 'binding' } : null;
+  }
+  if (
+    (ts.isParameter(ctx) || ts.isVariableDeclaration(ctx) || ts.isPropertyDeclaration(ctx)) &&
+    ctx.initializer === top &&
+    ts.isIdentifier(ctx.name) &&
+    namesRenderedCopy(ctx.name.text)
+  ) {
+    return { kind: 'binding' };
+  }
+  return null;
+}
+
+/**
+ * A call that turns an error into the sentence an operator reads, whose other
+ * arguments are therefore the fallback copy: the callee's own name says error
+ * or message (`formatError`, `errorMessage`, `describeError`). A developer's
+ * diagnostic (`console.error`) and a constructed error (`new Error`, which is a
+ * `NewExpression` and not a call) are not.
+ */
+function isErrorHelperCall(call: ts.CallExpression): boolean {
+  const name = calleeName(call.expression);
+  if (name === null || !/error|message/i.test(name)) return false;
+  if (CATALOGUE_CALLS.has(name)) return false;
+  return receiverName(call.expression) !== 'console';
+}
+
+/** Whether, between `literal` and `top`, it is the right operand of `??` or `||`. */
+function isBehindFallbackOperator(literal: ts.Node, top: ts.Node): boolean {
+  let cur: ts.Node = literal;
+  while (cur !== top && cur.parent) {
+    const p = cur.parent;
+    if (
+      ts.isBinaryExpression(p) &&
+      p.right === cur &&
+      (p.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+        p.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+    ) {
+      return true;
+    }
+    cur = p;
+  }
+  return false;
+}
+
+function walkFile(filePath: string, findings: Finding[], options: AnalyzeOptions = {}): void {
+  findings.push(...analyzeSource(readFileSync(filePath, 'utf8'), filePath, options));
 }
 
 /**
@@ -298,9 +741,25 @@ function walkFile(filePath: string, findings: Finding[]): void {
  * with whatever `admin/src` currently holds — the walk used to be reachable only
  * through `main`, which meant the analysis had no test at all (issue #113).
  */
-export function analyzeSource(source: string, filePath: string): Finding[] {
+export function analyzeSource(
+  source: string,
+  filePath: string,
+  options: AnalyzeOptions = {},
+): Finding[] {
   const findings: Finding[] = [];
-  const sf = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // A `.ts` file is parsed as TypeScript: read as TSX, a generic arrow
+  // (`<T,>(x: T) => x`) or a type assertion would be misparsed as JSX.
+  const kind = filePath.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.TSX;
+  const sf = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, kind);
+
+  function polishLiteral(node: ts.Node, text: string): boolean {
+    if (!POLISH_DIACRITIC.test(text)) return false;
+    if (isNonValueLiteral(node) || isUserVisibleAttributeValue(node)) return false;
+    if (insidePerLanguageStructure(node)) return false;
+    const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    findings.push({ filePath, line: line + 1, column: character + 1, text, kind: 'polish-literal' });
+    return true;
+  }
 
   function isInsideCodeElement(node: ts.Node): boolean {
     let p: ts.Node | undefined = node.parent;
@@ -316,45 +775,512 @@ export function analyzeSource(source: string, filePath: string): Finding[] {
     return false;
   }
 
+  if (options.strictShapes) {
+    analyzeStrict(sf, filePath, findings, (node, text) => polishLiteral(node, text), options);
+    return findings;
+  }
+
+  // Every literal an admin shape reported, so the Polish fallback (the
+  // non-strict `polishLiterals` mode) cannot count it a second time.
+  const reported = new Set<ts.Node>();
+  const push = (node: ts.Node, text: string, kind: FindingKind): void => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    findings.push({ filePath, line: line + 1, column: character + 1, text, kind });
+    reported.add(node);
+  };
+
   function visit(node: ts.Node): void {
     if (ts.isJsxText(node)) {
       const trimmed = node.text.trim();
-      if (trimmed.length > 0 && !isLikelyCodeIdentifier(trimmed) && !isInsideCodeElement(node)) {
-        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        findings.push({
-          filePath,
-          line: line + 1,
-          column: character + 1,
-          text: trimmed,
-          kind: 'jsx-text',
-        });
+      if (trimmed.length > 0 && !isAdminCodeToken(trimmed) && !isInsideCodeElement(node)) {
+        push(node, trimmed, 'jsx-text');
       }
-    } else if (ts.isJsxAttribute(node)) {
-      const name = ts.isIdentifier(node.name) ? node.name.text : '';
-      if (USER_VISIBLE_ATTRS.has(name) && node.initializer && ts.isStringLiteral(node.initializer)) {
-        const value = node.initializer.text;
-        if (!isLikelyCodeIdentifier(value)) {
-          const { line, character } = sf.getLineAndCharacterOfPosition(node.initializer.getStart(sf));
-          findings.push({
-            filePath,
-            line: line + 1,
-            column: character + 1,
-            text: value,
-            kind: 'jsx-attr',
-          });
-        }
+    } else if (
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateExpression(node)
+    ) {
+      const text = literalText(node);
+      const kind = classifyAdminLiteral(node, text, isInsideCodeElement);
+      if (kind !== null) push(node, text, kind);
+    }
+    if (options.polishLiterals && !reported.has(node)) {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+        polishLiteral(node, node.text);
+      } else if (ts.isTemplateExpression(node)) {
+        // One finding per template, not one per static part: the sentence is
+        // the unit a translator keys.
+        polishLiteral(node, templateText(node));
       }
     }
     ts.forEachChild(node, visit);
   }
 
   visit(sf);
+
+  // A label table (issue #1433): an object literal one of whose values was
+  // reported as `copy-property` holds copy, so its other values are copy too
+  // whatever their keys are called — a component's `DEFAULT_LABELS`
+  // (`matchAll: 'Matches all carts.'` beside `valuesLabel: 'Value'`). Only a
+  // value the admin reads as copy elsewhere counts: prose, or one capitalised
+  // word. Ids, modes and slugs beside it (`testId: 'rule-builder'`) do not.
+  const first = findings.length;
+  const siblings = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node) && !isStyleObject(node)) {
+      const values = node.properties
+        .filter(ts.isPropertyAssignment)
+        .map((property) => property.initializer)
+        .filter(
+          (value): value is TextLiteral =>
+            ts.isStringLiteral(value) ||
+            ts.isNoSubstitutionTemplateLiteral(value) ||
+            ts.isTemplateExpression(value),
+        );
+      const table = values.some((value) => {
+        if (!reported.has(value)) return false;
+        const at = sf.getLineAndCharacterOfPosition(value.getStart(sf));
+        return findings.some(
+          (f) => f.kind === 'copy-property' && f.line === at.line + 1 && f.column === at.character + 1,
+        );
+      });
+      if (table) {
+        for (const value of values) {
+          if (reported.has(value) || insidePerLanguageStructure(value)) continue;
+          const text = literalText(value);
+          if (isProseShaped(text) || ONE_WORD_LABEL.test(text.trim())) {
+            push(value, text, 'copy-property');
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, siblings);
+  };
+  siblings(sf);
+  if (findings.length > first) {
+    findings.sort((a, b) => a.line - b.line || a.column - b.column);
+  }
   return findings;
 }
 
 /**
+ * Attributes whose value the user reads or hears, for the storefront's strict
+ * shapes: the admin's four, the ARIA attributes that carry text, and `label`
+ * (a `<track>`/`<option>`/`<optgroup>` attribute, and the prop name the
+ * storefront's own components use for a button or field caption — ten string
+ * values in the tree when this was measured). A component prop named for copy
+ * (`removeLabel`, `emptyAriaLabel`) is visible too; see {@link namesRenderedCopy}.
+ */
+const STRICT_VISIBLE_ATTRS = new Set([
+  ...USER_VISIBLE_ATTRS,
+  'label',
+  'aria-description',
+  'aria-roledescription',
+  'aria-valuetext',
+  'aria-placeholder',
+  'aria-braillelabel',
+  'aria-brailleroledescription',
+]);
+
+/**
+ * Property and prop names that hold rendered copy. Next's `metadata` is
+ * `title`/`description`; a component's props and a label table use the rest.
+ * Measured on the storefront: `title` (23 string values), `label` (22),
+ * `heading` (12), `description`, `placeholder`, `body`, `message`, `text`.
+ * `text` also names a colour token in the theme tables (`text: '#7c4a03'`),
+ * which the value filter ({@link isNonCopyValue}) answers, not the name.
+ */
+const COPY_NAMES = new Set([
+  'title',
+  'subtitle',
+  'description',
+  'label',
+  'heading',
+  'subheading',
+  'message',
+  'placeholder',
+  'ariaLabel',
+  'alt',
+  'text',
+  'caption',
+  'hint',
+  'body',
+]);
+
+/**
+ * The last word of a camelCase name that makes it copy: `qtyLabel`,
+ * `cardHeading`, `notePlaceholder`, `convertToQrHint`, `lockedPricingNote` —
+ * the storefront's label tables name their entries this way (36 such names
+ * carried a literal when this was measured).
+ */
+const COPY_NAME_SUFFIXES = new Set([
+  'Label',
+  'Title',
+  'Heading',
+  'Message',
+  'Placeholder',
+  'Description',
+  'Text',
+  'Caption',
+  'Hint',
+  'Note',
+  'Body',
+]);
+
+function namesRenderedCopy(name: string): boolean {
+  if (COPY_NAMES.has(name)) return true;
+  const last = /[a-z0-9]([A-Z][a-z]+)$/.exec(name);
+  return last !== null && COPY_NAME_SUFFIXES.has(last[1]!);
+}
+
+/** Attributes whose value is styling — never copy, whatever it looks like. */
+const STYLING_ATTRS = new Set(['className', 'class', 'style']);
+
+/** CSS properties whose value is a list of names (`'Inter, Helvetica Neue'`), never copy. */
+const CSS_NAME_PROPERTIES = new Set(['fontFamily', 'font', 'font-family']);
+
+/** Whether `object` is the literal written as a JSX `style` attribute: `style={{ … }}`. */
+function isStyleObject(object: ts.ObjectLiteralExpression): boolean {
+  let p: ts.Node | undefined = object.parent;
+  while (
+    p &&
+    (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isSatisfiesExpression(p))
+  ) {
+    p = p.parent;
+  }
+  return (
+    p !== undefined &&
+    ts.isJsxExpression(p) &&
+    p.parent !== undefined &&
+    ts.isJsxAttribute(p.parent) &&
+    p.parent.name.getText() === 'style'
+  );
+}
+
+/** Calls whose arguments are class names, never copy. */
+const CLASS_NAME_CALLS = new Set(['cn', 'clsx', 'cx', 'cva', 'twMerge', 'classNames']);
+
+/** Calls whose argument is a catalogue key, never copy. */
+const CATALOGUE_CALLS = new Set(['t', 'tForLocale']);
+
+/**
+ * Elements whose text is not prose for a translator: technical text
+ * (`code`, `kbd`, `samp`), content that is not rendered as text (`script`,
+ * `style`), and SVG text, which in this storefront is a logo glyph (the payment
+ * icons' `<tspan>G</tspan>`), not a sentence.
+ */
+const NON_PROSE_ELEMENTS = new Set(['code', 'kbd', 'samp', 'script', 'style', 'text', 'tspan']);
+
+const LETTER = /\p{L}/u;
+
+/** `&nbsp;`, `&amp;`, `&#8212;` — a JSX entity is a character, not a word. */
+const JSX_ENTITY = /&(?:[A-Za-z]+|#\d+|#x[0-9A-Fa-f]+);/g;
+
+/**
+ * A value that is not copy whatever property or attribute holds it: a
+ * catalogue key or another dotted/snake/kebab identifier (`nav.cart`,
+ * `pwa:skip-waiting`, `not-allowed`), a URL or path, a MIME type, a colour, a
+ * CSS function. Starts lower-case, so `E-mail` and `Cart` stay copy.
+ */
+function isNonCopyValue(text: string): boolean {
+  const t = text.trim();
+  if (!LETTER.test(t)) return true;
+  // No `@`: an example address in a placeholder (`adres@firma.pl`) is copy,
+  // and a localised one at that.
+  if (/^[a-z_$][\w$]*(?:[.:/_\-[\]*]+[\w$\]*]+)+$/.test(t)) return true;
+  if (/^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|tel:|data:|\/|\.\.?\/|#[\w-]*$|\?)/i.test(t)) return true;
+  if (/^[a-z]+\/[a-z0-9.+-]+(?:\s*;.*)?$/.test(t)) return true;
+  if (/^#[0-9a-f]{3,8}$/i.test(t)) return true;
+  if (/^(?:var|rgba?|hsla?|calc|url|clamp|min|max|color-mix|linear-gradient)\(/.test(t)) {
+    return true;
+  }
+  // SVG path data (`M12 22s8-4 8-10V5l-8-3z`): 90 icon paths read as two-word
+  // capitalised "prose" before this line.
+  if (/^[Mm][\d\s.,MmLlHhVvCcSsQqTtAaZz-]*$/.test(t)) return true;
+  return false;
+}
+
+/**
+ * Whether a literal outside every named context is shaped like prose: it
+ * starts with a capital and has two or more words (`Continue shopping`), or it
+ * ends like a sentence (`Saved.`, `Loading…`, `the cart is empty.`) and starts
+ * with a capital or has two or more words. A single lower-case word, a code
+ * token and a capitalised identifier (`Escape`, `ItemList`) are not.
+ */
+function isProseShaped(text: string): boolean {
+  const t = text.trim();
+  if (isNonCopyValue(t)) return false;
+  // A tagged diagnostic (`[page-builder] … was ignored.`) is for a developer.
+  if (/^\[[\w:.-]+\]/.test(t)) return false;
+  const words = t.split(/\s+/).filter((word) => LETTER.test(word));
+  if (words.length === 0) return false;
+  const capital = /^\p{Lu}/u.test(t);
+  const sentenceEnd = /[.!?…]$/u.test(t);
+  if (capital && words.length >= 2) return true;
+  if (sentenceEnd && (capital || words.length >= 2)) return true;
+  return false;
+}
+
+/** The text a translator would see: a template's static parts around `${…}`. */
+type TextLiteral = ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateExpression;
+
+function literalText(node: TextLiteral): string {
+  return ts.isTemplateExpression(node) ? templateText(node) : node.text;
+}
+
+/**
+ * Climb from a literal through the expressions that pass its value on
+ * unchanged — parentheses, type assertions, both branches of a conditional,
+ * `&&`'s right operand, either operand of `||`, `??` and `+`, a template's
+ * substitution, and the `{…}` around an attribute value — and return the
+ * outermost node reached. Its parent is the context that decides the kind.
+ *
+ * A call argument does not pass through: `{t('cart.title')}` and
+ * `{format(x, 'pl-PL')}` hand the literal to code, not to the reader.
+ */
+function passThroughTop(node: ts.Node): ts.Node {
+  let cur = node;
+  for (;;) {
+    const p = cur.parent;
+    if (!p) return cur;
+    if (
+      ts.isParenthesizedExpression(p) ||
+      ts.isAsExpression(p) ||
+      ts.isSatisfiesExpression(p) ||
+      ts.isNonNullExpression(p) ||
+      ts.isTypeAssertionExpression(p)
+    ) {
+      cur = p;
+    } else if (ts.isConditionalExpression(p) && cur !== p.condition) {
+      cur = p;
+    } else if (ts.isBinaryExpression(p)) {
+      const op = p.operatorToken.kind;
+      const passes =
+        op === ts.SyntaxKind.PlusToken ||
+        op === ts.SyntaxKind.BarBarToken ||
+        op === ts.SyntaxKind.QuestionQuestionToken ||
+        (op === ts.SyntaxKind.AmpersandAmpersandToken && cur === p.right);
+      if (!passes) return cur;
+      cur = p;
+    } else if (ts.isTemplateSpan(p)) {
+      cur = p.parent;
+    } else if (ts.isJsxExpression(p) && p.parent !== undefined && ts.isJsxAttribute(p.parent)) {
+      cur = p;
+    } else {
+      return cur;
+    }
+  }
+}
+
+function isInsideElement(node: ts.Node, tags: ReadonlySet<string>): boolean {
+  for (let p = node.parent; p; p = p.parent) {
+    if (ts.isJsxElement(p)) {
+      const tag = p.openingElement.tagName;
+      if (ts.isIdentifier(tag) && tags.has(tag.text)) return true;
+    }
+  }
+  return false;
+}
+
+function calleeName(expression: ts.Expression): string | null {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  // `tForLocale(locale)('key')` — the callee is itself a catalogue call.
+  if (ts.isCallExpression(expression)) return calleeName(expression.expression);
+  return null;
+}
+
+/** The receiver's last name: `console` for `console.warn`, `headers` for `response.headers.set`. */
+function receiverName(expression: ts.Expression): string | null {
+  if (!ts.isPropertyAccessExpression(expression)) return null;
+  const receiver = expression.expression;
+  if (ts.isIdentifier(receiver)) return receiver.text;
+  if (ts.isPropertyAccessExpression(receiver)) return receiver.name.text;
+  return null;
+}
+
+/** `headers.set('Vary', 'Accept-Language, Cookie')` — an HTTP header, not copy. */
+const HEADER_METHODS = new Set(['set', 'append', 'get', 'has', 'delete']);
+
+const COMPARISON_OPERATORS = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.InKeyword,
+]);
+
+/**
+ * Whether the context a prose-shaped literal sits in says it is not rendered:
+ * a developer's diagnostic (`console.*`, `new …Error(…)`, `throw`), a value
+ * compared against rather than shown (`===`, `case`, `in`), a key (an object
+ * key, an element access, an enum member), a catalogue key (`t(…)`), styling
+ * (`cn(…)`, `className`, a `style={{…}}` object, a font family), an HTTP
+ * header or status body.
+ */
+function isNonRenderedContext(literal: ts.Node, top: ts.Node): boolean {
+  const own = literal.parent;
+  if (own) {
+    const named =
+      ts.isPropertyAssignment(own) || ts.isPropertySignature(own) || ts.isMethodDeclaration(own);
+    if (named && own.name === literal) return true;
+    if (ts.isElementAccessExpression(own) && own.argumentExpression === literal) return true;
+    if (ts.isComputedPropertyName(own)) return true;
+  }
+  const ctx = top.parent;
+  if (!ctx) return false;
+  if (ts.isThrowStatement(ctx)) return true;
+  if (ts.isPropertyAssignment(ctx) && ctx.initializer === top) {
+    const key = propertyKeyText(ctx.name);
+    if (key !== null && CSS_NAME_PROPERTIES.has(key)) return true;
+    if (ts.isObjectLiteralExpression(ctx.parent) && isStyleObject(ctx.parent)) return true;
+  }
+  if (ts.isCaseClause(ctx) && ctx.expression === top) return true;
+  if (ts.isEnumMember(ctx)) return true;
+  if (ts.isBinaryExpression(ctx) && COMPARISON_OPERATORS.has(ctx.operatorToken.kind)) return true;
+  if (ts.isJsxAttribute(ctx) && STYLING_ATTRS.has(ctx.name.getText())) return true;
+  if (ts.isCallExpression(ctx) && ctx.arguments.includes(top as ts.Expression)) {
+    const name = calleeName(ctx.expression);
+    if (name !== null && (CATALOGUE_CALLS.has(name) || CLASS_NAME_CALLS.has(name))) return true;
+    const receiver = receiverName(ctx.expression);
+    if (receiver === 'console') return true;
+    if (
+      receiver !== null &&
+      /headers$/i.test(receiver) &&
+      name !== null &&
+      HEADER_METHODS.has(name)
+    ) {
+      return true;
+    }
+  }
+  if (ts.isNewExpression(ctx) && ctx.arguments?.includes(top as ts.Expression)) {
+    const name = calleeName(ctx.expression);
+    // A developer's error, and an HTTP body that is a status text
+    // (`new NextResponse('Not Found', { status: 404 })`).
+    if (name !== null && (/Error$/.test(name) || name === 'Response' || name === 'NextResponse')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The storefront's strict shapes (issue #85). The admin's shapes then missed most
+ * of what the storefront renders: a single word of JSX text (`Koszyk`) read as
+ * "code-like", a visible attribute written `{'…'}` or `{a ? 'X' : 'Y'}`, a
+ * literal rendered as a JSX child, a label table, Next's `metadata`, and any
+ * English sentence outside JSX. Each literal is reported once, under the first
+ * kind that claims it; a Polish literal none of them claims is `polish-literal`
+ * as before.
+ */
+function analyzeStrict(
+  sf: ts.SourceFile,
+  filePath: string,
+  findings: Finding[],
+  polishFallback: (node: ts.Node, text: string) => boolean,
+  options: AnalyzeOptions,
+): void {
+  const first = findings.length;
+  // Every literal reported, so the label-table pass below can find its siblings.
+  const reported = new Set<ts.Node>();
+  const push = (node: ts.Node, text: string, kind: FindingKind): void => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    findings.push({ filePath, line: line + 1, column: character + 1, text, kind });
+    reported.add(node);
+  };
+
+  const classify = (literal: TextLiteral, text: string): FindingKind | null => {
+    if (isNonValueLiteral(literal) || insidePerLanguageStructure(literal)) return null;
+    const top = passThroughTop(literal);
+    const ctx = top.parent;
+    if (ctx && ts.isJsxAttribute(ctx)) {
+      const name = ctx.name.getText(sf);
+      if (STYLING_ATTRS.has(name)) return null;
+      if (STRICT_VISIBLE_ATTRS.has(name) || namesRenderedCopy(name)) {
+        return isNonCopyValue(text) ? null : 'jsx-attr';
+      }
+    } else if (
+      ctx &&
+      ts.isJsxExpression(ctx) &&
+      ctx.parent !== undefined &&
+      (ts.isJsxElement(ctx.parent) || ts.isJsxFragment(ctx.parent))
+    ) {
+      if (isNonCopyValue(text) || isInsideElement(ctx, NON_PROSE_ELEMENTS)) return null;
+      return 'jsx-expression';
+    } else if (ctx && ts.isPropertyAssignment(ctx) && ctx.initializer === top) {
+      const key = propertyKeyText(ctx.name);
+      if (key !== null && namesRenderedCopy(key)) {
+        return isNonCopyValue(text) ? null : 'copy-property';
+      }
+    }
+    if (!isProseShaped(text) || isNonRenderedContext(literal, top)) return null;
+    // A Polish literal no named context claims stays `polish-literal`, the kind
+    // it had before these shapes existed.
+    if (options.polishLiterals && POLISH_DIACRITIC.test(text)) return null;
+    return 'prose-literal';
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxText(node)) {
+      const trimmed = node.text.replace(JSX_ENTITY, ' ').trim();
+      if (LETTER.test(trimmed) && !isInsideElement(node, NON_PROSE_ELEMENTS)) {
+        push(node, node.text.trim(), 'jsx-text');
+      }
+    } else if (
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateExpression(node)
+    ) {
+      const text = literalText(node);
+      const kind = classify(node, text);
+      if (kind !== null) push(node, text, kind);
+      else if (options.polishLiterals && polishFallback(node, text)) reported.add(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+
+  // A label table: an object literal one of whose values was reported is a
+  // table of copy, so its other values are copy too whatever their keys are
+  // called — `{ heading: 'Your cart', install: 'Install', close: 'Close' }`.
+  // Only a value that reads as a word does (a capital and a lower-case letter,
+  // or two words): the same tables carry slugs, icon names, paths and class
+  // names beside their copy (`slug: 'fasteners'`, `cls: 'status--paid'`).
+  const siblings = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const values = node.properties
+        .filter(ts.isPropertyAssignment)
+        .map((property) => property.initializer)
+        .filter(
+          (value): value is TextLiteral =>
+            ts.isStringLiteral(value) ||
+            ts.isNoSubstitutionTemplateLiteral(value) ||
+            ts.isTemplateExpression(value),
+        );
+      if (values.some((value) => reported.has(value))) {
+        for (const value of values) {
+          if (reported.has(value) || insidePerLanguageStructure(value)) continue;
+          const text = literalText(value);
+          if (isNonCopyValue(text)) continue;
+          const words = text.trim().split(/\s+/).filter((word) => LETTER.test(word)).length;
+          if (/^\p{Lu}\p{Ll}/u.test(text.trim()) || words >= 2) push(value, text, 'copy-property');
+        }
+      }
+    }
+    ts.forEachChild(node, siblings);
+  };
+  siblings(sf);
+  const own = findings.splice(first).sort((a, b) => a.line - b.line || a.column - b.column);
+  findings.push(...own);
+}
+
+/**
  * The standing debt, as measured on 2026-08-16: **274 findings across 47 files**
- * of the 321 `.tsx` files under `admin/src`.
+ * of the 321 `.tsx` files under `admin/src`. Re-measured when issue #1316
+ * widened the admin rule (2026-11-17): **571 findings across 75 files** — the
+ * same screens' one-word labels, copy-named props, rendered literals and
+ * setter messages, which the narrower rule could not see. Re-measured when
+ * issue #1433 added the admin's fallbacks (2026-11-17): **751 findings across
+ * 80 files**, after the kit's own primitives were translated in the same change.
  *
  * ## Why a per-file count rather than a per-string ledger
  *
@@ -376,20 +1302,6 @@ export function analyzeSource(source: string, filePath: string): Finding[] {
  * Keys are paths relative to `admin/src`. It is meant to reach `{}`.
  */
 export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
-  // Issue #193 lifted the two federated-provider labels into
-  // `preauth-login-copy.ts`; the four left are the second-step MFA screen.
-  //
-  // Re-keyed, not drained: feature 110's T120 moved `admin/src` into
-  // `@endora-commerce/admin-shell` and this walk's roots moved with it, so the
-  // same four strings in the same component are read at the path they now sit
-  // at. The count is unmoved, which is what says nothing was translated.
-  'packages/admin-shell/src/components/LoginPage.tsx': 4,
-  // Feature 091's P4c published the asset cluster, so this file's one finding
-  // ("Clear asset") is the kit's now. The count is unmoved: the same string in
-  // the same component, under the path the walk reads it at.
-  'packages/admin-kit/src/components/asset-picker/AssetFieldPicker.tsx': 1,
-  'packages/admin-kit/src/components/rule-builder/RuleBuilder.tsx': 6,
-  'packages/admin-kit/src/ui/color-picker.tsx': 1,
   // Feature 091's P5b published the shared page-builder chrome and the e-mail
   // builder as `@endora-commerce/page-builder-admin`, and these **six** entries
   // are **re-keyed**, not raised and not dropped. Every count is unmoved: the
@@ -401,63 +1313,59 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // declares `endora: { type: 'admin-ui' }`; forget that block and all six go
   // *stale* in the same run rather than silently unread, which is the property
   // that makes a self-declared population safe here.
-  'packages/page-builder-admin/src/email/EmailEditorPane.tsx': 9,
-  'packages/page-builder-admin/src/email/EmailRichTextField.tsx': 1,
-  'packages/page-builder-admin/src/email/EmailRowLayoutPicker.tsx': 2,
-  'packages/page-builder-admin/src/email/EmailVariablesProvider.tsx': 4,
+  //
+  // Issue #1463 (UX audit CONTENT-05) — drained from 12: the preview modal and
+  // the header's *Preview email* button read `core`. The three left are the
+  // product card's "Select a product" written into the block's props and the
+  // embed select's "Block" field label, which are Puck field data, not the
+  // preview.
+  'packages/page-builder-admin/src/email/EmailEditorPane.tsx': 3,
+  'packages/page-builder-admin/src/email/EmailRichTextField.tsx': 3,
+  // Feature 163, R17 (T201): the picker's Change / Select / Clear selection and
+  // the source's two options read the `core` bundle; lowered from 5.
+  //
+  // Issue #1493 (UX audit CONTENT-03) — the dialogs moved to the kit's
+  // `ModalDialog` and their copy to `core`, re-measured: the asset dialog's
+  // Close (6 → 5); the product and category searches' titles, labels, states,
+  // pagination and buttons (36 → 16 — what is left is the field controls
+  // outside the dialogs). `EmailRowLayoutPicker` (3), `EmailVariablesProvider`
+  // (5) and `cms`' `RowLayoutPicker` (3) reached zero and were deleted.
   'packages/page-builder-admin/src/chrome/AssetPickers.tsx': 5,
-  'packages/page-builder-admin/src/chrome/CatalogPickers.tsx': 13,
+  'packages/page-builder-admin/src/chrome/CatalogPickers.tsx': 16,
   // Feature 091, Phase 4 batch 16 — re-keyed, not raised and not dropped:
-  // `cms` took its admin surface into its package and these three files went
-  // with it. Every count is unmoved; the same strings in the same components,
-  // under the paths the walk reads them at now. This baseline is a ledger
-  // *about* the files it names rather than one of them, so the merge request
-  // that moves a file is structurally the one that cannot see the entry go
-  // stale — the shape the six entries above record for P5b, and the reason both
-  // halves are corrected here rather than one of them going red later.
-  'packages/modules/cms/src/admin/components/ButtonLinkFields.tsx': 4,
-  'packages/modules/cms/src/admin/components/ComponentDragHandle.tsx': 1,
-  'packages/modules/cms/src/admin/components/RowLayoutPicker.tsx': 2,
+  // `cms` took its admin surface into its package and these files went with
+  // it. Every count is unmoved; the same strings in the same components, under
+  // the paths the walk reads them at now. This baseline is a ledger *about* the
+  // files it names rather than one of them, so the merge request that moves a
+  // file is structurally the one that cannot see the entry go stale — the shape
+  // the six entries above record for P5b, and the reason both halves are
+  // corrected here rather than one of them going red later.
+  //
+  // Feature 163, T016 — drained, not re-keyed: the button link picker's file
+  // (4 findings) was deleted, and its successor, `page-builder-admin`'s
+  // `LinkField.tsx`, reads every string from the `core` bundle.
+  'packages/modules/cms/src/admin/components/ComponentDragHandle.tsx': 2,
   // Feature 091, Phase 4 batch 12 — re-keyed, not dropped: `invoices` took its
   // admin surface into its package and this file went with it. The count is
   // untouched; nothing about the strings changed, only their address. This
   // baseline is a ledger *about* the files it names rather than one of them,
   // so the merge request that moves a file is structurally the one that
-  // cannot see the entry go stale.
-  'packages/modules/invoices/src/admin/templates/invoice-puck-config.tsx': 4,
+  // cannot see the entry go stale. Issue #888 lowered it from 4: the canvas
+  // now draws its labels from the PDF's `pdf.*` keys.
+  'packages/modules/invoices/src/admin/templates/invoice-puck-config.tsx': 85,
   // `specs/134-paid-module-extraction/` T063 re-keyed two of the six strings
   // above to the KSeF block's editor preview in the module that declares the
   // block; T069 then took that module out of this repository, and the entry
   // with it.
-  // Feature 091, Phase 4 batch three: the screen moved into its module's
-  // package and the entry is **re-keyed**, not raised and not dropped. The
-  // finding is one LinkedIn URN format example in a `placeholder`, and it is
-  // the same finding at a new address — this check's two-way ratchet reported
-  // both halves in one run (unaccounted here, over-baselined there), which is
-  // the laundering FR-017 refuses arriving one check over. It is not drained
-  // here because `urn:lla:llaPartnerConversion:…` is a wire-format example and
-  // not a sentence: putting it in a bundle would invite a translator to
-  // translate a LinkedIn identifier.
-  'packages/modules/linkedin_ads/src/admin/pages/ConversionMappingEditPage.tsx': 1,
-  // Feature 091, Phase 4 batch four: the screen moved into `mfa`'s package and
-  // the entry is **re-keyed**, not raised and not dropped — the same sixteen
-  // strings at a new address. This check's two-way ratchet reported both halves
-  // in one run again (unaccounted at the new key, over-baselined at the old
-  // one), which is what the ratchet is for. The debt itself is untouched and is
-  // real: `/security` is the signed-in admin's own two-factor screen and every
-  // one of its sixteen strings is English-only, so a Polish-speaking operator
-  // sets up their second factor in English. Translating them is a screen's
-  // worth of keys and belongs to whoever is repairing this screen, not to a
-  // batch whose subject is where the file lives.
-  'packages/modules/mfa/src/admin/pages/AdminSecuritySettings.tsx': 16,
+  // The LinkedIn conversion-mapping editor's entry (one URN format example in
+  // a `placeholder`) is gone: issue #1537 derives the placeholder from the
+  // conversion ID through the contract's `conversionRuleUrnFor`, so the field
+  // shows the value that is sent, and no literal is left to translate.
   // Feature 091, Phase 4, the plan's batch 7 — the same four counts under the
   // same four files, **re-keyed rather than re-baselined**. The ratchet is
   // two-way and keyed by path, so moving a directory strands the old key as a
   // stale entry and reports the new one as a regression; both halves fired here
   // and both are the move, not a change to a single string.
-  'packages/modules/product_feeds/src/admin/components/FeedDeliveryPanel.tsx': 1,
-  'packages/modules/promotions/src/admin/components/CouponGeneratorForm.tsx': 2,
-  'packages/modules/promotions/src/admin/pages/PromotionEditPage.tsx': 1,
   'packages/modules/promotions/src/admin/pages/PromotionStatsPage.tsx': 2,
   // Feature 091, Phase 4, the plan's batch 8 — five files, 30 findings, the
   // same counts under new keys. `delivery_methods`' list screen and four of
@@ -465,12 +1373,9 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // two-way and keyed by path, so each move stranded the old key and reported
   // the new one as a regression. Both halves of all five fired in one run,
   // which is what the ratchet is for: a re-key is visible as a re-key rather
-  // than as a debt that quietly moved house.
-  'packages/modules/delivery_methods/src/admin/pages/DeliveryMethodsPage.tsx': 5,
-  'packages/modules/returns/src/admin/pages/ReturnDeliveryMethodsPage.tsx': 5,
-  'packages/modules/returns/src/admin/pages/ReturnDetail.tsx': 12,
-  'packages/modules/returns/src/admin/pages/ReturnReasonsPage.tsx': 4,
-  'packages/modules/returns/src/admin/pages/ReturnStatusesConfigPage.tsx': 4,
+  // than as a debt that quietly moved house. The `delivery_methods` entry was
+  // drained by #1694 and the four `returns` entries by issue #1472 (UX audit
+  // SALES-07); all five reached zero and were deleted.
   // Feature 091, Phase 4 batch five: the screen moved into `stripe`'s package
   // and the entry is **re-keyed**, not raised and not dropped — the same
   // twenty-nine strings at a new address, which this check's two-way ratchet
@@ -482,21 +1387,6 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // operator chose. Translating them is a screen's worth of keys and belongs to
   // whoever repairs this screen, not to a batch whose subject is where the file
   // lives.
-  // Feature 091, Phase 4, the plan's batch 9 — the same four findings under a
-  // new key. `custom_fields`' definition screen moved into its module's
-  // package; the ratchet is two-way and keyed by path, so both halves fired in
-  // one run, a regression at the new key and a drain at the old one. The debt
-  // is untouched and is real: `Label (EN)`, `Options (comma-separated)`, its
-  // `gold, silver` placeholder and the `Add field` button are the create form's
-  // English-only half, beside a screen whose other six strings do resolve
-  // through this module's own bundle. Translating them is one form's worth of
-  // keys and belongs to whoever repairs the form, not to a batch whose subject
-  // is where the file lives.
-  //
-  // `assets_library` moved in the same batch and gets no entry, because its
-  // four files carry no finding — the library screen, its folder tree and its
-  // detail drawer render every sentence through `useTranslation`.
-  'packages/modules/custom_fields/src/admin/pages/CustomFieldsPage.tsx': 4,
   // Feature 091, Phase 4 batch 10 — three entries **re-keyed**, not raised and
   // not dropped: the same 17, 22 and 1 findings at new addresses, which the
   // two-way ratchet reported in one run as three regressions at the new keys
@@ -528,29 +1418,126 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // Translating them is two screens' worth of keys per module and belongs to
   // whoever repairs those screens, not to a batch whose subject is where the
   // file lives.
-  'packages/modules/newsletter/src/admin/pages/AutomationBuilder.tsx': 6,
-  'packages/modules/newsletter/src/admin/pages/AutomationsPage.tsx': 4,
-  'packages/modules/newsletter/src/admin/pages/BlocksPage.tsx': 8,
-  'packages/modules/newsletter/src/admin/pages/CampaignEditor.tsx': 14,
-  'packages/modules/newsletter/src/admin/pages/CampaignStats.tsx': 3,
-  'packages/modules/newsletter/src/admin/pages/CampaignsPage.tsx': 4,
-  'packages/modules/newsletter/src/admin/pages/ProviderSettingsPage.tsx': 7,
-  'packages/modules/newsletter/src/admin/pages/SubscribersPage.tsx': 6,
-  'packages/modules/newsletter/src/admin/pages/TagsPage.tsx': 9,
-  'packages/modules/transactional_emails/src/admin/components/BrandingPanel.tsx': 5,
-  'packages/modules/transactional_emails/src/admin/pages/EmailBlocksPage.tsx': 3,
-  'packages/modules/transactional_emails/src/admin/pages/EmailTemplatesPage.tsx': 3,
-  'packages/modules/transactional_emails/src/admin/pages/EmailsList.tsx': 4,
-  'packages/modules/pwa/src/admin/components/PushAudienceRuleBuilder.tsx': 17,
-  'packages/modules/pwa/src/admin/pages/PwaPage.tsx': 22,
+  //
+  // Issue #1463 (UX audit CONTENT-05) — fourteen of those entries **drained to
+  // zero and deleted**: every newsletter page, `EmailsList`, `EmailBlocksPage`
+  // and `EmailTemplatesPage`, and both `pwa` files read their module's bundle in
+  // both shipped languages now.
   'packages/modules/settings/src/admin/components/AssetIdSettingInput.tsx': 1,
-  // Feature 091, Phase 4 batch 14 — re-keyed, not dropped: `organizations`
-  // took its admin surface into its package and this panel went with it. The
-  // finding is unchanged, and this ledger is one **about** the files it names
-  // rather than one of them, so the batch that moves a screen is structurally
-  // the batch that cannot see the entry go stale — which is why it is
-  // corrected here, in the same merge request.
-  'packages/modules/organizations/src/admin/panels/RestrictionsPanel.tsx': 1,
+  // Issue #1316 widened the admin rule — a one-word capitalised label in JSX
+  // text, every copy-named prop read through `{…}` and conditionals, a literal
+  // rendered as a JSX child, and prose handed to a state setter — and the
+  // entries above were **raised** by what the wider rule sees in them, not by
+  // new strings. These are the files the old rule read as clean. Measured
+  // 2026-11-17: 571 admin findings across 75 files, up from 217 across 40.
+  // `color-picker.tsx`'s one finding left with the rule rather than with a
+  // translation: it was a hex colour placeholder, which is not copy.
+  'packages/admin-kit/src/zones/ZoneErrorBoundary.tsx': 1,
+  'packages/admin-shell/src/components/AppShell.tsx': 5,
+  'packages/modules/cms/src/admin/components/BackgroundFields.tsx': 5,
+  'packages/modules/cms/src/admin/components/CarouselPreviewNav.tsx': 5,
+  'packages/modules/cms/src/admin/components/ContentSliderActionBarExtras.tsx': 2,
+  'packages/modules/cms/src/admin/components/HeroFields.tsx': 14,
+  'packages/modules/cms/src/admin/components/PageBuilderActionBar.tsx': 7,
+  'packages/modules/cms/src/admin/components/SectionBlockFields.tsx': 6,
+  'packages/modules/orders/src/admin/pages/OrderStatusConfigPage.tsx': 2,
+  'packages/modules/organizations/src/admin/pages/OrganizationDetail.tsx': 1,
+  'packages/modules/quick_order/src/admin/pages/QuickOrderOnBehalfPage.tsx': 1,
+  'packages/modules/settings/src/admin/components/ConflictBanner.tsx': 2,
+  'packages/modules/settings/src/admin/pages/SettingsPage.tsx': 6,
+  'packages/page-builder-admin/src/email/EmailBuilderActionBar.tsx': 5,
+  'packages/page-builder-admin/src/email/EmailVariableFields.tsx': 2,
+  // Issue #1433 widened the admin rule again, to the fallbacks the 2026-11-17
+  // UX audit found English behind: a literal under a copy-named property
+  // (`confirm({ title })`, an options or Puck field table's `label`), a
+  // copy-named default prop or variable (`{ label = '…' }`,
+  // `const emptyMessage = … ?? '…'`), the rest of a label table one of whose
+  // values is copy, and a fallback sentence handed to an error helper or kept
+  // behind `??` / `||` (`formatError(err, 'Save failed.')`). The entries above
+  // were raised in place by what it sees in them; these are the files it found
+  // that the #1316 rule read as clean. The kit's own primitives were
+  // translated in the same change rather than ledgered — `RuleBuilder`, the CMS
+  // and organization pickers, `AssetFieldPicker`, `MultiSelect`,
+  // `FileDropzone` and `CustomFieldValuesPanel` left with their strings.
+  // Measured 2026-11-17: 751 admin findings across 80 files, up from 571
+  // across 75. `auth.tsx`'s two sentences were the login screen's and left with
+  // it (issue #1481), together with `LoginPage.tsx` and the `/security` screen.
+  'packages/modules/cms/src/admin/components/CarouselFields.tsx': 6,
+  'packages/modules/cms/src/admin/components/ListingFields.tsx': 3,
+  'packages/modules/cms/src/admin/components/PageBuilderEditor.tsx': 4,
+  'packages/modules/comparisons/src/admin/document-blocks/canvas.tsx': 7,
+  'packages/modules/document_templates/src/admin/blocks/core-block-editors.tsx': 14,
+  'packages/modules/document_templates/src/admin/blocks/items-table/index.tsx': 8,
+  'packages/modules/product_feeds/src/admin/components/TemplateFieldList.tsx': 1,
+  'packages/modules/quote_requests/src/admin/components/QuoteRequestPdfDialog.tsx': 1,
+  'packages/page-builder-admin/src/chrome/BlogCategoryPicker.tsx': 1,
+  'packages/page-builder-admin/src/chrome/ButtonListField.tsx': 24,
+  'packages/page-builder-admin/src/chrome/FormPickers.tsx': 1,
+  'packages/page-builder-admin/src/chrome/LinkField.tsx': 3,
+  'packages/page-builder-admin/src/chrome/NewsletterPickers.tsx': 2,
+  'packages/page-builder-admin/src/chrome/ResponsiveImageField.tsx': 1,
+};
+
+/**
+ * The storefront's standing debt (issue #85), the same per-file two-way ratchet
+ * as {@link HARDCODED_STRINGS_BASELINE} and judged in the same run.
+ *
+ * Kept as its own constant rather than merged into the admin's because the two
+ * are counted by different rules — the storefront's by the strict shapes
+ * ({@link STOREFRONT_ANALYSIS}) the admin's were never measured against — and
+ * because it is drained by a different stream of work. Keys are
+ * repository-relative and every one starts with `storefront/`; the companion
+ * test holds both halves of that.
+ *
+ * Measured when the root was added (2026-10-30, on `master` at e7da5e453):
+ * 547 findings across 90 files, of which the first slices keyed 15, leaving
+ * 532 across 85. Re-measured when the strict shapes landed (2026-10-31):
+ * **1029 findings across 107 files** — 531 of the 532 are still here (the
+ * one gone is the footer's `&copy;`, an entity the first rule read as a
+ * word), plus single-word JSX text, visible attributes written through `{…}`,
+ * literals rendered as JSX children, label tables, Next `metadata`, and English
+ * outside JSX, none of which the first rule could see. The five area slices
+ * then keyed all but **2**, both in `chrome` and each justified beside its
+ * entry (2026-10-31).
+ *
+ * **Grouped by area, one section per namespace file under
+ * `storefront/lib/i18n/messages/`**, so the slices draining it can run in
+ * parallel: a branch keys files of one area into that area's namespace and
+ * edits that area's section here and nothing else, and the comment line
+ * between two sections keeps two such edits from touching the same hunk. Keep
+ * an entry in its section when you lower it; a file that is new to the ledger
+ * goes in the section of the area that renders it, and anything that fits no
+ * area goes in `chrome`.
+ *
+ * It is meant to reach `{}`. Never raise a number: key the string into both
+ * locales of the area's namespace instead.
+ */
+export const STOREFRONT_HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
+  // ── commerce: cart, checkout, catalog, product page and listings, compare, quick order and the quote-request draft.
+  //    Keyed into `storefront/lib/i18n/messages/commerce.ts`.
+
+  // ── account: account pages, orders, quote requests, shopping lists, returns, addresses, preferences, organization.
+  //    Keyed into `storefront/lib/i18n/messages/account.ts`.
+  //    Drained: every account file is keyed (issue #85).
+
+  // ── auth: login, registration, verification, password reset, invitations, security pages, MFA.
+  //    Keyed into `storefront/lib/i18n/messages/auth.ts`.
+  //    Drained (issue #85): every file of this area is keyed.
+
+  // ── chrome: home, header, footer, not-found, offline, PWA, analytics and consent, pickers, mobile overlays, the rest.
+  //    Keyed into `storefront/lib/i18n/messages/chrome.ts`.
+  //    Two left, by decision rather than oversight:
+  //    - `pwa-server.ts`: `'B2B Platform'`, the web-app manifest's default app name when the
+  //      backend cannot be read and `NEXT_PUBLIC_APP_NAME` is unset. A product name, not copy:
+  //      one name in every language, as the operator-configured app name it stands in for is.
+  //    - `llms-txt-base.ts`: the closed-store sentence of `llms.txt`, which is English by design
+  //      (the file is read by software; see `LLMS_TXT_PAGE_TITLES`).
+  'storefront/lib/api/pwa-server.ts': 1,
+  'storefront/lib/seo/llms-txt-base.ts': 1,
+
+  // ── content: blog, contact, newsletter pages and components, CMS pages.
+  //    Keyed into `storefront/lib/i18n/messages/content.ts`.
+  //    Every finding keyed; nothing ledgered.
 };
 
 /** One file's measured count against its baseline. */
@@ -624,31 +1611,50 @@ async function main(): Promise<void> {
   // The default root is resolved against the repository, not the working
   // directory. `admin/src` was relative to `process.cwd()`, and the documented
   // invocation runs with `backend/` as the cwd, where no such directory exists.
-  const declared = positional.length > 0 ? null : adminScanRoots();
-  const roots = declared === null ? positional : declared.map((root) => root.dir);
-  // The baseline is measured over the whole of `admin/src`, so it can only judge
-  // a run that scanned the whole of `admin/src`. Given a path, every file the
-  // ledger names but the walk never opened would read as drained — so an
-  // explicit path means "report everything", the mode used while draining one
-  // screen. `--strict` says the same thing about the full scan.
+  // The baseline is measured over the whole default population, so it can only
+  // judge a run that scanned all of it. Given a path, every file the ledger
+  // names but the walk never opened would read as drained — so an explicit path
+  // means "report everything", the mode used while draining one screen.
+  // `--strict` says the same thing about the full scan.
   const strict = argv.includes('--strict') || positional.length > 0;
 
-  const files: string[] = [];
-  // Per root, so the `sources=` token below can say which declared root
-  // contributed nothing rather than only how many files the walk opened in
-  // total.
-  const perRoot: number[] = [];
-  for (const r of roots) {
-    const before = files.length;
-    try {
-      const st = statSync(r);
-      if (st.isDirectory()) collectTsxFiles(r, files);
-      else if (r.endsWith('.tsx')) files.push(r);
-    } catch {
-      process.stderr.write(`[i18n:hardcoded] path not found: ${r}\n`);
+  let scan: DefaultTreeScan | null = null;
+  let files: readonly string[];
+  let findings: readonly Finding[];
+  let roots: readonly string[];
+  if (positional.length === 0) {
+    scan = scanDefaultTree();
+    files = scan.files;
+    findings = scan.findings;
+    roots = [...scan.adminRoots.map((root) => root.dir), ...(scan.storefront ? [scan.storefront] : [])];
+  } else {
+    // The draining mode: each path is walked the way its family is — a path
+    // inside the storefront reads `.ts` too and asks the Polish-literal
+    // question, any other path is an admin path.
+    const storefront = storefrontScanRoot();
+    const inStorefront = (path: string): boolean =>
+      storefront !== null && !relative(storefront, resolve(path)).startsWith('..');
+    const collected: string[] = [];
+    const found: Finding[] = [];
+    for (const r of positional) {
+      const sf = inStorefront(r);
+      const here: string[] = [];
+      try {
+        const st = statSync(r);
+        if (st.isDirectory()) (sf ? collectStorefrontFiles : collectTsxFiles)(r, here);
+        else if (sf ? isStorefrontSource(r) : r.endsWith('.tsx')) here.push(r);
+      } catch {
+        process.stderr.write(`[i18n:hardcoded] path not found: ${r}\n`);
+      }
+      for (const f of here) walkFile(f, found, sf ? STOREFRONT_ANALYSIS : {});
+      collected.push(...here);
     }
-    perRoot.push(files.length - before);
+    files = collected;
+    findings = found;
+    roots = positional;
   }
+  const declared = scan === null ? null : scan.adminRoots;
+  const perRoot = scan === null ? [] : scan.perAdminRoot;
 
   if (files.length === 0) {
     // `admin/src` is resolved against the current directory, so running this
@@ -656,13 +1662,10 @@ async function main(): Promise<void> {
     // all and still printed a 0-finding summary and exit 0. "Nothing to report"
     // and "nothing was read" must not share an exit code (issue #113).
     process.stderr.write(
-      `[i18n:hardcoded] no .tsx file under ${roots.join(', ')} — refusing to report a vacuous pass\n`,
+      `[i18n:hardcoded] no source file under ${roots.join(', ')} — refusing to report a vacuous pass\n`,
     );
     process.exit(2);
   }
-
-  const findings: Finding[] = [];
-  for (const f of files) walkFile(f, findings);
 
   // The module-admin floor. It is resolved here rather than inside
   // `adminScanRoots` because it is deliberately **not** part of the population:
@@ -738,13 +1741,22 @@ async function main(): Promise<void> {
                     ),
                   },
                 ]),
+            // The storefront (issue #85): the workspace's own member list says
+            // whether there is one, and the walk says whether it opened a file
+            // in it. A storefront whose sources moved out from under the walk
+            // reads `storefront:0/1` and exits 2 rather than draining its
+            // ledger. Omitted where the workspace has no storefront member.
+            ...(scan === null || scan.storefront === null
+              ? []
+              : [{ source: 'storefront', expected: 1, covered: scan.storefrontFiles > 0 ? 1 : 0 }]),
           ],
   });
 
   const cwd = process.cwd();
   const print = (f: Finding): void => {
     const rel = relative(cwd, f.filePath);
-    const text = f.text.length > 80 ? `${f.text.slice(0, 77)}...` : f.text;
+    const flat = f.text.replace(/\s*\n\s*/g, ' ');
+    const text = flat.length > 80 ? `${flat.slice(0, 77)}...` : flat;
     process.stdout.write(`${rel}:${f.line}:${f.column} → "${text}" (${f.kind})\n`);
   };
 
@@ -758,21 +1770,26 @@ async function main(): Promise<void> {
   }
 
   const counts = countByFile(findings, REPO_ROOT);
-  const { regressions, drained } = compareToBaseline(counts);
+  const { regressions, drained } = compareToBaseline(counts, {
+    ...HARDCODED_STRINGS_BASELINE,
+    ...STOREFRONT_HARDCODED_STRINGS_BASELINE,
+  });
 
   if (argv.includes('--list')) for (const f of findings) print(f);
 
   process.stdout.write(
     `[i18n:hardcoded] findings=${findings.length} files=${files.length} ` +
-      `ledger-size=${Object.keys(HARDCODED_STRINGS_BASELINE).length} ` +
+      `ledger-size=${Object.keys(HARDCODED_STRINGS_BASELINE).length}` +
+      `+${Object.keys(STOREFRONT_HARDCODED_STRINGS_BASELINE).length} ` +
       `regressions=${regressions.length} drained=${drained.length}\n`,
   );
 
   if (regressions.length > 0) {
     process.stderr.write(
       '\nThese files carry a hard-coded user-visible string the baseline does not\n' +
-        'account for. Wrap it in `t(...)` and ship the key in en.json AND pl.json\n' +
-        '(Principle VIII) — do not raise the number:\n',
+        'account for. Wrap it in `t(...)` and ship the key in en.json AND pl.json —\n' +
+        'for the storefront, in both locales of the area\'s namespace under\n' +
+        '`storefront/lib/i18n/messages/` (Principle VIII) — do not raise the number:\n',
     );
     for (const d of regressions) {
       process.stderr.write(`  - ${d.file}: ${d.actual} finding(s), baseline ${d.baseline}\n`);

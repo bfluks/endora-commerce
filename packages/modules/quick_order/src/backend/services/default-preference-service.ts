@@ -3,7 +3,6 @@ import {
   ERROR_CODES,
   type AddressReadPort,
   type CustomerAccountReadPort,
-  type CustomerAddressReadPort,
   type DeliveryMethodReadPort,
   type OrganizationRestrictionPort,
   type PaymentMethodReadPort,
@@ -17,6 +16,7 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import { QuickOrderDefaultPreference } from '../entities/quick-order-default-preference.entity.js';
 import type { PreferenceAuditContext } from '@endora-commerce/contracts';
 import { canManagePreference, type PreferenceActor } from './default-preference-authz.js';
+import { preferenceAuditState, preferenceUpdatedAuditState } from './default-preference-audit-state.js';
 import {
   resolvePreferenceFields,
   type PreferenceRow,
@@ -34,6 +34,8 @@ export type { PreferenceAuditContext };
 function unrestricted(allowed: string[] | null): allowed is null {
   return allowed === null || allowed.length === 0;
 }
+
+const ADDRESS_FIELDS = ['defaultBillingAddressId', 'defaultShippingAddressId'] as const;
 
 const FIELDS = [
   'defaultPaymentMethodId',
@@ -55,16 +57,12 @@ export interface DefaultPreferenceCollaborators {
   readonly paymentMethods: PaymentMethodReadPort;
   /** `delivery_methods` — the same question, delivery side. */
   readonly deliveryMethods: DeliveryMethodReadPort;
-  /** `addresses` — the organisation's shared addresses. */
-  readonly addresses: AddressReadPort;
   /**
-   * `customers` — the buyer's personal addresses (feature 040).
-   *
-   * The one collaborator whose owner may be absent without this service
-   * failing: see the null object in `backend.ts` and the module's
-   * `nonBindingDependencies` entry.
+   * `addresses` — the organisation's shared addresses, the only book a default
+   * address may come from: the preference table's address columns are foreign
+   * keys to `addresses` (issue #769).
    */
-  readonly customerAddresses: CustomerAddressReadPort;
+  readonly addresses: AddressReadPort;
   /** `organizations` — the buyer organisation's method allow-lists. */
   readonly restriction: OrganizationRestrictionPort;
 }
@@ -99,8 +97,26 @@ export class DefaultPreferenceService {
 
     const targetCustomerOrgId =
       input.scope === 'customer' ? await this.customerOrganizationId(input.scopeId) : null;
-    if (!canManagePreference(actor, { scope: input.scope, scopeId: input.scopeId }, targetCustomerOrgId)) {
+    if (!(await canManagePreference(actor, { scope: input.scope, scopeId: input.scopeId }, targetCustomerOrgId))) {
       throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Not allowed to manage these defaults.');
+    }
+
+    // Issue #769 — a default address must be one of the target organisation's
+    // own, live addresses: the columns are foreign keys to `addresses`, so a
+    // personal-book id would otherwise reach the database and fail there (500),
+    // and another organisation's id would be stored. Refused the way `orders`
+    // refuses an address it does not own.
+    const targetOrganizationId = input.scope === 'organization' ? input.scopeId : targetCustomerOrgId;
+    for (const field of ADDRESS_FIELDS) {
+      const addressId = input[field];
+      if (typeof addressId !== 'string') continue;
+      if (!(await this.isAddressEligible(addressId, targetOrganizationId))) {
+        throw new HttpError(
+          403,
+          ERROR_CODES.ADDRESS_NOT_OWNED,
+          'Address does not belong to the target organization.',
+        );
+      }
     }
 
     let row = await em.findOne(QuickOrderDefaultPreference, {
@@ -117,7 +133,7 @@ export class DefaultPreferenceService {
         row[field] = input[field] ?? null;
       }
     }
-    await em.persistAndFlush(row);
+    await em.persist(row).flush();
 
     const after = this.toContract(row);
     await this.auditLog.record({
@@ -126,8 +142,9 @@ export class DefaultPreferenceService {
       action: 'quick_order.default_preference.update',
       objectType: 'QuickOrderDefaultPreference',
       objectId: row.id,
-      stateBefore: before as Record<string, unknown> | null,
-      stateAfter: after as Record<string, unknown>,
+      // Issue #470 (D-288): the scope and the chosen ids, never `scopeId` — the tenant anchor.
+      stateBefore: before ? preferenceAuditState(before) : null,
+      stateAfter: preferenceUpdatedAuditState(before, after),
       ipAddress: audit.ipAddress ?? null,
       userAgent: audit.userAgent ?? null,
       requestId: audit.requestId ?? null,
@@ -188,10 +205,10 @@ export class DefaultPreferenceService {
       this.isDeliveryEligible(id, allowedDelivery, salesChannelId),
     );
     const billing = await this.keepIf(resolved.billing, (id) =>
-      this.isAddressEligible(id, organizationId, customerAccountId),
+      this.isAddressEligible(id, organizationId),
     );
     const shipping = await this.keepIf(resolved.shipping, (id) =>
-      this.isAddressEligible(id, organizationId, customerAccountId),
+      this.isAddressEligible(id, organizationId),
     );
 
     return {
@@ -244,28 +261,18 @@ export class DefaultPreferenceService {
     );
   }
 
-  private async isAddressEligible(
-    id: string,
-    organizationId: string | null,
-    customerAccountId: string,
-  ): Promise<boolean> {
-    // Org-shared address belonging to the customer's organization. `liveOnly`
-    // because this answer feeds a choice rather than a rendering: without it
-    // `findById` returns soft-deleted rows and a deleted address becomes an
-    // eligible one-click default (AddressReadPort's doc block).
-    if (organizationId !== null) {
-      const orgAddress = await this.ports.addresses.findById(organizationId, id, {
-        liveOnly: true,
-      });
-      if (orgAddress) return true;
-    }
-    // Feature 040 — personal address owned by the customer. Same `liveOnly`
-    // reason, and the port already scopes by account, so the ownership check
-    // cannot be forgotten.
-    const personal = await this.ports.customerAddresses.findById(customerAccountId, id, {
-      liveOnly: true,
-    });
-    return personal !== null;
+  /**
+   * An address is eligible only when it is one of the organisation's own
+   * (`addresses`) — never the buyer's personal book (`customers`), which the
+   * preference table's foreign keys cannot reference (issue #769). `liveOnly`
+   * because this answer feeds a choice rather than a rendering: without it
+   * `findById` returns soft-deleted rows and a deleted address becomes an
+   * eligible one-click default (AddressReadPort's doc block).
+   */
+  private async isAddressEligible(id: string, organizationId: string | null): Promise<boolean> {
+    if (organizationId === null) return false;
+    const orgAddress = await this.ports.addresses.findById(organizationId, id, { liveOnly: true });
+    return orgAddress !== null;
   }
 
   private async customerOrganizationId(customerAccountId: string): Promise<string | null> {

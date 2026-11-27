@@ -1,5 +1,5 @@
 ---
-title: The Kernel — boundary, scopes and composition order
+title: The kernel — boundary, scopes and composition order
 ---
 
 # The Kernel
@@ -178,10 +178,18 @@ the module is switched off.
 ```ts
 ctx.di.providePort(
   'organizationRestrictionPort',
-  ctx.asFunction(({ emFactory, auditLogService }: Cradle) =>
-    new OrganizationRestrictionService(emFactory, auditLogService)).singleton(),
+  ctx.asFunction(({ emFactory, commandBus }: Cradle) =>
+    new OrganizationRestrictionService(emFactory, commandBus)).singleton(),
 );
 ```
+
+**A write port is the port of its aggregate.** When other code needs to write
+an aggregate you own, extend that aggregate's `<aggregate>CommandPort` rather
+than publishing a port shaped by one request: each method runs the same audited
+Command as your admin route for that operation, with the ambient actor, and
+checks no permission. A published port's methods are on the
+[contract surface](./contract-surface.md): deprecate one for a release before
+you remove or change it.
 
 ### `ctx.di.register({...})` — your own services, and contribution points
 
@@ -283,6 +291,17 @@ Two more rules that are easy to miss:
 Most edges are pulls. The push shape is for registries — transactional-email
 defaults, reference registries, adapter tables — where a module contributes
 something the host later walks.
+
+**One edge is neither: running inside another module's write.** A module that
+must act when another module's Command runs — refuse it, write its own row
+beside it, or be told after it commits — registers through
+`ctx.commandHooks([...])` on an action the owner declares hookable in its
+manifest. Nobody resolves anything: the Command Bus runs a `beforeCommit` hook
+inside the owner's transaction and writes an outbox row for an `afterCommit`
+handler, and it skips either one per call while the hook's module is off. The
+registration is sealed with composition, so it is made in `registerModule`,
+never in a boot hook. The seam, its ordering and its refusals are in
+[the Command Bus](./command-bus.md#command-hooks-beforecommit).
 
 **A contribution registry is never a gated port.** The rule:
 
@@ -480,7 +499,7 @@ caller today is `check-port-dependencies.ts`, at build time; the confirmation
 dialog and the 409 `MODULE_DEACTIVATION_UNCONFIRMED` envelope are still in
 flight, and today's dialog is a bare
 `window.confirm` naming the module and nothing else
-(`admin/src/modules/platform/ModuleActivationControl.tsx`). What is settled ahead
+(`packages/admin-shell/src/modules/platform/ModuleActivationControl.tsx`). What is settled ahead
 of them is that there is **one** function for both to call, so that when they land
 the id set in the dialog and the id set in `details.consequences` cannot drift:
 they will be the same expression evaluated twice, not two lists somebody keeps in
@@ -574,6 +593,18 @@ call, the discount it returns is data), an **object literal** (a deps bag is a
 record — tainting it made `this.deps.<anything>()` a port call, 39 of them in one
 run), and a **field read off a port**. Run with `PORT_CATCH_WHY=1` to see every
 alias with the site that introduced it.
+
+**A holder built from a deps bag is followed per method instead.** Since
+`new ProjectReadService({ access, organizations: lazyPort(…) })` cannot carry as a
+value without tainting every method of the class, the check tracks it as a
+**holder** — which class instance, closure or object literal a declaration holds —
+and attributes a gate only where the holder is *called*: `read.list()` reaches
+what `ProjectReadService#list` reaches, and `read.getOrFail()`, a row read,
+reaches nothing and is not a site. A key is looked up in the bag the receiver
+actually holds, never by its spelling across the module. What a call on a holder
+carries is what **escapes** the method: a presence answer the method's own
+`catch` consumes on purpose is judged at that `catch`, not again at the caller's.
+`PORT_CATCH_UNIT=<regex>` prints what escapes each matching method or closure.
 
 **An alias is visible where its binding is, and nowhere else.**
 A `const` is file-scoped because it is. A **deps-object key** is module-scoped,
@@ -1266,7 +1297,7 @@ pnpm run cli search reindex
 
 # In a checkout of the Endora Commerce repository:
 pnpm --filter backend run cli -- --list
-pnpm --filter backend run cli -- search reindex  # or the alias: pnpm search:reindex
+pnpm --filter backend run cli -- search reindex  # or the alias: pnpm --filter backend run search:reindex
 ```
 
 The same tree walk and the same `detectHookExport` that carry `installHook`

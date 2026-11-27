@@ -85,7 +85,9 @@ const SUBJECTS: readonly Subject[] = [
   },
   {
     module: 'settings',
-    actions: ['open-settings'],
+    // `clear-cache` and `open-setting-groups` arrived with issue #516: the two
+    // other screens the sidebar lists (Principle XVI).
+    actions: ['clear-cache', 'open-setting-groups', 'open-settings'],
     axis: 'platform-unavailable',
     admin: settingsAdmin,
   },

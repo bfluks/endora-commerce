@@ -1,13 +1,68 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { ApiError, apiClient } from '../../lib/api-client.js';
-import { useAuth } from '../../lib/auth.js';
-import { useAppLanguage } from '../../i18n/app-language-context.js';
-import { setPreferredLanguage } from '../../i18n/language-storage.js';
-import { useTranslation } from '../../i18n/useTranslation.js';
-import type { SupportedAdminLanguage } from '../../i18n/types.js';
+import { Navigate } from 'react-router-dom';
+import { ApiError, apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
+import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { AssetFieldPicker, ContentLanguageTabs, StickyFormActions } from '@endora-commerce/admin-kit/components';
+import {
+  Button,
+  Card,
+  CardContent,
+  EditorSection,
+  FormField,
+  Input,
+  Label,
+  PageHeader,
+  RouteTabs,
+  Textarea,
+} from '@endora-commerce/admin-kit/ui';
+
+export type ProfileTab = 'profile' | 'security';
+
+const PROFILE_PATH = '/profile';
+const SECURITY_PATH = '/profile/security';
+/** The `profile.security` mount carries nothing; one object, so the zone's memo holds. */
+const SECURITY_ZONE_PROPS = {};
 
 /**
- * ProfilePage — feature 010 admin polish.
+ * The signed-in admin's own account, as two tabs (issue #1519, UX audit
+ * SHELL-11, owner decision DEC-02): *Profile* — this screen's form — and
+ * *Security*, whose body is the `profile.security`
+ * zone. Two-step verification used to be a row in the sidebar's *System*
+ * section; it is about the account, not the platform, so it lives beside the
+ * account's other settings now, reached from the avatar and from ⌘K.
+ *
+ * The host owns the strip, both labels and both routes, and does not know which
+ * module fills the second tab: it is drawn when `useAdminZone` returns a
+ * contribution, which has already applied both presence axes. With no
+ * contributor there is one tab, and a strip of one is not a choice, so none is
+ * drawn and `/profile/security` lands on the profile.
+ */
+export function ProfilePage({ tab = 'profile' }: { tab?: ProfileTab }): ReactNode {
+  const t = useTranslation('core');
+  const hasSecurity = useAdminZone('profile.security', SECURITY_ZONE_PROPS).length > 0;
+
+  if (tab === 'security' && !hasSecurity) return <Navigate to={PROFILE_PATH} replace />;
+
+  return (
+    <div className="b2b-page">
+      <PageHeader title={t('profile.page.title')} />
+      {hasSecurity ? (
+        <RouteTabs
+          className="mb-4"
+          tabs={[
+            { to: PROFILE_PATH, label: t('profile.tabs.profile') },
+            { to: SECURITY_PATH, label: t('profile.tabs.security') },
+          ]}
+        />
+      ) : null}
+      {tab === 'security' ? <AdminZone name="profile.security" props={SECURITY_ZONE_PROPS} /> : <ProfileDetails />}
+    </div>
+  );
+}
+
+/**
+ * The Profile tab — feature 010 admin polish.
  *
  * Self-edit form for the logged-in admin user. Hits
  * `PATCH /api/v1/admin/me`, which any authenticated admin can call
@@ -21,8 +76,18 @@ import type { SupportedAdminLanguage } from '../../i18n/types.js';
  *
  * A password change revokes the account's other sessions and keeps the one it
  * was made from, so the screen stays where it is and says so.
+ *
+ * Issue #1437 (UX audit 2026-11-17, DS-03) — the form is one card whose parts
+ * (identity, author profile, password) are `EditorSection`s, because they are
+ * saved together by one Save (Common Region). Kit primitives throughout, so the
+ * screen is held by `one-visual-system.test.ts`.
+ *
+ * Issue #1553 (SHELL-17) — the UI language is not set here. It had a card and a
+ * second filled Save of its own, which competed with the form's (Von Restorff)
+ * and repeated the top-bar `LanguagePicker`, the conventional place for it
+ * (Jakob). One muted line in the identity section says where it went.
  */
-export function ProfilePage(): ReactNode {
+function ProfileDetails(): ReactNode {
   const t = useTranslation('core');
   const { me, refresh } = useAuth();
   const [firstName, setFirstName] = useState('');
@@ -33,17 +98,44 @@ export function ProfilePage(): ReactNode {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Feature 171 (US6) — the public author profile: an avatar and a biography per
+  // content language, shown beside the posts the administrator writes.
+  const [avatarAssetId, setAvatarAssetId] = useState<string | null>(null);
+  const [bio, setBio] = useState<Record<string, string>>({});
+  const [contentLanguages, setContentLanguages] = useState<Array<{ code: string; label: string }>>([]);
+  // The language whose text is on screen; every language's text stays in `bio`.
+  const [bioLanguage, setBioLanguage] = useState<string | null>(null);
 
   useEffect(() => {
     if (me) {
       setFirstName(me.adminUser.firstName);
       setLastName(me.adminUser.lastName);
+      setAvatarAssetId(me.adminUser.avatarAssetId ?? null);
+      setBio(me.adminUser.bio ?? {});
     }
   }, [me]);
 
+  useEffect(() => {
+    void apiClient
+      .get<{ data: { languages: Array<{ code: string; label: string }> } }>('/api/v1/i18n/config')
+      .then((config) => {
+        setContentLanguages(config.data.languages);
+        setBioLanguage((current) => current ?? config.data.languages[0]?.code ?? null);
+      })
+      .catch(() => setContentLanguages([]));
+  }, []);
+
   if (!me) {
-    return <div className="b2b-page">{t('profile.loading')}</div>;
+    return <p>{t('profile.loading')}</p>;
   }
+
+  // Issue #1449 (DS-19) — the draft against the account, for the save bar's "Unsaved changes".
+  const dirty =
+    firstName !== me.adminUser.firstName ||
+    lastName !== me.adminUser.lastName ||
+    avatarAssetId !== (me.adminUser.avatarAssetId ?? null) ||
+    !sameBio(bio, me.adminUser.bio ?? {}) ||
+    password.trim().length > 0;
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -60,6 +152,8 @@ export function ProfilePage(): ReactNode {
       const body: Record<string, unknown> = {};
       if (firstName !== me.adminUser.firstName) body['firstName'] = firstName;
       if (lastName !== me.adminUser.lastName) body['lastName'] = lastName;
+      if (avatarAssetId !== (me.adminUser.avatarAssetId ?? null)) body['avatarAssetId'] = avatarAssetId;
+      if (!sameBio(bio, me.adminUser.bio ?? {})) body['bio'] = bio;
       if (changingPassword) {
         body['password'] = password;
         body['currentPassword'] = currentPassword;
@@ -92,103 +186,81 @@ export function ProfilePage(): ReactNode {
   };
 
   return (
-    <div className="b2b-page">
-      <div className="b2b-page-head">
-        <div className="b2b-grow">
-          <div className="b2b-page-head__title">{t('profile.page.title')}</div>
-          <div className="b2b-page-head__sub">
-            {t('profile.page.descriptionPrefix')} <code className="b2b-mono">admin_users:manage</code> {t('profile.page.descriptionSuffix')}
-          </div>
-        </div>
-      </div>
-
-      {error ? (
-        <div
-          className="b2b-card"
-          style={{
-            background: 'var(--danger-soft)',
-            color: 'var(--danger-soft-fg)',
-            padding: 12,
-            marginBottom: 16,
-            border: '1px solid hsl(8 80% 85%)',
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
-      {info ? (
-        <div
-          className="b2b-card"
-          style={{
-            background: 'var(--success-soft)',
-            color: 'var(--success-soft-fg)',
-            padding: 12,
-            marginBottom: 16,
-            border: '1px solid hsl(142 50% 80%)',
-          }}
-        >
-          {info}
-        </div>
-      ) : null}
-
-      <form onSubmit={(e): void => { void handleSubmit(e); }}>
-        <div className="b2b-card" style={{ marginBottom: 16 }}>
-          <div className="b2b-card__head"><h2>{t('profile.identityTitle')}</h2></div>
-          <div className="b2b-card__body">
-            <div className="b2b-grid b2b-grid--cols-2">
-              <div>
-                <label className="b2b-label" htmlFor="me-email">{t('profile.field.email')}</label>
-                <input
-                  id="me-email"
-                  className="b2b-field"
-                  value={me.adminUser.email}
-                  disabled
-                />
-                <div className="b2b-help">{t('profile.emailHelp')}</div>
-              </div>
-              <div>
-                <label className="b2b-label" htmlFor="me-role">{t('profile.field.role')}</label>
-                <input
-                  id="me-role"
-                  className="b2b-field"
-                  value={me.role?.name ?? '—'}
-                  disabled
-                />
-              </div>
-              <div>
-                <label className="b2b-label" htmlFor="me-first">{t('profile.field.firstName')}</label>
-                <input
+    <form onSubmit={(e): void => { void handleSubmit(e); }}>
+      <Card>
+        <CardContent className="space-y-(--section-gap)">
+          <EditorSection title={t('profile.identityTitle')}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label={t('profile.field.email')} hint={t('profile.emailHelp')}>
+                <Input id="me-email" value={me.adminUser.email} disabled />
+              </FormField>
+              <FormField label={t('profile.field.role')}>
+                <Input id="me-role" value={me.role?.name ?? '—'} disabled />
+              </FormField>
+              <FormField label={t('profile.field.firstName')}>
+                <Input
                   id="me-first"
-                  className="b2b-field"
                   value={firstName}
                   onChange={(e): void => setFirstName(e.target.value)}
                   required
                   maxLength={120}
                 />
-              </div>
-              <div>
-                <label className="b2b-label" htmlFor="me-last">{t('profile.field.lastName')}</label>
-                <input
+              </FormField>
+              <FormField label={t('profile.field.lastName')}>
+                <Input
                   id="me-last"
-                  className="b2b-field"
                   value={lastName}
                   onChange={(e): void => setLastName(e.target.value)}
                   required
                   maxLength={120}
                 />
-              </div>
+              </FormField>
             </div>
-          </div>
-        </div>
+            <p className="text-xs text-muted-foreground">{t('profile.languageHelp')}</p>
+          </EditorSection>
 
-        <div className="b2b-card" style={{ marginBottom: 16 }}>
-          <div className="b2b-card__head"><h2>{t('profile.changePassword')}</h2></div>
-          <div className="b2b-card__body">
-            <div style={{ marginBottom: 16 }}>
-              <label className="b2b-label" htmlFor="me-current-pwd">{t('profile.field.currentPassword')}</label>
-              <input
+          <EditorSection title={t('profile.authorTitle')} description={t('profile.authorHelp')}>
+            <div className="space-y-1.5">
+              <Label htmlFor="me-avatar">{t('profile.field.avatar')}</Label>
+              <AssetFieldPicker
+                id="me-avatar"
+                value={avatarAssetId ?? ''}
+                // The picker answers '' when the image is cleared: no avatar.
+                onChange={(assetId): void => setAvatarAssetId(assetId === '' ? null : assetId)}
+                acceptMimePrefix="image/"
+                allowUpload
+              />
+            </div>
+            <ContentLanguageTabs
+              languages={contentLanguages.map((language) => language.code)}
+              activeLanguage={bioLanguage}
+              onChange={setBioLanguage}
+            />
+            {bioLanguage !== null ? (
+              <FormField
+                label={t('profile.field.bio', {
+                  language: contentLanguages.find((language) => language.code === bioLanguage)?.label ?? bioLanguage,
+                })}
+              >
+                <Textarea
+                  id="me-bio"
+                  rows={5}
+                  maxLength={2000}
+                  value={bio[bioLanguage] ?? ''}
+                  onChange={(e): void => setBio((current) => ({ ...current, [bioLanguage]: e.target.value }))}
+                />
+              </FormField>
+            ) : null}
+          </EditorSection>
+
+          <EditorSection title={t('profile.changePassword')}>
+            {/* Wired by hand rather than through `FormField`: the field names one
+                description at a time — the refusal, else the help — and the refusal
+                interrupts (`role="alert"`), because it is why the Save did nothing. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="me-current-pwd">{t('profile.field.currentPassword')}</Label>
+              <Input
                 id="me-current-pwd"
-                className="b2b-field"
                 type="password"
                 value={currentPassword}
                 onChange={(e): void => {
@@ -201,23 +273,18 @@ export function ProfilePage(): ReactNode {
                 aria-describedby={currentPasswordError ? 'me-current-pwd-error' : 'me-current-pwd-help'}
               />
               {currentPasswordError ? (
-                <div
-                  id="me-current-pwd-error"
-                  className="b2b-help"
-                  role="alert"
-                  style={{ color: 'var(--danger-soft-fg)' }}
-                >
+                <p id="me-current-pwd-error" className="text-xs text-destructive" role="alert">
                   {currentPasswordError}
-                </div>
+                </p>
               ) : (
-                <div id="me-current-pwd-help" className="b2b-help">{t('profile.field.currentPasswordHelp')}</div>
+                <p id="me-current-pwd-help" className="text-xs text-muted-foreground">
+                  {t('profile.field.currentPasswordHelp')}
+                </p>
               )}
             </div>
-            <div>
-              <label className="b2b-label" htmlFor="me-pwd">{t('profile.field.newPassword')}</label>
-              <input
+            <FormField label={t('profile.field.newPassword')} hint={t('profile.field.newPasswordHelp')}>
+              <Input
                 id="me-pwd"
-                className="b2b-field"
                 type="password"
                 value={password}
                 onChange={(e): void => setPassword(e.target.value)}
@@ -226,131 +293,31 @@ export function ProfilePage(): ReactNode {
                 autoComplete="new-password"
                 placeholder={t('profile.field.newPasswordPlaceholder')}
               />
-              <div className="b2b-help">{t('profile.field.newPasswordHelp')}</div>
-            </div>
-          </div>
-        </div>
+            </FormField>
+          </EditorSection>
+        </CardContent>
+      </Card>
 
-        <div className="b2b-row" style={{ gap: 8, justifyContent: 'flex-end' }}>
-          <button type="submit" className="b2b-btn b2b-btn--primary" disabled={submitting}>
+      {/* Issue #1449 (DS-19) — the one Save, in view at the end of the form, with what it
+          answered said beside it rather than in a banner at the top of the page. */}
+      <StickyFormActions
+        desktop="sticky"
+        dirty={dirty}
+        error={error}
+        status={info}
+        primary={
+          <Button type="submit" disabled={submitting} aria-busy={submitting || undefined}>
             {submitting ? t('profile.saving') : t('profile.saveChanges')}
-          </button>
-        </div>
-      </form>
-
-      <LanguageSection />
-    </div>
+          </Button>
+        }
+      />
+    </form>
   );
 }
 
-/**
- * Language section — feature 019 / FR-002, FR-004, FR-005, FR-006.
- *
- * Self-service language picker. Calls
- * `PATCH /api/v1/admin/me/preferred-language` and flips the
- * `<TranslationProvider>` language at the App scope so every screen
- * re-renders without sign-out.
- */
-function LanguageSection(): ReactNode {
-  const t = useTranslation('core');
-  const { language, setLanguage } = useAppLanguage();
-  const { refresh } = useAuth();
-  const [pending, setPending] = useState<SupportedAdminLanguage>(language);
-  const [submitting, setSubmitting] = useState(false);
-  const [info, setInfo] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setPending(language);
-  }, [language]);
-
-  const handleSave = async (): Promise<void> => {
-    if (pending === language) return;
-    setSubmitting(true);
-    setError(null);
-    setInfo(null);
-    const previous = language;
-    setLanguage(pending);
-    try {
-      await setPreferredLanguage(pending);
-      await refresh();
-      setInfo(t('profilePage.language.saved'));
-    } catch (err) {
-      setLanguage(previous);
-      setPending(previous);
-      const message =
-        err instanceof ApiError
-          ? err.envelope.error.message
-          : t('profilePage.language.failed');
-      setError(message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="b2b-card" style={{ marginTop: 16 }}>
-      <div className="b2b-card__head">
-        <h2>{t('profilePage.section.language')}</h2>
-      </div>
-      <div className="b2b-card__body">
-        <p className="b2b-help" style={{ marginBottom: 12 }}>
-          {t('profilePage.section.language.help')}
-        </p>
-        {error ? (
-          <div
-            className="b2b-card"
-            style={{
-              background: 'var(--danger-soft)',
-              color: 'var(--danger-soft-fg)',
-              padding: 12,
-              marginBottom: 12,
-              border: '1px solid hsl(8 80% 85%)',
-            }}
-          >
-            {error}
-          </div>
-        ) : null}
-        {info ? (
-          <div
-            className="b2b-card"
-            style={{
-              background: 'var(--success-soft)',
-              color: 'var(--success-soft-fg)',
-              padding: 12,
-              marginBottom: 12,
-              border: '1px solid hsl(142 50% 80%)',
-            }}
-          >
-            {info}
-          </div>
-        ) : null}
-        <div className="b2b-row" style={{ gap: 12, alignItems: 'center' }}>
-          <select
-            className="b2b-field"
-            value={pending}
-            onChange={(e): void =>
-              setPending(e.target.value as SupportedAdminLanguage)
-            }
-            style={{ maxWidth: 240 }}
-          >
-            <option value="en">{t('profilePage.language.option.en')}</option>
-            <option value="pl">{t('profilePage.language.option.pl')}</option>
-          </select>
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--primary"
-            disabled={submitting || pending === language}
-            onClick={(): void => {
-              void handleSave();
-            }}
-          >
-            {submitting
-              ? t('common.state.loading')
-              : t('profilePage.language.action.save')}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+/** Whether two biographies say the same, ignoring languages left blank. */
+function sameBio(a: Record<string, string>, b: Record<string, string>): boolean {
+  const filled = (bio: Record<string, string>) =>
+    JSON.stringify(Object.entries(bio).filter(([, text]) => text.trim() !== '').sort(([x], [y]) => x.localeCompare(y)));
+  return filled(a) === filled(b);
 }

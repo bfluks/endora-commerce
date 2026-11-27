@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
-import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import {
   FulfilmentStrategyPicker,
   type FulfilmentStrategyValue,
@@ -76,10 +76,7 @@ describe('FulfilmentStrategyPicker — the kit renders it from the shipped `core
     );
     expect(screen.getByLabelText('Warehouse-picking strategy')).toBeTruthy();
     expect(
-      screen.getByText(
-        'How warehouses are picked to fulfil order lines. Precedence: product → ' +
-          'organization → sales channel → platform default.',
-      ),
+      screen.getByText('Precedence: product → organization → sales channel → platform default.'),
     ).toBeTruthy();
     expectNoRawKeys(en.container);
     en.unmount();

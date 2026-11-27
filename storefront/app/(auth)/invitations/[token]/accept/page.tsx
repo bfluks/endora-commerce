@@ -1,11 +1,14 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { loginCustomer } from '../../../../../lib/api/auth';
 import { acceptInvitation } from '../../../../../lib/api/organization';
-import { StorefrontApiError } from '../../../../../lib/api/client';
-import { setSessionCookie } from '../../../../../lib/session';
+import { INVITATION_ACCEPT_ERRORS, type InvitationAcceptCode } from '../../../../../lib/auth/auth-errors';
+import { signInErrorParam } from '../../../../../lib/auth/sign-in-errors';
+import { clearAnonCartCookie, setCartMergeFlash, setSessionCookie } from '../../../../../lib/session';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../../lib/i18n/localized-link';
+import { getServerContext } from '../../../../../lib/server-context';
+import { tForLocale } from '../../../../../lib/i18n/messages';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -18,6 +21,12 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  * Invitation redemption (email link → `/invitations/:token/accept`).
  * Matches `buildInvitationEmail` in the backend; submits to
  * `POST /api/v1/organizations/invitations/:token/accept`, then signs in.
+ *
+ * **A code travels, never a sentence** (issue #808, `lib/url-errors.ts`): the
+ * action carries a code of {@link INVITATION_ACCEPT_ERRORS} in `?error=`, and
+ * the page words it, reading any other value as its generic failure. An empty
+ * token, and any failure once the account exists, goes to `/login` with a
+ * sign-in code.
  */
 
 export default async function AcceptInvitationPage({
@@ -29,24 +38,27 @@ export default async function AcceptInvitationPage({
 }): Promise<ReactNode> {
   const { token } = await params;
   const { error } = await searchParams;
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
+  const errorKey = INVITATION_ACCEPT_ERRORS.errorKey(error);
 
   return (
     <div className="b2b-auth">
-      <h1>Accept invitation</h1>
-      <p>Set your name and password to join the organization.</p>
-      {error ? <div className="b2b-auth__error">{error}</div> : null}
+      <h1>{t('auth.invitation.heading')}</h1>
+      <p>{t('auth.invitation.intro')}</p>
+      {errorKey ? <div className="b2b-auth__error">{t(errorKey)}</div> : null}
       <form action={acceptInvitationAction} className="b2b-auth__form">
         <input type="hidden" name="token" value={token} />
         <div className="b2b-auth__field">
-          <label htmlFor="invite-fn">First name</label>
+          <label htmlFor="invite-fn">{t('auth.field.firstName')}</label>
           <input id="invite-fn" name="firstName" required autoComplete="given-name" maxLength={120} placeholder=" " />
         </div>
         <div className="b2b-auth__field">
-          <label htmlFor="invite-ln">Last name</label>
+          <label htmlFor="invite-ln">{t('auth.field.lastName')}</label>
           <input id="invite-ln" name="lastName" required autoComplete="family-name" maxLength={120} placeholder=" " />
         </div>
         <div className="b2b-auth__field">
-          <label htmlFor="invite-pw">Password (at least 12 characters)</label>
+          <label htmlFor="invite-pw">{t('auth.field.newPasswordMin')}</label>
           <input
             id="invite-pw"
             name="password"
@@ -59,12 +71,13 @@ export default async function AcceptInvitationPage({
           />
         </div>
         <div className="b2b-auth__actions">
-          <button type="submit">Create account</button>
+          <button type="submit">{t('auth.common.createAccount')}</button>
         </div>
       </form>
       <p className="b2b-auth__hint">
-        Wrong link? Ask your admin for a new invitation or{' '}
-        <Link href="/login">sign in</Link> if you already have an account.
+        {t('auth.invitation.wrongLinkBefore')}{' '}
+        <LocalizedLink href="/login">{t('auth.invitation.wrongLinkLink')}</LocalizedLink>
+        {t('auth.invitation.wrongLinkAfter')}
       </p>
     </div>
   );
@@ -78,40 +91,44 @@ async function acceptInvitationAction(formData: FormData): Promise<void> {
   const lastName = ((formData.get('lastName') as string) ?? '').trim();
   const password = (formData.get('password') as string) ?? '';
 
-  const redirectWithError = (message: string): never => {
-    const q = new URLSearchParams({ error: message });
-    if (!token.trim()) {
-      redirect(`/login?${q.toString()}`);
-    }
-    redirect(`/invitations/${encodeURIComponent(token)}/accept?${q.toString()}`);
-  };
-
   if (!token.trim()) {
-    redirectWithError('Invitation link is invalid.');
+    return await localeRedirect(`/login?error=${signInErrorParam(null, 'INVITATION_INVALID')}`);
   }
+  const redirectWithError = async (code: InvitationAcceptCode): Promise<never> =>
+    await localeRedirect(`/invitations/${encodeURIComponent(token)}/accept?error=${code}`);
 
+  // Issue #1323 — the page language travels as `Accept-Language`: the backend records the new
+  // account's e-mail language from it.
+  const { ctx } = await getServerContext();
+  let email: string;
   try {
-    const { customerAccount } = await acceptInvitation(token, {
-      password,
-      firstName,
-      lastName,
-    });
-    const login = await loginCustomer({
-      email: customerAccount.email,
-      password,
-    });
-    // Feature 042 — a 2FA-protected/enforced account must finish the second
-    // step via the normal login flow.
-    if (login.status !== 'authenticated' || !login.sessionCookieValue) {
-      redirectWithError('Account created. Please sign in to continue.');
-      return;
-    }
-    await setSessionCookie(login.sessionCookieValue);
+    const { customerAccount } = await acceptInvitation(token, { password, firstName, lastName }, ctx);
+    email = customerAccount.email;
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not accept invitation. Try again.';
-    redirectWithError(message);
+    return await redirectWithError(INVITATION_ACCEPT_ERRORS.failureCode(err, 'INVITATION_FAILED'));
   }
 
-  redirect('/account');
+  // The account exists from here on: a failure is the sign-in's, and `/login` words it
+  // (architect ruling on #822). Each redirect sits outside a `try`, since a redirect is thrown.
+  let login: Awaited<ReturnType<typeof loginCustomer>>;
+  try {
+    login = await loginCustomer({ email, password }, ctx);
+  } catch (err) {
+    return await localeRedirect(`/login?error=${signInErrorParam(err, 'SIGN_IN_TO_CONTINUE')}`);
+  }
+  // Feature 042 — a 2FA-protected/enforced account must finish the second
+  // step via the normal login flow.
+  if (login.status !== 'authenticated' || !login.sessionCookieValue) {
+    return await localeRedirect(`/login?error=${signInErrorParam(null, 'SIGN_IN_TO_CONTINUE')}`);
+  }
+  await setSessionCookie(login.sessionCookieValue);
+  // Issue #358 — the sign-in forwards the signed-out basket, so the backend may
+  // have attached it to the new account: handled as `/login` handles it — the
+  // drained anonymous cookie is dropped and the account page shows the notice.
+  if (login.cartMerge?.outcome === 'adopted' || login.cartMerge?.outcome === 'merged') {
+    await clearAnonCartCookie();
+    await setCartMergeFlash(login.cartMerge.outcome);
+  }
+
+  return await localeRedirect('/account');
 }

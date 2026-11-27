@@ -35,6 +35,7 @@
  * edge added across a boundary moves it, and a correctness edge crossing one
  * would move it too.
  */
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -505,15 +506,23 @@ describe('§2 R2.3 and §3 R3.8 — an example Dockerfile per image, with no fou
     }
   });
 
-  it('the backend image defaults `DEPLOYMENT` to the instance\'s own, so a build with no argument is not bare core', () => {
+  it('both images default `DEPLOYMENT` to the instance\'s own, so a build with no argument is not bare core', () => {
     // A blank `DEPLOYMENT` composes no overlay module and says nothing, so an
     // image built without the `--build-arg` looked exactly like an instance
-    // with no overlay. The tree knows which deployment it is.
-    const text = fileAt(withAdmin(), 'deploy/Dockerfile.backend');
-    expect(text).toMatch(/^ARG DEPLOYMENT=acme-shop$/m);
-    expect(text).toMatch(/^ENV DEPLOYMENT=\$DEPLOYMENT$/m);
-    // The admin image reads no deployment, and gains no default for anything.
-    expect(fileAt(withAdmin(), 'deploy/Dockerfile.admin')).not.toMatch(/^ARG [A-Z0-9_]+=/m);
+    // with no overlay. The tree knows which deployment it is. The admin image
+    // reads it since #1855: it selects the deployment's admin registry
+    // (`specs/190-overlay-full-modules/` FR-081).
+    for (const path of ['deploy/Dockerfile.backend', 'deploy/Dockerfile.admin']) {
+      const text = fileAt(withAdmin(), path);
+      expect(text, path).toMatch(/^ARG DEPLOYMENT=acme-shop$/m);
+      expect(text, path).toMatch(/^ENV DEPLOYMENT=\$DEPLOYMENT$/m);
+    }
+    // And the admin image gains no default for anything else.
+    expect(
+      [...fileAt(withAdmin(), 'deploy/Dockerfile.admin').matchAll(/^ARG ([A-Z0-9_]+)=/gm)].map((m) => m[1]),
+    ).toEqual(['DEPLOYMENT']);
+    const admin = fileAt(withAdmin(), 'deploy/Dockerfile.admin');
+    expect(admin.indexOf('ARG DEPLOYMENT=')).toBeLessThan(admin.indexOf('RUN pnpm run build:admin'));
   });
 
   it('every `ARG` the example declares is a consumer the declaration names', () => {
@@ -960,5 +969,137 @@ describe('the settings encryption key is rendered empty, with how to fill it in'
         }
       });
     }
+  }
+});
+
+/**
+ * Issue #152 — a storefront that is alive but no longer answering recovers by
+ * itself. Docker's `restart` acts on an exit and never on `unhealthy`; the
+ * storefront image's command is a supervising parent that turns "stopped
+ * answering" into an exit, and the example has to give that exit a policy to
+ * act on and an init in front of the supervisor. Read off the parsed
+ * documents, in both topologies, because a key one level too deep is a key
+ * `docker compose` reads as something else.
+ */
+describe('issue #152 — the storefront service restarts a hung server', () => {
+  const storefrontService = (topology: Topology): Record<string, unknown> => {
+    const path =
+      topology === 'single-host' ? 'deploy/compose.prod.yml' : 'deploy/three-host/compose.storefront.yml';
+    const services = parseComposeYaml(fileAt(withAdmin({ topology }), path))['services'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(services['storefront'], `${path} has no storefront service`).toBeDefined();
+    return services['storefront']!;
+  };
+
+  for (const topology of TOPOLOGIES) {
+    it(`${topology}: restarts on an exit and runs an init in front of the supervisor`, () => {
+      const service = storefrontService(topology);
+      expect(service['restart']).toBe('unless-stopped');
+      expect(service['init']).toBe('true');
+    });
+  }
+});
+
+/**
+ * Issue #596 — a backend that is alive but no longer answering recovers by
+ * itself, by the storefront's design (#152). The image example's command is the
+ * supervising parent the instance is scaffolded with at
+ * `backend/scripts/supervise.mjs` — the platform repository's own copy, carried
+ * by this CLI — and the compose examples give its exit a policy, an init and a
+ * stop timeout that leaves the 25 s kill grace room for BullMQ's drain. The
+ * one-shot jobs keep their own commands.
+ */
+describe('issue #596 — the backend service restarts a hung API', () => {
+  const backendServices = (topology: Topology): Record<string, Record<string, unknown>> => {
+    const path =
+      topology === 'single-host' ? 'deploy/compose.prod.yml' : 'deploy/three-host/compose.backend.yml';
+    return parseComposeYaml(fileAt(withAdmin({ topology }), path))['services'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+  };
+
+  for (const topology of TOPOLOGIES) {
+    it(`${topology}: restarts on an exit, runs an init and leaves 30 s to drain`, () => {
+      const services = backendServices(topology);
+      const backend = services['backend'];
+      expect(backend, 'no backend service').toBeDefined();
+      expect(backend!['restart']).toBe('unless-stopped');
+      expect(backend!['init']).toBe('true');
+      expect(backend!['stop_grace_period']).toBe('30s');
+      for (const job of ['backend-migrate', 'backend-install']) {
+        const command = String(services[job]!['command']);
+        expect(command, job).not.toMatch(/supervise/);
+        expect(services[job]!['init'], job).toBeUndefined();
+      }
+    });
+  }
+
+  it('the backend image example runs the supervisor, with the compiled API as its child', () => {
+    const commands = fileAt(withAdmin(), 'deploy/Dockerfile.backend')
+      .split('\n')
+      .filter((line) => /^CMD\s/.test(line));
+    expect(commands).toEqual(['CMD ["node", "scripts/supervise.mjs", "dist/index.js"]']);
+  });
+
+  it('scaffolds the platform repository\'s own backend supervisor, byte for byte', () => {
+    const plan = planInstance(withAdmin());
+    const file = plan.files.find((entry) => entry.path === 'backend/scripts/supervise.mjs');
+    expect(file, 'backend/scripts/supervise.mjs is not in the plan').toBeDefined();
+    expect(file!.member).toBe('backend');
+    expect(file!.kind).toBe('client');
+    const reference = readFileSync(
+      fileURLToPath(new URL('../../../../backend/scripts/supervise.mjs', import.meta.url)),
+      'utf8',
+    );
+    expect(file!.content).toBe(reference);
+  });
+});
+
+/**
+ * Issue #817 — the storefront proxy buffer margin `deploy/nginx.example.conf`
+ * carries since #805 reaches the nginx examples an instance is scaffolded with,
+ * with the same comment, in the storefront's `location` and nowhere else.
+ */
+describe('#817 — the generated storefront location carries the proxy buffer margin', () => {
+  const repositoryExample = readFileSync(
+    fileURLToPath(new URL('../../../../deploy/nginx.example.conf', import.meta.url)),
+    'utf8',
+  );
+  const margin = (() => {
+    const start = repositoryExample.indexOf("        # Headroom for the storefront's response headers.");
+    const endNeedle = '        proxy_busy_buffers_size 32k;';
+    const end = repositoryExample.indexOf(endNeedle, start);
+    expect(start, 'the repository example lost its margin').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return repositoryExample.slice(start, end + endNeedle.length);
+  })();
+
+  /** The body of the `location <path> {` block that proxies to `target`. */
+  const locationsTo = (text: string, target: string): string[] =>
+    [...text.matchAll(/^ {4}location [^\n]*\{\n([\s\S]*?)^ {4}\}$/gm)]
+      .map((match) => match[1]!)
+      .filter((body) => body.includes(`proxy_pass http://${target};`));
+
+  for (const path of ['deploy/nginx.example.conf', 'deploy/nginx.paths.example.conf']) {
+    it(`${path}: the storefront's catch-all location has it, verbatim`, () => {
+      const text = fileAt(withAdmin(), path);
+      const storefront = [...text.matchAll(/^ {4}location \/ \{\n([\s\S]*?)^ {4}\}$/gm)]
+        .map((match) => match[1]!)
+        .filter((body) => body.includes('proxy_pass http://127.0.0.1:3000;'));
+      expect(storefront).toHaveLength(1);
+      expect(storefront[0]).toContain(margin);
+    });
+
+    it(`${path}: the API and admin locations do not`, () => {
+      const text = fileAt(withAdmin(), path);
+      for (const target of ['127.0.0.1:3001', '127.0.0.1:8080', '127.0.0.1:8080/']) {
+        for (const body of locationsTo(text, target)) {
+          expect(body).not.toContain('proxy_buffer_size');
+        }
+      }
+    });
   }
 });

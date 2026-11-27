@@ -208,6 +208,14 @@ const SUBJECTS: readonly Subject[] = [
     section: 'customers',
     routes: [
       ['/organizations', ['customers:read', 'customers:manage']],
+      // Feature 154 — *New organization*, on the code its write enforces.
+      ['/organizations/new', 'customers:manage'],
+      // `specs/177-tax-id-scope/` — the installation's tax-ID scope.
+      ['/organizations/tax-id-scope', 'organizations:manage-tax-id-scope'],
+      // `specs/177-tax-id-scope/` — the personal → company conversion screen.
+      ['/organizations/convert-to-company', 'organizations:convert-to-company'],
+      // Issue #1040 — the tax-ID correction screen.
+      ['/organizations/change-tax-id', 'organizations:change-tax-id'],
       ['/organizations/:id', ['customers:read', 'customers:manage']],
     ],
     navTargets: ['/organizations'],
@@ -215,9 +223,14 @@ const SUBJECTS: readonly Subject[] = [
       'appShell.nav.organizations',
       'appShell.palette.sub.customerAccounts',
     ],
-    zones: [],
+    // Feature 173 — the warning beside its own Polish-sources setting on the
+    // Settings screen (`specs/173-registration-registry-lookup/`
+    // `contracts/admin-surfaces.md` §2a), matched to that one setting code.
+    zones: ['settings.setting.after'],
     mounts: [
       ['organizations/src/admin/pages/OrganizationDetail.tsx', 'organization.detail.after'],
+      // Issue #1452 (UX audit DS-20) — the body of the Sales tab.
+      ['organizations/src/admin/pages/OrganizationDetail.tsx', 'organization.detail.sales'],
     ],
     surfaceDirectories: ['organizations'],
     locked: true,
@@ -246,8 +259,10 @@ const SUBJECTS: readonly Subject[] = [
       'appShell.palette.sub.storefrontChannels',
     ],
     // The one module in this batch that is a contributor as well as a host —
-    // P7a and P7b gave it these two while its screens were still `App.tsx`'s.
-    zones: ['product.editor.channels', 'organization.detail.after'],
+    // P7a and P7b gave it two while its screens were still `App.tsx`'s, and
+    // feature 154 withdrew P7b's when `organizations` took the Organization's
+    // channels into a panel of its own.
+    zones: ['product.editor.channels'],
     mounts: [
       ['sales_channels/src/admin/pages/SalesChannelEditPage.tsx', 'sales_channel.editor.after'],
     ],
@@ -364,7 +379,7 @@ function renderAt(path: string): RenderResult {
   return renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={[path]}>
-        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} />
+        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} translations={{}} />
       </MemoryRouter>,
       { session: adminSession({ permissions: [...permissions] }) },
     ),
@@ -439,7 +454,13 @@ describe.each(SUBJECTS)('$module owns its admin surface', (subject) => {
     // the whole surface moving, and a registry that dropped a route would leave
     // the landing screen answering and the rest on the admin's not-found page.
     presentModules = new Set([subject.module]);
-    permissions = new Set([...codesFor(subject), subject.nearMiss]);
+    // Every code a route of the module asks for: a screen gated on its own
+    // code (`specs/177-tax-id-scope/`'s tax-ID scope) is the module's too.
+    permissions = new Set([
+      ...codesFor(subject),
+      subject.nearMiss,
+      ...subject.routes.flatMap(([, code]) => (typeof code === 'string' ? [code] : [...code])),
+    ]);
     for (const [pattern] of subject.routes) {
       const rendered = renderAt(concreteUrl(pattern));
       // The screen's own content is behind a `React.lazy` boundary and a
@@ -732,12 +753,12 @@ describe('the surfaces each module does not contribute, derived from the contrib
   it.each(SUBJECTS)('$module contributes exactly the zones its declaration names', (subject) => {
     // Ruling 1: the off-state test asserts every surface the module
     // contributes, and names the ones it does not **derived from the
-    // contribution set** rather than asserted. Two of this batch contribute to
-    // no zone at all — they are hosts and nothing else — and the third
-    // contributes two, which P7a and P7b declared while its screens were still
-    // `App.tsx`'s. Asserted as an equality, so a zone silently dropped in the
-    // move fails here; `product-channels-zone.test.tsx` and
-    // `organization-channels-zone.test.tsx` drive both over the real provider.
+    // contribution set** rather than asserted. `customers` contributes to no
+    // zone at all — a host and nothing else — `organizations` to one since
+    // feature 173, and `sales_channels` to the one P7a declared while its
+    // screens were still `App.tsx`'s. Asserted as an equality, so a zone silently dropped in the
+    // move fails here; `product-channels-zone.test.tsx` drives the one that
+    // remains over the real provider.
     const contributions = CONTRIBUTIONS.get(subject.module);
     expect((contributions?.zones ?? []).map((zone) => zone.zone)).toEqual(subject.zones);
   });
@@ -811,7 +832,12 @@ describe('the one route that tightens says so in its own declaration', () => {
       '../packages/modules/sales_channels/src/admin/pages/SalesChannelsListPage.tsx',
     );
     expect(roster).toContain("hasPermission('sales_channels:write')");
-    expect(roster).toMatch(/canWrite \? \(\s*<Button asChild>/);
+    // Issue #1448 (DS-15): the button is one element offered in two places — the
+    // header, and the empty state while there is no channel — and both are gated.
+    expect(roster).toMatch(/const newChannel = \(\s*<Button asChild>\s*<Link to="\/sales-channels\/new">/);
+    expect(roster).toMatch(/canWrite && !noData \? newChannel : null/);
+    expect(roster).toMatch(/action=\{canWrite \? newChannel : null\}/);
+    expect(roster.match(/[^.]newChannel\b/g)).toHaveLength(3);
   });
 });
 
@@ -870,7 +896,7 @@ describe('the moved screens take no reach the package cannot resolve', () => {
     // P7a copied the component into the package and left the `admin/src`
     // original alive because these two screens still imported it. They are the
     // package's now, so the copy is deleted and both name the sibling —
-    // `organization-channels-zone.test.tsx` holds the other half of the claim,
+    // `product-channels-zone.test.tsx` holds the other half of the claim,
     // that no file remains at the old path.
     for (const file of [
       'sales_channels/src/admin/pages/SalesChannelEditPage.tsx',

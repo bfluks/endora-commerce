@@ -18,6 +18,8 @@ import type {
   AdminZoneProps,
 } from '@endora-commerce/contracts';
 
+import { ZoneContributionContext, type ZoneContributionInfo } from '../save-session/contribution-context.js';
+import { EditorSectionChromeProvider, type EditorSectionChrome } from '../ui/editor-section.js';
 import { useAdminZone } from './use-admin-zone.js';
 import { ZoneErrorBoundary } from './ZoneErrorBoundary.js';
 
@@ -36,7 +38,11 @@ type ZoneComponentType = ComponentType<Record<string, unknown>>;
 
 const lazyByFactory = new WeakMap<AdminComponentFactory, ZoneComponentType>();
 
-function lazyComponentFor(load: AdminComponentFactory): ZoneComponentType {
+/**
+ * Exported module-internally for `useRecordTabZone`, which renders a record
+ * tab's panel through the same cache — not part of the `./zones` barrel.
+ */
+export function lazyComponentFor(load: AdminComponentFactory): ZoneComponentType {
   const known = lazyByFactory.get(load);
   if (known !== undefined) return known;
   // The registry's factory is `{ default: unknown }` by construction — see the
@@ -54,6 +60,14 @@ function lazyComponentFor(load: AdminComponentFactory): ZoneComponentType {
 export interface AdminZoneRenderProps<Z extends AdminZoneName> {
   readonly name: Z;
   readonly props: AdminZoneProps<Z>;
+  /**
+   * The zone panel frame (issue #1437, DS-03): how a contributed panel built on `EditorSection`
+   * draws itself here. Omitted, it is a **section** of the host card the zone is mounted in —
+   * no card in a card. `card` for a mount that stands at page level, between the host's own
+   * cards, where each contribution is a card of its own. The contribution still decides
+   * explicitly where it must (`<EditorSection chrome=…>`).
+   */
+  readonly chrome?: EditorSectionChrome;
 }
 
 /**
@@ -68,6 +82,7 @@ export interface AdminZoneRenderProps<Z extends AdminZoneName> {
 export function AdminZone<Z extends AdminZoneName>({
   name,
   props,
+  chrome = 'section',
 }: AdminZoneRenderProps<Z>): ReactNode {
   const contributions = useAdminZone(name, props);
   // One entry per contribution, so a contributor added or removed by a presence
@@ -80,23 +95,35 @@ export function AdminZone<Z extends AdminZoneName>({
         // alone: two children under one key is a silent remount in React.
         key: `${contribution.module}:${index}`,
         module: contribution.module,
+        // Feature 180 (research R8): which contribution is rendering, for a save participant
+        // inside it — the registry's `module`, never a declared one.
+        info: {
+          module: contribution.module,
+          zone: name,
+          weight: contribution.weight,
+          ...(contribution.requiredPermission === undefined
+            ? {}
+            : { requiredPermission: contribution.requiredPermission }),
+        } satisfies ZoneContributionInfo,
         Component: lazyComponentFor(contribution.component),
       })),
-    [contributions],
+    [contributions, name],
   );
   if (rendered.length === 0) return null;
   return (
-    <>
+    <EditorSectionChromeProvider chrome={chrome}>
       {rendered.map((entry) => (
         <ZoneErrorBoundary key={entry.key} module={entry.module} zone={name}>
           {/* `null`, not a spinner: a contribution is an addition, and a chunk
               still in flight must not push the host's own content around or
               block it. */}
-          <Suspense fallback={null}>
-            <entry.Component {...(props as unknown as Record<string, unknown>)} />
-          </Suspense>
+          <ZoneContributionContext.Provider value={entry.info}>
+            <Suspense fallback={null}>
+              <entry.Component {...(props as unknown as Record<string, unknown>)} />
+            </Suspense>
+          </ZoneContributionContext.Provider>
         </ZoneErrorBoundary>
       ))}
-    </>
+    </EditorSectionChromeProvider>
   );
 }

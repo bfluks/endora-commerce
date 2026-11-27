@@ -71,19 +71,25 @@ export function extractRootContent(data: unknown): PuckItem[] {
   return [];
 }
 
-/** Collect nested slot/component arrays from props (Row content, Columns columnItems, etc.). */
+/**
+ * Collect nested slot/component arrays from props (Row content, Columns
+ * columnItems, etc.), including array-item slots such as a Tabs or Accordion
+ * panel (`items[].panel`, feature 163) whatever the slot is called.
+ */
 export function collectChildItems(props: Record<string, unknown>): PuckItem[] {
   const children: PuckItem[] = [];
 
   for (const value of Object.values(props)) {
-    children.push(...toPuckItemArray(value));
+    const direct = toPuckItemArray(value);
+    children.push(...direct);
 
-    if (!Array.isArray(value)) continue;
+    if (!Array.isArray(value) || direct.length > 0) continue;
 
     for (const entry of value) {
       if (!entry || typeof entry !== 'object') continue;
-      const record = entry as Record<string, unknown>;
-      children.push(...toPuckItemArray(record['content']));
+      for (const nested of Object.values(entry as Record<string, unknown>)) {
+        children.push(...toPuckItemArray(nested));
+      }
     }
   }
 

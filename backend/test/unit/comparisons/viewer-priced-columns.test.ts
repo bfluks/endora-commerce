@@ -15,7 +15,6 @@ import {
   type ProductAudience,
 } from '@endora-commerce/contracts';
 import type { SettingsService } from '../../../src/kernel/settings/settings.service.js';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { ComparableAttributeProjection } from '../../../../packages/modules/comparisons/src/backend/services/comparable-attribute-projection.js';
 import {
   ComparisonService,
@@ -29,14 +28,18 @@ import { ShareTokenGenerator } from '../../../../packages/modules/comparisons/sr
  * absent, or the exercise is a read), so a port that throws on every method is
  * the assertion that they do not.
  */
-const refusingChannelMembership = new Proxy(
-  {},
-  {
-    get: (_target, property) => () => {
-      throw new Error(`comparisons unexpectedly called the channel bridge.${String(property)}`);
-    },
-  },
-) as SalesChannelMembershipPort;
+/**
+ * Feature 163 — `catalog`'s availability answer, which replaced the channel
+ * bridge in this service: every column is available, so the cases here read
+ * as they did.
+ */
+const availableEverywhere = {
+  filterAvailable: async (ids: readonly string[]) => new Set(ids),
+  // Feature 163 (FR-100) — no channel rule here: each record's own minimum stands.
+  effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
+  // Feature 163 (SEC-2) — consulted only for an id `filterAvailable` dropped, and it drops none here.
+  describeChannelAvailability: async () => new Map(),
+};
 
 
 /**
@@ -74,8 +77,8 @@ function productRecord(id: string): CatalogProductRecord {
     slug: `slug-${id}`,
     type: 'simple',
     status: 'active',
-    name: { en: `Product ${id}` },
-    description: {},
+    name: `Product ${id}`,
+    description: null,
     stockMode: null,
     visibility: 'public',
     attributeValues: {},
@@ -93,6 +96,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -125,7 +130,6 @@ function organizationRecord(
     rejectedAt: null,
     approvedAt: null,
     approvedByAdminUserId: null,
-    requiresCartApproval: false,
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
     parentId: null,
@@ -136,6 +140,7 @@ function organizationRecord(
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     deletedAt: null,
+    convertedToCompanyAt: null,
   };
 }
 
@@ -143,7 +148,7 @@ function fakeEm(): () => EntityManager {
   const em = {
     findOne: async (entity: { name?: string }) =>
       entity.name === 'SalesChannel'
-        ? { id: 'channel-1', defaultCurrency: 'PLN', isPublic: true }
+        ? { id: 'channel-1', defaultCurrency: 'PLN' }
         : null,
     find: async (entity: { name?: string }) =>
       entity.name === 'ComparisonProduct'
@@ -181,13 +186,17 @@ const catalogProductsStub: CatalogProductReadPort = {
   findBySkus: async () => [],
   countByIds: async () => 0,
   listAll: async () => [],
+  listPricingRefs: async () => [],
+  findPricingRefsByIds: async () => [],
   listVariantsByProductIds: async () => [],
   findVariantsBySkus: async () => [],
   findVariantInProduct: async () => null,
   findPackagingUnitInProduct: async () => null,
+  listPackagingUnitsByProductIds: async () => [],
   listLinksBySourceIds: async () => [],
   listValueOverridesByProductIds: async () => [],
   listProductIdsByAttributeValue: async () => [],
+  pageProductsByAdminName: async () => ({ ids: [], total: 0 }),
 };
 
 /**
@@ -230,6 +239,8 @@ function organizationsPort(
     countByIds: async () => 0,
     searchByName: async () => [],
     searchIdsByName: async () => [],
+    findByTaxId: async () => [],
+    resolveByTaxId: async () => ({ kind: 'none' }),
   };
 }
 
@@ -242,7 +253,7 @@ function serviceWith(
     new ComparableAttributeProjection(),
     new ShareTokenGenerator(),
     catalogProductsStub,
-    refusingChannelMembership,
+    availableEverywhere,
     imagelessGallery,
     settingsStub,
     attributePortStub,
@@ -413,7 +424,7 @@ function fakeEmWith(productIds: readonly string[]): () => EntityManager {
   const em = {
     findOne: async (entity: { name?: string }) =>
       entity.name === 'SalesChannel'
-        ? { id: 'channel-1', defaultCurrency: 'PLN', isPublic: true }
+        ? { id: 'channel-1', defaultCurrency: 'PLN' }
         : null,
     find: async (entity: { name?: string }) =>
       entity.name === 'ComparisonProduct'
@@ -459,7 +470,7 @@ function mixedVisibilityService(priced: string[][]): ComparisonService {
     new ComparableAttributeProjection(),
     new ShareTokenGenerator(),
     catalogProducts,
-    refusingChannelMembership,
+    availableEverywhere,
     imagelessGallery,
     settingsStub,
     attributePortStub,

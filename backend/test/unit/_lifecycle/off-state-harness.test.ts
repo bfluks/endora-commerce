@@ -5,6 +5,7 @@ import {
   validatorCompiler,
 } from '@fastify/type-provider-zod';
 import { registerErrorEnvelope } from '@endora-commerce/platform/composition';
+import { SetValueRequestSchema } from '@endora-commerce/contracts';
 import { defineModuleRoutes } from '../../../src/kernel/lifecycle/plugin-helpers.js';
 import { registryCache } from '../../../src/kernel/lifecycle/registry-cache.js';
 import { effectiveState } from '../../../src/kernel/lifecycle/effective-state.js';
@@ -150,6 +151,78 @@ describe('expectModuleAbsent', () => {
 });
 
 /**
+ * Issue #102 — a route whose success body is not JSON.
+ *
+ * The harness used to read `res.json()` on every probe in every phase, so a
+ * route answering XML threw a parse error in the on-phase before any assertion
+ * ran, and `seo` had to hand-assert its sitemap beside the harness. A probe now
+ * declares `successBody: 'non-json'`; the on-phases then hold the route to
+ * answering a non-JSON body of its own, and the off-phases to the JSON
+ * `MODULE_DISABLED` envelope exactly as for every other probe.
+ */
+describe('expectModuleAbsent — non-JSON success bodies', () => {
+  const XML_OWNER = 'fixture_xml';
+  const XML_UNGATED = 'fixture_xml_ungated';
+  const JSON_AS_XML = 'fixture_xml_mislabelled';
+  const SITEMAP = '<?xml version="1.0" encoding="UTF-8"?><urlset/>';
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = Fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    registerErrorEnvelope(app);
+    const owner = defineModuleRoutes(XML_OWNER, async (scoped) => {
+      scoped.get('/fixture-xml/sitemap.xml', async (_request, reply) =>
+        reply.type('application/xml').send(SITEMAP),
+      );
+    });
+    await owner(app);
+    const mislabelled = defineModuleRoutes(JSON_AS_XML, async (scoped) => {
+      scoped.get('/fixture-xml-mislabelled/sitemap.xml', async () => ({ ok: true }));
+    });
+    await mislabelled(app);
+    app.get('/fixture-xml-ungated/sitemap.xml', async (_request, reply) =>
+      reply.type('application/xml').send(SITEMAP),
+    );
+    await app.ready();
+  });
+
+  afterEach(() => {
+    registryCache.__setEnabledForTesting([]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('passes for a gated route that answers XML while on', async () => {
+    registryCache.__setEnabledForTesting([XML_OWNER]);
+    await expectModuleAbsent({ app }, XML_OWNER, {
+      routes: [{ url: '/fixture-xml/sitemap.xml', successBody: 'non-json' }],
+    });
+  });
+
+  it('still fails for an XML route that bypasses the wrapper', async () => {
+    registryCache.__setEnabledForTesting([XML_UNGATED]);
+    await expect(
+      expectModuleAbsent({ app }, XML_UNGATED, {
+        routes: [{ url: '/fixture-xml-ungated/sitemap.xml', successBody: 'non-json' }],
+      }),
+    ).rejects.toThrow(/should refuse while "fixture_xml_ungated" is off/);
+  });
+
+  it('fails when a probe declared non-JSON answers JSON while on — the positive control', async () => {
+    registryCache.__setEnabledForTesting([JSON_AS_XML]);
+    await expect(
+      expectModuleAbsent({ app }, JSON_AS_XML, {
+        routes: [{ url: '/fixture-xml-mislabelled/sitemap.xml', successBody: 'non-json' }],
+      }),
+    ).rejects.toThrow(/\[off-state:before\][\s\S]*non-JSON body/);
+  });
+});
+
+/**
  * Issue #141 — the seeded off state has to be shown to have taken.
  *
  * Every case below is about the same defect from a different side: a test can
@@ -224,6 +297,133 @@ describe('withModuleOff', () => {
     registryCache.__setEnabledForTesting([]);
     await expect(withModuleOff(GATED, 'deactivated', () => undefined)).rejects.toThrow(
       /not enabled before the test runs/,
+    );
+  });
+});
+
+/**
+ * Issue #174 — the setting-write probe has to be able to fail.
+ *
+ * It used to send `{ value }`, which `SetValueRequestSchema` rejects for the
+ * missing `scope` before the settings service — where presence is decided — is
+ * reached, and it accepted any 4xx. So it passed against a platform that let an
+ * absent module's configuration be edited, and against a module that was on.
+ *
+ * The fixture mirrors the real route's order of operations: parse the body with
+ * the real schema, then refuse with `MODULE_SETTING_READ_ONLY` when the owner is
+ * absent (unless the fixture is told to model a platform gap), then store. It
+ * keeps the value in memory so the restoration the harness owes can be seen.
+ */
+describe('expectModuleAbsent — settingWrite', () => {
+  const OWNER = 'fixture_configured';
+  const CODE = 'fixture_configured.page_size';
+  type Mode = 'refuses-when-absent' | 'never-refuses' | 'always-refuses' | 'wrong-refusal';
+  let app: FastifyInstance;
+  let mode: Mode = 'refuses-when-absent';
+  let globalValue: unknown = null;
+  const writes: unknown[] = [];
+
+  beforeAll(async () => {
+    app = Fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    registerErrorEnvelope(app);
+    const owner = defineModuleRoutes(OWNER, async (scoped) => {
+      scoped.get('/api/v1/admin/fixture-configured/ping', async () => ({ ok: true }));
+    });
+    await owner(app);
+    app.get('/api/v1/admin/settings/:code', async () => ({
+      code: CODE,
+      valueType: 'number',
+      ownerModule: OWNER,
+      globalValue,
+    }));
+    app.put('/api/v1/admin/settings/:code/value', async (request, reply) => {
+      const parsed = SetValueRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR' } });
+      }
+      const absent = !effectiveState.isPresent(OWNER);
+      if (mode === 'always-refuses' || (mode === 'refuses-when-absent' && absent)) {
+        return reply.code(400).send({ error: { code: 'MODULE_SETTING_READ_ONLY' } });
+      }
+      if (mode === 'wrong-refusal' && absent) {
+        return reply.code(403).send({ error: { code: 'FORBIDDEN' } });
+      }
+      globalValue = parsed.data.value;
+      writes.push(parsed.data.value);
+      return { code: CODE, globalValue };
+    });
+    app.delete('/api/v1/admin/settings/:code/values', async (_request, reply) => {
+      if (mode === 'always-refuses' || !effectiveState.isPresent(OWNER)) {
+        return reply.code(400).send({ error: { code: 'MODULE_SETTING_READ_ONLY' } });
+      }
+      globalValue = null;
+      return { code: CODE, globalValue };
+    });
+    await app.ready();
+  });
+
+  afterEach(() => {
+    mode = 'refuses-when-absent';
+    globalValue = null;
+    writes.length = 0;
+    registryCache.__setEnabledForTesting([]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const surfaces = {
+    routes: ['/api/v1/admin/fixture-configured/ping'],
+    settingWrite: { code: CODE, value: 42, cookies: {} },
+  };
+
+  it('passes when the platform refuses the write while off and accepts it once restored', async () => {
+    registryCache.__setEnabledForTesting([OWNER]);
+    await expectModuleAbsent({ app }, OWNER, surfaces);
+    // The positive control wrote once, while the module was on.
+    expect(writes).toEqual([42]);
+  });
+
+  it('restores a value that was never set by resetting it, not by writing the probe back', async () => {
+    registryCache.__setEnabledForTesting([OWNER]);
+    await expectModuleAbsent({ app }, OWNER, surfaces);
+    expect(globalValue).toBeNull();
+  });
+
+  it('restores a stored value after the positive control', async () => {
+    registryCache.__setEnabledForTesting([OWNER]);
+    globalValue = 7;
+    await expectModuleAbsent({ app }, OWNER, surfaces);
+    expect(globalValue).toBe(7);
+    expect(writes).toEqual([42, 7]);
+  });
+
+  it('fails against a platform that lets an absent module be configured', async () => {
+    // The red proof: the old `{ value }` body was refused by the schema here,
+    // so the old helper passed against exactly this fixture.
+    registryCache.__setEnabledForTesting([OWNER]);
+    mode = 'never-refuses';
+    await expect(expectModuleAbsent({ app }, OWNER, surfaces)).rejects.toThrow(
+      /must not be editable while "fixture_configured" is off/,
+    );
+  });
+
+  it('fails on a refusal that is not the absent-module one', async () => {
+    registryCache.__setEnabledForTesting([OWNER]);
+    mode = 'wrong-refusal';
+    await expect(expectModuleAbsent({ app }, OWNER, surfaces)).rejects.toThrow(
+      /must not be editable while "fixture_configured" is off/,
+    );
+  });
+
+  it('fails when the same write is refused with the module on — the positive control', async () => {
+    registryCache.__setEnabledForTesting([OWNER]);
+    mode = 'always-refuses';
+    await expect(expectModuleAbsent({ app }, OWNER, surfaces)).rejects.toThrow(
+      /\[off-state:restored\][\s\S]*editable again/,
     );
   });
 });

@@ -5,8 +5,12 @@ import {
   type CreateProductFeedRequest,
   type DuplicateProductFeedRequest,
   type LanguageReadPort,
+  type PinnedPriceBookPublishability,
+  type PinnedPriceBookUnpublishableReason,
   type PriceListReadPort,
+  type ProductFeedPriceBookOption,
   type UpdateProductFeedRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -67,12 +71,35 @@ export interface ProductFeedServiceDeps {
    */
   languages: LanguageReadPort;
   priceLists: PriceListReadPort;
+  /**
+   * Feature 160 (FR-029, owner ruling 2026-10-23) — whether the price book a
+   * feed is pinned to publishes prices now, through `price_lists`'
+   * `pricingService` port (a binding dependency, so it fails closed like the
+   * two reads above). The admin row shows the reason it does not.
+   */
+  pinnedPriceBookPublishability: (input: {
+    priceListId: string;
+    currencyCode: string;
+    salesChannelId: string;
+  }) => Promise<PinnedPriceBookPublishability>;
 }
 
 /** Thrown as `400 VALIDATION_FAILED`, naming the offending field (contract §2). */
 function fieldError(field: string, message: string): HttpError {
   return new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `${field}: ${message}`, {
     field,
+  });
+}
+
+/**
+ * Thrown as `400 PRODUCT_FEED_SLUG_TAKEN` (issue #631): the slug is well-formed
+ * and another feed holds it. `details.field` stays, so the form can place the
+ * sentence under the slug.
+ */
+function slugTaken(slug: string): HttpError {
+  return new HttpError(400, ERROR_CODES.PRODUCT_FEED_SLUG_TAKEN, 'slug: is already used by another feed', {
+    field: 'slug',
+    slug,
   });
 }
 
@@ -99,6 +126,7 @@ export class ProductFeedService {
   }
 
   async getOrFail(feedId: string): Promise<ProductFeed> {
+    if (!isUuidShape(feedId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Product feed not found.');
     const feed = await this.deps.emFactory().findOne(ProductFeed, { id: feedId });
     if (!feed) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Product feed not found.');
     return feed;
@@ -135,8 +163,17 @@ export class ProductFeedService {
 
     if (values.languageCode !== undefined) {
       const language = await this.deps.languages.findByCode(values.languageCode);
-      if (!language || !language.isActive) {
-        throw fieldError('languageCode', 'is not an active language on this installation');
+      // A code that names no language is validation; one that names a language
+      // the installation has switched off is the installation's state refusing
+      // a well-formed request (issue #631), and gets its own code.
+      if (!language) throw fieldError('languageCode', 'no such language');
+      if (!language.isActive) {
+        throw new HttpError(
+          400,
+          ERROR_CODES.PRODUCT_FEED_LANGUAGE_INACTIVE,
+          'languageCode: is not an active language on this installation',
+          { field: 'languageCode', languageCode: values.languageCode },
+        );
       }
     }
 
@@ -147,7 +184,20 @@ export class ProductFeedService {
       const currencies = channel.currencies ?? [];
       const allowed = currencies.length > 0 ? currencies : [channel.defaultCurrency];
       if (!allowed.includes(String(currencyCode))) {
-        throw fieldError('currencyCode', `is not offered by this sales channel (${allowed.join(', ')})`);
+        // `allowed` travels joined: only a scalar member of `details` fills a
+        // `{placeholder}` in the sentence, so an array would be carried and
+        // never shown (issue #631).
+        throw new HttpError(
+          400,
+          ERROR_CODES.PRODUCT_FEED_CURRENCY_NOT_OFFERED,
+          `currencyCode: is not offered by this sales channel (${allowed.join(', ')})`,
+          {
+            field: 'currencyCode',
+            currencyCode: String(currencyCode),
+            salesChannelId: channel.id,
+            allowed: allowed.join(', '),
+          },
+        );
       }
     }
 
@@ -183,9 +233,7 @@ export class ProductFeedService {
 
     if (values.slug !== undefined) {
       const clash = await em.findOne(ProductFeed, { slug: values.slug });
-      if (clash && clash.id !== current?.id) {
-        throw fieldError('slug', 'is already used by another feed');
-      }
+      if (clash && clash.id !== current?.id) throw slugTaken(values.slug);
     }
   }
 
@@ -214,9 +262,7 @@ export class ProductFeedService {
   ): Promise<CreatedFeed> {
     await this.getOrFail(feedId);
     const em = this.deps.emFactory();
-    if (await em.findOne(ProductFeed, { slug: request.slug })) {
-      throw fieldError('slug', 'is already used by another feed');
-    }
+    if (await em.findOne(ProductFeed, { slug: request.slug })) throw slugTaken(request.slug);
     return this.deps.commandBus.run(
       makeDuplicateFeedCommand(feedId, {
         name: request.name,
@@ -330,6 +376,16 @@ export class ProductFeedService {
     const channelById = new Map(channels.map((c) => [c.id, c]));
     const runById = new Map(runs.map((r) => [r.id, r]));
     const artefactById = new Map(artefacts.map((a) => [a.id, a]));
+    const pinnedWarning = new Map<string, PinnedPriceBookUnpublishableReason>();
+    for (const feed of feeds) {
+      if (!feed.priceListId) continue;
+      const answer = await this.deps.pinnedPriceBookPublishability({
+        priceListId: feed.priceListId,
+        currencyCode: feed.currencyCode,
+        salesChannelId: feed.salesChannelId,
+      });
+      if (!answer.publishable) pinnedWarning.set(feed.id, answer.reason);
+    }
 
     return feeds.map((feed) => {
       const lastRun = feed.lastRunId ? runById.get(feed.lastRunId) : undefined;
@@ -342,8 +398,41 @@ export class ProductFeedService {
         channelCode: channelById.get(feed.salesChannelId)?.code ?? '',
         lastRun: lastRun ?? null,
         publishedArtefact: artefact ?? null,
+        pinnedPriceBookWarning: pinnedWarning.get(feed.id) ?? null,
       };
     });
+  }
+
+  /**
+   * Issue #414 — the price books a feed's settings offer to pin it to: every
+   * book in the feed's currency (a book in another one never prices it), plus
+   * the book the feed is pinned to whatever its currency, so the picker can
+   * show the current pin. Each carries why it would publish no prices for this
+   * feed now, from the same `namedListPublishability` a run and the feed row
+   * ask (feature 160 FR-029, owner ruling 2026-10-23). In `listAll`'s order:
+   * priority desc, then name.
+   */
+  async priceBookOptions(feedId: string): Promise<ProductFeedPriceBookOption[]> {
+    const feed = await this.getOrFail(feedId);
+    const currency = feed.currencyCode.toUpperCase();
+    const books = (await this.deps.priceLists.listAll()).filter(
+      (book) => book.currencyCode.trim().toUpperCase() === currency || book.id === feed.priceListId,
+    );
+    const options: ProductFeedPriceBookOption[] = [];
+    for (const book of books) {
+      const answer = await this.deps.pinnedPriceBookPublishability({
+        priceListId: book.id,
+        currencyCode: feed.currencyCode,
+        salesChannelId: feed.salesChannelId,
+      });
+      options.push({
+        id: book.id,
+        name: book.name,
+        isBase: book.isSystem,
+        unpublishableReason: answer.publishable ? null : answer.reason,
+      });
+    }
+    return options;
   }
 }
 
@@ -353,6 +442,8 @@ export interface ProductFeedRow {
   channelCode: string;
   lastRun: FeedRun | null;
   publishedArtefact: FeedArtefact | null;
+  /** Why the pinned price book publishes no prices now; `null` when unpinned or publishing. */
+  pinnedPriceBookWarning: PinnedPriceBookUnpublishableReason | null;
 }
 
 function toWriteValues(request: CreateProductFeedRequest): FeedWriteValues {

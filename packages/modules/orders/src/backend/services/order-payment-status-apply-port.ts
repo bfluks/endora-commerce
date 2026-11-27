@@ -1,10 +1,15 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { LockMode } from '@mikro-orm/core';
 import type { OrderPaymentStatus } from '@endora-commerce/contracts';
 import { Order } from '../entities/order.entity.js';
 import type {
   OrderPaymentStatusApplied,
   OrderPaymentStatusApplyPort,
 } from '../../ports/index.js';
+import { isUuidShape } from '@endora-commerce/contracts';
+import { decidePaymentStatusChange } from '../domain/payment-status-transition.js';
+import { effectsOwedByPaymentStatusChange } from '../domain/transition-effects.js';
+import type { OrderTransitionEffectService } from './order-transition-effect-service.js';
 
 /**
  * `orderPaymentStatusApplyPort` — the money axis of an order, written on the
@@ -22,7 +27,7 @@ import type {
  * than optional, and this file writes no other column.
  *
  * **No audit entry here, deliberately.** The lifecycle move a settlement asks
- * for goes through `orderTransitionPort` after the commit, and that port
+ * for goes through `orderCommandPort` after the commit, and that port
  * records the `order.status_transition` entry co-transactionally with the
  * status it writes. The admin-driven twin of this write —
  * `OrderService.transitionPaymentStatus` — does audit, because there an
@@ -31,13 +36,34 @@ import type {
  * reasoning in full.
  */
 export class OrderPaymentStatusApplyService implements OrderPaymentStatusApplyPort {
+  constructor(private readonly transitionEffects: OrderTransitionEffectService) {}
+
   async applyPaymentStatus(
     em: EntityManager,
     input: { orderId: string; paymentStatus: OrderPaymentStatus },
   ): Promise<OrderPaymentStatusApplied | null> {
-    const order = await em.findOne(Order, { id: input.orderId });
+    if (!isUuidShape(input.orderId)) return null;
+    // Decide on the refreshed, locked row, as the admin payment-status path does.
+    const order = await em.findOne(
+      Order,
+      { id: input.orderId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+    );
     if (!order) return null;
-    order.paymentStatus = input.paymentStatus;
+    // Issue #1574 — settlement respects the money axis's graph. A refused move
+    // is answered, not thrown, so the caller's settlement transaction still
+    // commits the payment row it is recording.
+    const decision = decidePaymentStatusChange(order.paymentStatus, input.paymentStatus, 'settlement');
+    const outcome = decision.kind === 'apply' ? 'applied' : decision.kind;
+    let owesEffects = false;
+    if (outcome === 'applied') {
+      order.paymentStatus = input.paymentStatus;
+      const owed = effectsOwedByPaymentStatusChange(order, input.paymentStatus);
+      if (owed.length > 0) {
+        await this.transitionEffects.record(em, order, owed, 'transition');
+        owesEffects = true;
+      }
+    }
     // A published record, never the managed entity (D-77's first narrowing).
     // Handing `payments` the live `Order` would hand it the ability to move any
     // column of this module's aggregate on a transaction it happens to hold,
@@ -46,6 +72,8 @@ export class OrderPaymentStatusApplyService implements OrderPaymentStatusApplyPo
       orderId: order.id,
       status: order.status,
       paymentStatus: order.paymentStatus,
+      outcome,
+      owesEffects,
     };
   }
 }

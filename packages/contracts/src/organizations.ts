@@ -2,11 +2,22 @@ import { z } from 'zod';
 import {
   addressSnapshotSchema,
   isoDateTimeSchema,
-  organizationRoleSchema,
   uuidSchema,
 } from './common.js';
 import { fulfilmentStrategySchema, type FulfilmentStrategy } from './inventory.js';
+import { organizationRoleRefSchema } from './organization-roles.js';
+import { paginationSchema } from './pagination.js';
+import { SalesChannelOptionSchema } from './sales-channels.js';
 import { foldDiacritics } from './text-normalization.js';
+import {
+  registryLookupIdSchema,
+  vatValidationOutcomeSchema,
+  vatValidationProviderSchema,
+} from './organization-registry-lookup.js';
+import { ExtensionAttributesSchema } from './schema-extensions.js';
+import { customFieldValuesSchema } from './custom-fields.js';
+import type { AggregateCommandOptions, CustomFieldMerge } from './aggregate-ports.js';
+import type { EntityExtensionReadOptions, WithEntityExtensions } from './entity-extensions.js';
 
 /**
  * Organizations, customer accounts, addresses, invitations — Source of truth
@@ -52,6 +63,27 @@ export type VatStatus = z.infer<typeof vatStatusSchema>;
 export const creditInheritanceModeSchema = z.enum(['shared_pool', 'independent_default']);
 export type CreditInheritanceMode = z.infer<typeof creditInheritanceModeSchema>;
 
+/**
+ * The codes a redacted `organization` audit row keeps (issue #844).
+ *
+ * Owner: `organizations`; **codes only** — see
+ * `CUSTOMER_ACCOUNT_AUDIT_KEEP_KEYS` for the rule they extend. This module's
+ * snapshots record codes under `provider` and `outcome` (a tax-id validation)
+ * and `creditInheritanceMode`; `blockSource` and `countryCode` are kept
+ * wherever a writer records them, as they are on the account and the address.
+ * `orderConfirmationEmailCount` is the count the `organization.anonymized` row
+ * records instead of the addresses: the retention sweep redacts after that row
+ * is written, and must leave it as its owner wrote it (issue #844).
+ */
+export const ORGANIZATION_AUDIT_KEEP_KEYS: readonly string[] = [
+  'blockSource',
+  'countryCode',
+  'creditInheritanceMode',
+  'orderConfirmationEmailCount',
+  'outcome',
+  'provider',
+];
+
 export const addressKindSchema = z.enum(['delivery', 'billing']);
 export type AddressKind = z.infer<typeof addressKindSchema>;
 
@@ -60,7 +92,11 @@ export type AddressKind = z.infer<typeof addressKindSchema>;
 export const organizationSchema = z.object({
   id: uuidSchema,
   name: z.string(),
-  taxId: z.string(),
+  /**
+   * `specs/177-tax-id-scope/` — `null` for a personal (B2C) organization, which
+   * has no tax ID; a company organization always has one (FR-001, FR-004).
+   */
+  taxId: z.string().nullable(),
   status: organizationStatusSchema,
   vatStatus: vatStatusSchema,
   /** Feature 051 — true for a single-member personal (B2C) organization. */
@@ -91,6 +127,46 @@ export const organizationSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 export type Organization = z.infer<typeof organizationSchema>;
+
+/**
+ * `specs/178-extensible-columns/` FR-051 — an Organization as the admin detail
+ * and list reads return it. `extensions` is present only when the request named
+ * modules with `?extensions=` (`ExtensionsQuerySchema`): per
+ * named module that declares columns on `organizations` with `adminReads` and is
+ * present, its declared keys and values; an absent, switched-off or
+ * non-exposing module is simply not a key (FR-052).
+ */
+export const adminOrganizationSchema = organizationSchema.extend({
+  /*
+   * Issue #599 — the keys every admin organization reply (the list, the detail
+   * and each write's answer) has carried, which the contract did not declare.
+   * The Admin UI's organization page reads them. Declared optional, so a client
+   * that does not read them is unaffected.
+   */
+  legalName: z.string().nullable().optional(),
+  /** Feature 038 (US4) — additional addresses copied on this Organization's order confirmations. */
+  orderConfirmationEmails: z.array(z.string()).optional(),
+  /** The optimistic-concurrency token the moderation and restriction writes check. */
+  version: z.number().int().nonnegative().optional(),
+  blockedReason: z.string().nullable().optional(),
+  blockedAt: isoDateTimeSchema.nullable().optional(),
+  rejectedReason: z.string().nullable().optional(),
+  rejectedAt: isoDateTimeSchema.nullable().optional(),
+  approvedAt: isoDateTimeSchema.nullable().optional(),
+  approvedByAdminUserId: uuidSchema.nullable().optional(),
+  /** The latest tax-ID validation; each member is `null` while none has run. */
+  vatValidation: z
+    .object({
+      outcome: vatValidationOutcomeSchema.nullable(),
+      provider: vatValidationProviderSchema.nullable(),
+      validatedAt: isoDateTimeSchema.nullable(),
+    })
+    .optional(),
+  /** Feature 055 — this Organization's custom-field values. */
+  customFieldValues: customFieldValuesSchema.optional(),
+  extensions: ExtensionAttributesSchema.optional(),
+});
+export type AdminOrganization = z.infer<typeof adminOrganizationSchema>;
 
 // --- Hierarchy (feature 056) ------------------------------------------------
 
@@ -149,9 +225,21 @@ export const customerAccountSchema = z.object({
   email: z.string().email(),
   firstName: z.string(),
   lastName: z.string(),
-  role: organizationRoleSchema,
+  /**
+   * The member's role (`specs/170-organization-roles/`, FR-008, FR-056); it
+   * replaced the legacy two-value `role`, removed by WP-12 (FR-073).
+   */
+  organizationRole: organizationRoleRefSchema,
+  /** The member's effective organization permissions, sorted (FR-056). */
+  permissions: z.array(z.string()),
   emailVerifiedAt: isoDateTimeSchema.nullable(),
   twoFactorEnabled: z.boolean(),
+  /**
+   * Issue #652 (D-292) — the account's e-mail language, `null` while unknown
+   * (see `CustomerAccountRecord.preferredLanguage`). Answered by
+   * `GET /api/v1/me`; the registration and sign-in answers do not carry it.
+   */
+  preferredLanguage: z.string().nullable().optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -173,13 +261,26 @@ export type Address = z.infer<typeof addressSchema>;
 
 // --- Requests --------------------------------------------------------------
 
-/** Polish NIP or a generic tax-id string; exact validation lives in the backend. */
-const taxIdSchema = z.string().min(8).max(32);
+/**
+ * `specs/177-tax-id-scope/` — the one normalisation a tax ID gets before it is
+ * stored or looked up: whitespace and dashes stripped, upper-cased. It is the
+ * admin boundary's rule (`organizations`' `schemas/organization.ts`), published
+ * so the lookups (`OrganizationDetailsPort.findByTaxId`) and the conversion body
+ * apply exactly the same one. Pure, so it is a function and not a port.
+ */
+export function normalizeTaxId(input: string): string {
+  return input.replace(/[\s-]+/g, '').toUpperCase();
+}
+
+/** A tax ID as an operator types it, normalised, then held to the stored length (8–32). */
+const normalizedTaxIdSchema = z.string().transform(normalizeTaxId).pipe(z.string().min(8).max(32));
 
 export const registerOrganizationRequestSchema = z.object({
   organization: z.object({
     name: z.string().min(1).max(255),
-    taxId: taxIdSchema,
+    // `specs/177-tax-id-scope/` — normalised, then held to the stored length,
+    // so `--------` is refused instead of storing an empty tax ID.
+    taxId: normalizedTaxIdSchema,
     registeredAddress: z.object({
       street: z.string().min(1).max(255),
       city: z.string().min(1).max(120),
@@ -187,14 +288,35 @@ export const registerOrganizationRequestSchema = z.object({
       country: z.string().length(2),
     }),
     vatStatus: vatStatusSchema.optional(),
+    /**
+     * Feature 175 — the Organization's custom-field values (entity type
+     * `organization`). On registration they are validated as BUYER input on
+     * the `organization.register` surface; on the admin create, which derives
+     * from this member (`AdminOrganizationCreateBodySchema`), with the
+     * administrator's rules — the two routes never share a validator (FR-023).
+     */
+    customFieldValues: customFieldValuesSchema.optional(),
   }),
   firstUser: z.object({
     email: z.string().email(),
     password: z.string().min(12).max(256),
     firstName: z.string().min(1).max(120),
     lastName: z.string().min(1).max(120),
+    /**
+     * Feature 175 — the registering person's custom-field values (entity type
+     * `customer`), validated as buyer input on `organization.register`.
+     */
+    customFieldValues: customFieldValuesSchema.optional(),
   }),
   acceptedTermsVersion: z.string(),
+  /**
+   * Feature 173 — the reference a registry lookup answered
+   * (`organization-registry-lookup.ts`). Top-level, not inside `organization`:
+   * `AdminOrganizationCreateBodySchema` is derived from that member and the
+   * admin create must not accept it. The snapshot is read from the platform's
+   * own store by this id, never from the client (FR-019).
+   */
+  registryLookupId: registryLookupIdSchema.optional(),
 });
 export type RegisterOrganizationRequest = z.infer<typeof registerOrganizationRequestSchema>;
 
@@ -226,7 +348,12 @@ export const customerLoginRequestSchema = z.object({
  * `'noop'`; see `cartMergeOutcomePublicSchema` below.
  */
 export const cartMergeOutcomeSchema = z.object({
-  outcome: z.enum(['adopted', 'merged', 'noop_empty', 'noop_no_anon']),
+  /**
+   * `skipped_permission` (owner ruling PR-12, `specs/170-organization-roles/`):
+   * the member's role lacks `carts.create`, so sign-in did not merge the guest
+   * basket. The HTTP narrowing reports it as `'noop'`.
+   */
+  outcome: z.enum(['adopted', 'merged', 'noop_empty', 'noop_no_anon', 'skipped_permission']),
   movedLineCount: z.number().int().min(0),
   summedLineCount: z.number().int().min(0),
   destinationCartId: uuidSchema,
@@ -250,6 +377,11 @@ export type CartMergeOutcomePublic = z.infer<typeof cartMergeOutcomePublicSchema
  * login carries an anonymous-cart cookie; `null` when no anon cookie was
  * supplied; `outcome: 'noop'` when the cookie was supplied but had no
  * observable effect (no anon cart, or the anon cart was empty).
+ *
+ * @deprecated It declares no `status`, names only part of the account and
+ * refuses the two second-step answers (issue #599). Use
+ * {@link customerSignInResponseSchema}; this export stays until the next
+ * breaking-change release.
  */
 export const customerLoginResponseSchema = z.object({
   data: z.object({
@@ -257,13 +389,73 @@ export const customerLoginResponseSchema = z.object({
       id: uuidSchema,
       email: z.string().email(),
       organizationId: uuidSchema.nullable(),
-      role: organizationRoleSchema,
+      /** The member's role (FR-056); it replaced the legacy `role` (FR-073). */
+      organizationRole: organizationRoleRefSchema,
+      /** The member's effective organization permissions, sorted (FR-056). */
+      permissions: z.array(z.string()),
       twoFactorEnabled: z.boolean(),
     }),
     cartMerge: cartMergeOutcomePublicSchema.nullable().optional(),
   }),
 });
+/** @deprecated Use {@link CustomerSignInResponse} (issue #599). */
 export type CustomerLoginResponse = z.infer<typeof customerLoginResponseSchema>;
+
+/**
+ * Issue #368 — what a completed customer sign-in does beyond issuing the
+ * session: the anonymous basket (`b2b_cart_anon`) is merged into the
+ * customer's and the anonymous comparison (`compare_token`) is adopted.
+ *
+ * `organizations` owns the step and runs it from its password sign-in; a route
+ * that establishes the session itself — `mfa`'s second-step verify, its
+ * enforced-enrolment completion and its federated sign-in exchange (issues
+ * #1188, #1279) — calls it through {@link CustomerSignInCompletionPort} once the
+ * session cookie is set.
+ */
+export interface CustomerSignInCompletionInput {
+  customerAccountId: string;
+  /** The sign-in request's cookies, as `@fastify/cookie` parsed them. */
+  cookies: Readonly<Record<string, string | undefined>>;
+  /**
+   * Issue #1188 — the sales channel the sign-in belongs to, where the route
+   * knows it better than its request does: the federated sign-in exchange
+   * (issue #1279) passes the channel its transaction was started on, which it
+   * has already required the request to be asked on. Only the anonymous
+   * basket of that store is merged (`specs/154-sales-channel-access/`
+   * contracts/basket-attribution.md §3). Absent or `null`: the request's
+   * resolved channel, as for every other sign-in.
+   */
+  salesChannelId?: string | null;
+  /**
+   * Where a failed step is reported. The step is best-effort — a failed merge
+   * never breaks the sign-in (feature 037 FR-007/FR-008) — so a failure is
+   * logged here and answered as "nothing merged".
+   */
+  log: { error(details: object, message: string): void };
+}
+
+export interface CustomerSignInCompletion {
+  /** The merge as the storefront reads it; `null` when no basket was carried or the merge failed. */
+  cartMerge: CartMergeOutcomePublic | null;
+  /**
+   * Whether the response should clear `b2b_cart_anon`: the basket it pointed at
+   * was consumed or empty. A failure, no basket, and a skipped merge keep it.
+   */
+  clearAnonymousCartCookie: boolean;
+}
+
+/**
+ * Container name: `customerSignInCompletionPort`. Owner: `organizations`.
+ *
+ * Reached with `lazyPort<CustomerSignInCompletionPort>(ctx, 'customerSignInCompletionPort')`
+ * and never captured into a singleton (issue #368). `complete` does not throw
+ * for a failed merge: it logs the failure and answers "nothing merged".
+ * Consumers: `mfa`'s second-step verify and enforced-enrolment completion
+ * (#368) and its federated sign-in exchange (#1188, #1279).
+ */
+export interface CustomerSignInCompletionPort {
+  complete(input: CustomerSignInCompletionInput): Promise<CustomerSignInCompletion>;
+}
 
 export const changePasswordRequestSchema = z.object({
   currentPassword: z.string(),
@@ -285,26 +477,32 @@ export type CreateAddressRequest = z.infer<typeof createAddressRequestSchema>;
 export const updateAddressRequestSchema = createAddressRequestSchema.partial();
 export type UpdateAddressRequest = z.infer<typeof updateAddressRequestSchema>;
 
-export const inviteMemberRequestSchema = z.object({
-  email: z.string().email(),
-  role: organizationRoleSchema.optional(),
-});
-
 export const acceptInvitationRequestSchema = z.object({
   password: z.string().min(12),
   firstName: z.string().min(1).max(120),
   lastName: z.string().min(1).max(120),
 });
 
-export const changeMemberRoleRequestSchema = z.object({
-  role: organizationRoleSchema,
-});
+/**
+ * Issue #1468 (SALES-01, DEC-07) — the refusal of `status` on the admin PATCH. Moderation is the
+ * one writer of an organization's status: only it checks the state machine, stamps
+ * `approvedAt` / `blockedAt` / `blockedReason`, emits `organization.status_changed.v1` and sends
+ * the customer e-mail.
+ */
+export const ADMIN_PATCH_ORGANIZATION_STATUS_REFUSAL =
+  'Organization status cannot be set here; use approve, reject, block or unblock ' +
+  '(POST /api/v1/admin/organizations/:id/approve|reject|block|unblock).';
 
 /** Platform admin — PATCH `/admin/organizations/:id` */
 export const adminPatchOrganizationRequestSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   vatStatus: vatStatusSchema.optional(),
-  status: organizationStatusSchema.optional(),
+  /**
+   * Refused, not silently stripped (issue #1468): a strip would answer `200` to an integrator
+   * who believes they blocked an organization. The body is refused as a whole, so nothing else
+   * it carries is written either.
+   */
+  status: z.never({ error: ADMIN_PATCH_ORGANIZATION_STATUS_REFUSAL }).optional(),
   /** Feature 038 (US4) — additional emails CC'd on this org's order confirmations. */
   orderConfirmationEmails: z.array(z.string()).optional(),
   /**
@@ -322,21 +520,6 @@ export const adminPatchOrganizationRequestSchema = z.object({
 /** Platform admin — POST `/admin/organizations/:id/recover-admin-access` */
 export const adminRecoverOrgAccessRequestSchema = z.object({
   promoteCustomerAccountId: uuidSchema,
-});
-
-/** Platform admin — POST `/admin/organizations/:id/members` (direct create) */
-export const adminDirectMemberRequestSchema = z.object({
-  email: z.string().email(),
-  firstName: z.string().min(1).max(120),
-  lastName: z.string().min(1).max(120),
-  password: z.string().min(12).max(256),
-  role: organizationRoleSchema.optional(),
-});
-
-/** Platform admin — PATCH member role */
-export const adminPatchMemberRoleRequestSchema = z.object({
-  role: organizationRoleSchema,
-  expectedUpdatedAt: z.string().optional(),
 });
 
 /**
@@ -369,6 +552,181 @@ export const registerOrganizationResponseSchema = z.object({
   emailVerificationSent: z.boolean(),
 });
 export type RegisterOrganizationResponse = z.infer<typeof registerOrganizationResponseSchema>;
+
+/**
+ * The signed-in buyer's Organization as `GET /api/v1/me` answers it (issue
+ * #599): the published Organization plus the keys that reply has always
+ * carried.
+ */
+export const customerMeOrganizationSchema = organizationSchema.extend({
+  /** Feature 051 — always answered here; the storefront gates its organization screens on it. */
+  isPersonal: z.boolean(),
+  legalName: z.string().nullable(),
+  /** The optimistic-concurrency token the Organization's own writes check. */
+  version: z.number().int().nonnegative(),
+  /** Feature 026 — `status === 'active'`, so the storefront need not re-implement the rule. */
+  canTransact: z.boolean(),
+  /**
+   * Feature 026 — a customer-safe explanation of the current status, in the
+   * response language; `null` while the Organization is `active`.
+   */
+  moderationMessage: z.string().nullable(),
+});
+export type CustomerMeOrganization = z.infer<typeof customerMeOrganizationSchema>;
+
+/**
+ * `GET /api/v1/me` — the signed-in buyer (issue #599). `organization` is `null`
+ * when the session resolves no Organization; `impersonation` is set while an
+ * administrator impersonates the buyer.
+ */
+export const customerMeResponseSchema = z.object({
+  data: z.object({
+    customerAccount: customerAccountSchema.extend({
+      /** Issue #652 (D-292) — always answered here; `null` while unknown. */
+      preferredLanguage: z.string().nullable(),
+    }),
+    organization: customerMeOrganizationSchema.nullable(),
+    impersonation: z.object({ impersonatorAdminUserId: uuidSchema }).nullable(),
+  }),
+});
+export type CustomerMeResponse = z.infer<typeof customerMeResponseSchema>;
+
+/**
+ * `POST /api/v1/auth/customer/login` — the first sign-in step (issue #599).
+ * Only `authenticated` sets the session cookie and names the account;
+ * `cartMerge` is present when the request carried a guest basket the merge
+ * acted on. The other two arms hand the client the opaque ticket its second
+ * step takes.
+ */
+export const customerSignInResponseSchema = z.object({
+  data: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('authenticated'),
+      customerAccount: customerAccountSchema,
+      cartMerge: cartMergeOutcomePublicSchema.optional(),
+    }),
+    z.object({ status: z.literal('mfaRequired'), challengeId: z.string().min(1) }),
+    z.object({ status: z.literal('mfaSetupRequired'), setupTicket: z.string().min(1) }),
+  ]),
+});
+export type CustomerSignInResponse = z.infer<typeof customerSignInResponseSchema>;
+
+// --- Admin organization replies (issue #599) --------------------------------
+
+/**
+ * `GET /api/v1/admin/organizations?page=&pageSize=` — the paging the admin list
+ * screen asks for (issue #1473). `pageSize` falls back to `limit`, so a caller
+ * that names neither — the pickers — keeps its one `limit`-sized first page.
+ */
+export const adminOrganizationListPageQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(200).optional(),
+});
+export type AdminOrganizationListPageQuery = z.infer<typeof adminOrganizationListPageQuerySchema>;
+
+/**
+ * `GET /api/v1/admin/organizations` — one page of Organizations. `meta` is the
+ * offset page and the total across every page, in the shape the Customers list
+ * answers with (issue #1473); `pagination` stays for its existing readers, and
+ * its `hasMore` now says whether a later page exists. Its `cursor` is always
+ * `null`: this list pages by offset.
+ */
+export const adminOrganizationListResponseSchema = z.object({
+  data: z.array(adminOrganizationSchema),
+  meta: z.object({
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+  }),
+  pagination: paginationSchema,
+});
+export type AdminOrganizationListResponse = z.infer<typeof adminOrganizationListResponseSchema>;
+
+/**
+ * A member as the operator's screens show it: the detail's member roster and
+ * the answer of every admin member write (profile, roll-up, role, block,
+ * unblock). The role is `organizationRole` (`specs/170-organization-roles/`
+ * FR-008, FR-073); an operator view carries no effective permissions.
+ */
+export const adminOrganizationMemberSchema = z.object({
+  id: uuidSchema,
+  email: z.string().email(),
+  firstName: z.string(),
+  lastName: z.string(),
+  /** Feature 056 — this login sees and acts across its Organization's subtree. */
+  subtreeRollupEnabled: z.boolean(),
+  emailVerifiedAt: isoDateTimeSchema.nullable(),
+  twoFactorEnabled: z.boolean(),
+  lastLoginAt: isoDateTimeSchema.nullable(),
+  organizationRole: organizationRoleRefSchema,
+  createdAt: isoDateTimeSchema,
+  updatedAt: isoDateTimeSchema,
+});
+export type AdminOrganizationMember = z.infer<typeof adminOrganizationMemberSchema>;
+
+/**
+ * `GET /api/v1/admin/organizations/:id` — the Organization, its active members,
+ * and its two predefined roles, so the member role select can offer
+ * Administrator and Member to an operator who may assign roles but not read the
+ * role list (`specs/170-organization-roles/contracts/operator-api.md` §5).
+ */
+export const adminOrganizationDetailSchema = adminOrganizationSchema.extend({
+  members: z.array(adminOrganizationMemberSchema),
+  predefinedRoles: z.array(organizationRoleRefSchema),
+});
+export type AdminOrganizationDetail = z.infer<typeof adminOrganizationDetailSchema>;
+
+// --- Buyer member and invitation replies (issue #599) -----------------------
+
+/**
+ * A member as the buyer's roster shows it — `GET /api/v1/organizations/mine/members`
+ * and `PATCH …/mine/members/:id/role`. A session view (`customerAccountSchema`)
+ * adds the member's effective permissions; a roster row does not.
+ */
+export const organizationMemberSchema = z.object({
+  id: uuidSchema,
+  organizationId: uuidSchema,
+  email: z.string().email(),
+  firstName: z.string(),
+  lastName: z.string(),
+  organizationRole: organizationRoleRefSchema,
+  emailVerifiedAt: isoDateTimeSchema.nullable(),
+  twoFactorEnabled: z.boolean(),
+  createdAt: isoDateTimeSchema,
+  updatedAt: isoDateTimeSchema,
+});
+export type OrganizationMember = z.infer<typeof organizationMemberSchema>;
+
+export const organizationMemberListResponseSchema = z.object({ data: z.array(organizationMemberSchema) });
+export type OrganizationMemberListResponse = z.infer<typeof organizationMemberListResponseSchema>;
+
+/** A pending invitation — `GET /api/v1/organizations/mine/invitations`. */
+export const organizationInvitationSchema = z.object({
+  id: uuidSchema,
+  organizationId: uuidSchema,
+  email: z.string().email(),
+  /** The role the invitee will hold (FR-008, FR-073). */
+  organizationRole: organizationRoleRefSchema,
+  invitedByCustomerAccountId: uuidSchema.nullable(),
+  expiresAt: isoDateTimeSchema,
+  createdAt: isoDateTimeSchema,
+});
+export type OrganizationInvitation = z.infer<typeof organizationInvitationSchema>;
+
+export const organizationInvitationListResponseSchema = z.object({ data: z.array(organizationInvitationSchema) });
+export type OrganizationInvitationListResponse = z.infer<typeof organizationInvitationListResponseSchema>;
+
+/** `POST /api/v1/organizations/mine/invitations` — 201. */
+export const inviteMemberResponseSchema = z.object({
+  data: z.object({ invitationId: uuidSchema, expiresAt: isoDateTimeSchema }),
+});
+export type InviteMemberResponse = z.infer<typeof inviteMemberResponseSchema>;
+
+/** `POST /api/v1/organizations/invitations/:token/accept` — the account the invitation created, as a session view. */
+export const acceptInvitationResponseSchema = z.object({
+  data: z.object({ customerAccount: customerAccountSchema }),
+});
+export type AcceptInvitationResponse = z.infer<typeof acceptInvitationResponseSchema>;
 
 // --- Organization picker (feature 091, P2) ----------------------------------
 
@@ -444,7 +802,8 @@ export type SalesRepOrganization = z.infer<typeof salesRepOrganizationSchema>;
 // in-process calls, not an API boundary.
 // ---------------------------------------------------------------------------
 
-export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only';
+/** `gus_pl` — feature 173: the GUS REGON registry, written by a registration-time lookup. */
+export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only' | 'gus_pl';
 
 export type VatValidationOutcome = 'validated' | 'failed' | 'deferred' | 'unverified';
 
@@ -466,7 +825,12 @@ export interface OrganizationRecord {
   id: string;
   name: string;
   legalName: string | null;
-  taxId: string;
+  /**
+   * `null` for a personal (B2C) organization (`specs/177-tax-id-scope/`,
+   * FR-004): it used to carry a 32-hex placeholder derived from its account id.
+   * Print it through {@link organizationCompanyTaxId}.
+   */
+  taxId: string | null;
   status: OrganizationStatus;
   vatStatus: VatStatus;
   isPersonal: boolean;
@@ -482,7 +846,6 @@ export interface OrganizationRecord {
   rejectedAt: Date | null;
   approvedAt: Date | null;
   approvedByAdminUserId: string | null;
-  requiresCartApproval: boolean;
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
   parentId: string | null;
@@ -495,6 +858,421 @@ export interface OrganizationRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  /**
+   * When `organization.convert_to_company` turned this personal organization
+   * into a company (`specs/177-tax-id-scope/`, FR-039); `null` for one that was
+   * never converted. Set once, never cleared — `returns` reads it to keep a
+   * consumer's withdrawal right for orders placed before it (FR-040).
+   */
+  convertedToCompanyAt: Date | null;
+}
+
+// --- Tax-ID scope (specs/177-tax-id-scope/) ----------------------------------
+
+/**
+ * Where the same tax ID may appear twice (`contracts/tax-id-scope.md` §1):
+ * `global` — nowhere, every tax ID belongs to one organization (the default of
+ * every installation); `per-tree-root` — only inside one organization tree, so
+ * a head office and its branches may share it. Enforced by the database and
+ * changed only by the audited `organization.tax_id_scope.set` Command.
+ */
+export const taxIdScopeSchema = z.enum(['global', 'per-tree-root']);
+export type TaxIdScope = z.infer<typeof taxIdScopeSchema>;
+
+/** `PUT /api/v1/admin/organizations/tax-id-scope` — the scope to switch to. */
+export const adminTaxIdScopeSetBodySchema = z.object({ scope: taxIdScopeSchema });
+export type AdminTaxIdScopeSetBody = z.infer<typeof adminTaxIdScopeSetBodySchema>;
+
+/**
+ * `GET` / `PUT /api/v1/admin/organizations/tax-id-scope` — the installation's
+ * scope, who set it last, how many tax IDs are on more than one organization,
+ * and whether the database enforcement agrees with the stored scope
+ * (`mismatch` only after a hand edit; re-applying the scope repairs it).
+ */
+export const adminTaxIdScopeResponseSchema = z.object({
+  data: z.object({
+    scope: taxIdScopeSchema,
+    updatedAt: isoDateTimeSchema,
+    updatedByAdminUserId: uuidSchema.nullable(),
+    sharedTaxIdCount: z.number().int().nonnegative(),
+    enforcement: z.enum(['consistent', 'mismatch']),
+  }),
+});
+export type AdminTaxIdScopeResponse = z.infer<typeof adminTaxIdScopeResponseSchema>;
+
+/**
+ * What {@link OrganizationDetailsPort.resolveByTaxId} answers. `one` carries the
+ * tree's root (all matches share it in both scopes); `ambiguous` — matches in
+ * more than one tree — is unreachable in `global` and `per-tree-root` alike and
+ * is typed for a later scope, so a caller handles it today.
+ */
+export type TaxIdResolution =
+  | { kind: 'none' }
+  | { kind: 'one'; organization: OrganizationRecord }
+  | { kind: 'ambiguous'; organizations: OrganizationRecord[] };
+
+// --- Personal → company conversion (specs/177-tax-id-scope/) -----------------
+
+/**
+ * `POST /api/v1/admin/organizations/:id/convert-to-company`
+ * (`contracts/convert-to-company.md` §2). The tax ID is normalised exactly as
+ * the admin boundary normalises it. `validateTaxId` is the route's own switch
+ * — a VAT validation after the conversion commits — and is not part of the
+ * Command's input.
+ */
+export const adminOrganizationConvertToCompanyBodySchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  legalName: z.string().trim().min(1).max(255).optional(),
+  taxId: normalizedTaxIdSchema,
+  registeredAddress: z.object({
+    street: z.string().min(1).max(255),
+    city: z.string().min(1).max(120),
+    postalCode: z.string().min(1).max(20),
+    country: z.string().length(2),
+  }),
+  vatStatus: vatStatusSchema.default('vat_payer'),
+  validateTaxId: z.boolean().default(false),
+});
+export type AdminOrganizationConvertToCompanyBody = z.infer<
+  typeof adminOrganizationConvertToCompanyBodySchema
+>;
+export type OrganizationConvertToCompanyInput = Omit<
+  AdminOrganizationConvertToCompanyBody,
+  'validateTaxId'
+>;
+
+/**
+ * Container name: `organizationCommandPort`. Owner: `organizations`
+ * (`specs/186-aggregate-ports/`, D-293, issue #1821; the conversion and the
+ * tax-ID correction since `specs/177-tax-id-scope/`).
+ *
+ * The Organization aggregate's write port: each method runs one audited
+ * Command, the one the admin route for the same operation runs, with the
+ * ambient actor — an administrator inside an admin request (or under
+ * `withSystemScopeActingFor`), the `system` actor under `withSystemScope` in a
+ * worker. **No permission is checked** — the caller is the gate; never resolve
+ * it for a customer-facing route. Call it after your own commit: each call is a
+ * transaction of its own.
+ *
+ * What the route does beside its write happens here too: the moderation
+ * notices (sent by this module's subscriber of `organization.status_changed.v1`,
+ * after the commit, best effort), the role cache a conversion drops. The
+ * admin route's own gates are not here: the platform-administrator-only rule
+ * for parentage, the credit mode and sales representatives (D-260), and the
+ * sales-representative reach of every `/:id` route, are the caller's.
+ *
+ * **Inputs and refusals are the admin route's**, as the platform's `HttpError`
+ * with its `code`: `422 VALIDATION_FAILED` for an input outside the route's
+ * limits, `404 NOT_FOUND` for an unknown, soft-deleted or malformed id, and
+ * each method's own below. The one difference is an unknown sales channel, on
+ * `create` and `setSalesChannels`: `422 UNKNOWN_SALES_CHANNEL` where the admin
+ * routes answer `VALIDATION_FAILED` (research R-16.5), the code the deprecated
+ * `organizationWritePort.create` has always answered, with the same message
+ * and `details` paths.
+ *
+ * **Options** ({@link AggregateCommandOptions}): `expectedVersion` is honoured
+ * by `update`, the four moderation methods, `setRestrictions` and
+ * `patchRestriction` — the operations whose admin route checks a version — and
+ * a row that has moved on is refused `409 VERSION_CONFLICT` with
+ * `currentVersion`; absent, they write over the version they read, the status
+ * guard still applying. Every other method ignores it. `source` is recorded on
+ * the audit entry beside the actor; a code outside
+ * `aggregateCommandSourceSchema` is refused `422 VALIDATION_FAILED` before
+ * anything is read or written. `extensions` reaches the command hooks of the
+ * action (`organization.create`, `organization.set_custom_field_values`,
+ * `organization.convert_to_company`, `organization.tax_id.change` are
+ * hookable); a key no present hook module claims is refused
+ * `422 COMMAND_EXTENSION_UNCLAIMED` before anything is written.
+ *
+ * **Not offered, deliberately**: members, invitations and roles (their own
+ * aggregates; moving an account is `membershipPort`); the tax-ID scope (a
+ * platform setting, not one Organization); VAT validation runs (not a write of
+ * the aggregate); the admin edit `organization.admin_patch`, which writes the
+ * columns and the custom-field bag in one Command — `update` covers the
+ * columns and `setCustomFieldValues` the bag (research R-16.2).
+ *
+ * **Owner off:** `organizations` is the platform's one tenant concept and
+ * declares itself non-deactivatable, so the gate cannot close in practice; it
+ * is registered anyway, and closed it would answer 503 `MODULE_DISABLED`.
+ */
+export interface OrganizationCommandPort {
+  /**
+   * `organization.create` — the Command the admin create runs, the channels
+   * bound in the same transaction, optionally as a branch under `parentId`.
+   * Refusals: `409 ORGANIZATION_TAX_ID_EXISTS`, `422 UNKNOWN_SALES_CHANNEL`,
+   * `409 DICTIONARY_ENTRY_NOT_FOUND` / `DICTIONARY_ENTRY_INACTIVE` (the
+   * country), `422 CUSTOM_FIELD_VALUE_INVALID`, `404 NOT_FOUND` (the parent),
+   * `422 ORGANIZATION_TREE_INVALID` (the depth bound). Ignores
+   * `expectedVersion`.
+   */
+  create(input: OrganizationWriteCreateInput, options?: OrganizationCommandPortOptions): Promise<OrganizationRecord>;
+  /**
+   * `organization.update` — identity and contact fields; an absent key is left
+   * as it is. A patch that changes nothing writes and records nothing.
+   * Refusals: `409 VERSION_CONFLICT`, `409 DICTIONARY_ENTRY_*` (a changed
+   * country), `409 ORGANIZATION_WRITE_CONTENDED`.
+   */
+  update(
+    id: string,
+    patch: OrganizationWriteUpdatePatch,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * Places the Organization in the tree, as `POST …/:id/parent` does:
+   * `organization.set_parent` for a first parent or `parentId: null` (detach
+   * to a root), `organization.move` for a new parent of a branch. Refusals:
+   * `404 NOT_FOUND` (the Organization or the parent), `ORGANIZATION_TREE_INVALID`
+   * (a cycle or the depth bound; `409` with `details.code`
+   * `tax_id_shared_across_trees` for a tax ID the move would split across two
+   * trees). Ignores `expectedVersion`.
+   */
+  setParent(
+    id: string,
+    input: { readonly parentId: string | null },
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * `organization.approved` — `pending_verification` → `active`; stamps the
+   * ambient administrator (none under the `system` actor). The customer's
+   * approval notice follows the commit. Refusals:
+   * `422 ORGANIZATION_STATUS_INVALID`, `409 VERSION_CONFLICT`.
+   */
+  approve(id: string, options?: OrganizationCommandPortOptions): Promise<OrganizationRecord>;
+  /**
+   * `organization.rejected` — `pending_verification` → `rejected`. `reason` is
+   * required, 1–2000 characters (`422 VALIDATION_FAILED` otherwise), stored on
+   * the row and sent in the customer's notice, never in the audit entry. The
+   * notice follows the commit unless `notifyCustomerEmail` is `false` (default
+   * `true`). Refusals: `422 ORGANIZATION_STATUS_INVALID`, `409 VERSION_CONFLICT`.
+   */
+  reject(
+    id: string,
+    input: OrganizationRejectInput,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * `organization.blocked` — `active` → `blocked`, with an optional reason (at
+   * most 2000 characters). No notice. Refusals: `422 ORGANIZATION_STATUS_INVALID`,
+   * `409 VERSION_CONFLICT`.
+   */
+  block(id: string, input: OrganizationBlockInput, options?: OrganizationCommandPortOptions): Promise<OrganizationRecord>;
+  /**
+   * `organization.unblocked` — `blocked` → `active`. No notice. Refusals:
+   * `422 ORGANIZATION_STATUS_INVALID`, `409 VERSION_CONFLICT`.
+   */
+  unblock(id: string, options?: OrganizationCommandPortOptions): Promise<OrganizationRecord>;
+  /**
+   * `organization.delete` — the soft delete. Refusals:
+   * `409 ORGANIZATION_HAS_CHILDREN` while the Organization has live children.
+   * Ignores `expectedVersion`.
+   */
+  delete(id: string, options?: OrganizationCommandPortOptions): Promise<void>;
+  /**
+   * `organization.set_custom_field_values` — the caller's `merge` over the
+   * current bag, inside one Command; the owner does not validate (call
+   * `CustomFieldValuePort.validateAndMerge` inside it), and a refusal `merge`
+   * throws propagates unchanged and writes nothing. The entry names the keys
+   * that changed, never their values. Ignores `expectedVersion`.
+   */
+  setCustomFieldValues(
+    id: string,
+    merge: CustomFieldMerge,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * Runs `organization.convert_to_company` as one Command with the ambient
+   * actor (an administrator inside an admin request; the system under
+   * `withSystemScope` in a worker). For admin routes and server code — an ERP
+   * import — and never for a customer-facing route. No VAT validation: trigger
+   * one after it resolves if you need it. Refusals: `404 NOT_FOUND`,
+   * `409 ORGANIZATION_CONVERSION_REFUSED`, `409 ORGANIZATION_TAX_ID_EXISTS`,
+   * and whatever a command hook on the action vetoes with. `options.extensions`
+   * reaches those hooks (issue #1057). Ignores `expectedVersion`.
+   */
+  convertToCompany(
+    organizationId: string,
+    input: OrganizationConvertToCompanyInput,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * Issue #1040 — runs `organization.tax_id.change` as one Command with the
+   * ambient actor: corrects a live company organization's tax ID in place (same
+   * id, members, roles and orders). The value is normalised and checked in the
+   * active tax-ID scope inside the write; the organization's VAT validation is
+   * reset to unverified. The same value after normalisation changes nothing and
+   * is not audited, unless a command hook on the action noted a write of its
+   * own; `options.extensions` reaches those hooks (issue #1057). No VAT validation runs: trigger one after it resolves if you
+   * need it. Refusals: `404 NOT_FOUND`, `409 ORGANIZATION_TAX_ID_CHANGE_REFUSED`
+   * (`not_company` | `deleted`), `409 ORGANIZATION_TAX_ID_EXISTS`,
+   * `409 ORGANIZATION_WRITE_CONTENDED`. Ignores `expectedVersion`.
+   */
+  changeTaxId(
+    organizationId: string,
+    input: OrganizationChangeTaxIdInput,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * `organization.sales_channels.set` — replaces the sales channels the
+   * Organization's members may sign in and shop on, as
+   * `PUT …/:id/sales-channels` does, and answers the Organization. At least
+   * one distinct channel id (`422 VALIDATION_FAILED` otherwise); an inactive
+   * channel may be assigned. The kernel's membership writer records one
+   * `sales_channel.membership.changed` entry per membership added or removed,
+   * in the same transaction as this method's own entry (the ids before and
+   * after); the Organization's access cache is dropped after the commit and
+   * `sales_channels.membership_changed` emitted per membership. The set the
+   * Organization already has changes, records and emits nothing. Refusals:
+   * `404 NOT_FOUND`, `422 UNKNOWN_SALES_CHANNEL` (with `details` naming
+   * `salesChannelIds.<index>`). Ignores `expectedVersion`.
+   */
+  setSalesChannels(
+    id: string,
+    input: OrganizationSalesChannelsUpdateBody,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * `organization.allow_lists_replace` — replaces all three allow-lists
+   * (payment methods, delivery methods, warehouses; an empty list means the
+   * platform defaults apply) and answers them, sorted, with the Organization's
+   * new `version`. Refusals: `409 VERSION_CONFLICT`.
+   */
+  setRestrictions(
+    id: string,
+    input: OrganizationAllowListsReplace,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRestrictions>;
+  /**
+   * `organization.allow_list_patch` — adds and removes ids on one allow-list,
+   * as the three `PATCH …/restrictions/*` routes do, and answers all three.
+   * Refusals: `409 VERSION_CONFLICT`.
+   */
+  patchRestriction(
+    id: string,
+    kind: OrganizationAllowListKind,
+    patch: OrganizationAllowListPatch,
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRestrictions>;
+  /**
+   * `organization.set_credit_mode` — the credit-inheritance mode; `null` falls
+   * back to the platform default. Ignores `expectedVersion`.
+   */
+  setCreditInheritanceMode(
+    id: string,
+    input: { readonly mode: CreditInheritanceMode | null },
+    options?: OrganizationCommandPortOptions,
+  ): Promise<OrganizationRecord>;
+  /**
+   * `organization.sales_rep_assign` — assigns the administrator as a sales
+   * representative of the Organization. An existing assignment is left as it
+   * is and records nothing. Refusals: `404 NOT_FOUND` (the Organization or the
+   * administrator), `422 ORGANIZATION_PERSONAL`. Ignores `expectedVersion`.
+   */
+  assignSalesRep(
+    id: string,
+    input: { readonly adminUserId: string },
+    options?: OrganizationCommandPortOptions,
+  ): Promise<void>;
+  /**
+   * `organization.sales_rep_unassign` — removes the assignment. Refusals:
+   * `404 NOT_FOUND` when there is no such assignment, as the admin route
+   * answers. Ignores `expectedVersion`.
+   */
+  unassignSalesRep(
+    id: string,
+    input: { readonly adminUserId: string },
+    options?: OrganizationCommandPortOptions,
+  ): Promise<void>;
+}
+
+/**
+ * What a server-side caller may hand any {@link OrganizationCommandPort}
+ * method besides its input: {@link AggregateCommandOptions} (issue #1057 for
+ * `extensions`; `specs/186-aggregate-ports/` for `expectedVersion` and
+ * `source`). No HTTP body carries `extensions` — that field is spec 178's.
+ */
+export type OrganizationCommandPortOptions = AggregateCommandOptions;
+
+/** {@link OrganizationCommandPort.reject}'s input — the admin body without its version. */
+export interface OrganizationRejectInput {
+  /** Required, 1–2000 characters. */
+  readonly reason: string;
+  /** Whether the customer's rejection notice is sent; default `true`. */
+  readonly notifyCustomerEmail?: boolean;
+}
+
+/** {@link OrganizationCommandPort.block}'s input — the admin body without its version. */
+export interface OrganizationBlockInput {
+  /** At most 2000 characters; absent or `null` blocks without one. */
+  readonly reason?: string | null;
+}
+
+/** {@link OrganizationCommandPort.setRestrictions}'s input — the admin body without its version. */
+export interface OrganizationAllowListsReplace {
+  readonly paymentMethodIds: readonly string[];
+  readonly deliveryMethodIds: readonly string[];
+  readonly warehouseIds: readonly string[];
+}
+
+/** {@link OrganizationCommandPort.patchRestriction}'s input — the admin body without its version. */
+export interface OrganizationAllowListPatch {
+  readonly add?: readonly string[];
+  readonly remove?: readonly string[];
+}
+
+/** An Organization's three allow-lists, sorted, and its `version` after the write. */
+export interface OrganizationRestrictions {
+  readonly organizationId: string;
+  readonly paymentMethodIds: string[];
+  readonly deliveryMethodIds: string[];
+  readonly warehouseIds: string[];
+  readonly version: number;
+}
+
+// --- Tax-ID correction (issue #1040, follow-up to specs/177-tax-id-scope/) ----
+
+/**
+ * `POST /api/v1/admin/organizations/:id/change-tax-id`. The tax ID is
+ * normalised exactly as the admin boundary normalises it on creation.
+ * `validateTaxId` is the route's own switch — a VAT validation after the change
+ * commits, whose failure never undoes it — and is not part of the Command's
+ * input.
+ */
+export const adminOrganizationChangeTaxIdBodySchema = z.object({
+  taxId: normalizedTaxIdSchema,
+  validateTaxId: z.boolean().default(false),
+});
+export type AdminOrganizationChangeTaxIdBody = z.infer<typeof adminOrganizationChangeTaxIdBodySchema>;
+export type OrganizationChangeTaxIdInput = Omit<AdminOrganizationChangeTaxIdBody, 'validateTaxId'>;
+
+/**
+ * `organization.tax_id_changed.v1` — emitted once, after the change commits,
+ * never on rollback and never for a same-value no-op. Carries neither the old
+ * nor the new tax ID (the precedent of
+ * {@link OrganizationConvertedToCompanyEvent}): a tax ID is personal data for a
+ * sole trader, and a subscriber that needs the current value reads it through
+ * {@link OrganizationDetailsPort}.
+ */
+export interface OrganizationTaxIdChangedEvent {
+  eventId: string;
+  /** ISO-8601. */
+  occurredAt: string;
+  organizationId: string;
+  /** ISO-8601 — when the change committed its write. */
+  changedAt: string;
+}
+
+/**
+ * `organization.converted_to_company.v1` — emitted once, after the conversion
+ * commits, never on rollback (FR-039). Carries no name and no tax ID: a
+ * subscriber has the id and {@link OrganizationDetailsPort}.
+ */
+export interface OrganizationConvertedToCompanyEvent {
+  eventId: string;
+  /** ISO-8601. */
+  occurredAt: string;
+  organizationId: string;
+  /** ISO-8601 — the organization's `convertedToCompanyAt`. */
+  convertedAt: string;
 }
 
 /**
@@ -524,17 +1302,312 @@ export interface OrganizationRecord {
  * more than the predicate does.
  */
 export interface OrganizationDetailsPort {
-  findById(id: string): Promise<OrganizationRecord | null>;
-  findByIds(ids: readonly string[]): Promise<OrganizationRecord[]>;
+  /**
+   * `options.include` (`specs/187-side-table-extensions/` FR-058) names the
+   * side-table extensions to attach as `extensions.<moduleId>`; absent or
+   * empty, the answer is exactly what it was without the parameter. The same
+   * holds for {@link findByIds}, {@link searchByName} and {@link findByTaxId}.
+   */
+  findById(id: string, options?: EntityExtensionReadOptions): Promise<WithEntityExtensions<OrganizationRecord> | null>;
+  findByIds(
+    ids: readonly string[],
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<OrganizationRecord>[]>;
   /** How many of these ids exist — the `count === ids.length` existence check. */
   countByIds(ids: readonly string[]): Promise<number>;
   /**
    * Diacritic-insensitive name search over `nameSearch`, ordered by name.
    * An empty `query` returns the first `limit` organisations.
    */
-  searchByName(query: string, limit: number): Promise<OrganizationRecord[]>;
+  searchByName(
+    query: string,
+    limit: number,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<OrganizationRecord>[]>;
   /** The same search, ids only — for the order list's organisation filter. */
   searchIdsByName(query: string): Promise<string[]>;
+  /**
+   * `specs/177-tax-id-scope/` (FR-023) — every live organization holding this
+   * tax ID: the tree's root first, then by depth, creation time and id. The
+   * input is normalised with {@link normalizeTaxId}; an input with nothing left
+   * answers `[]`. Soft-deleted rows are excluded unless `includeDeleted`.
+   * In `global` there is at most one; in `per-tree-root` a head office and its
+   * branches. Never matches a personal organization, which has no tax ID.
+   */
+  findByTaxId(
+    taxId: string,
+    options?: { includeDeleted?: boolean } & EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<OrganizationRecord>[]>;
+  /**
+   * The single organization a tax ID resolves to — the root of the tree that
+   * holds it (the live root, else the oldest live match), `none` when no live
+   * organization holds it. See {@link TaxIdResolution} for `ambiguous`.
+   */
+  resolveByTaxId(taxId: string): Promise<TaxIdResolution>;
+}
+
+/**
+ * Container name: `organizationCustomFieldWritePort`. Owner: `organizations`.
+ *
+ * **Deprecated since 0.113.0** (`specs/186-aggregate-ports/`): the write is
+ * {@link OrganizationCommandPort.setCustomFieldValues}, with the same merge and
+ * the same entry; this port delegates to it until it is removed.
+ *
+ * The server-side write of an Organization's custom-field values — for code
+ * with no admin request to ride on: a subscriber on
+ * `organization.registered.v1`, an overlay module, an integration worker. The
+ * case it was published for is an `audience: internal` field (an acquisition
+ * source, say) set after self-registration, which by design cannot travel
+ * through the buyer's registration input. Before it the only ways were the
+ * admin HTTP API or a native `UPDATE organizations SET custom_field_values`,
+ * and the second breaks Principle I.
+ *
+ * A port of its own rather than a method on the read-only
+ * {@link OrganizationDetailsPort}, mirroring
+ * `CustomerAccountCommandPort.setCustomFieldValues` on the account side.
+ *
+ * **The merge is the caller's.** The owner loads the Organization, calls
+ * `merge` with its current bag and stores what `merge` returns — inside **one
+ * transaction, as one Command (`organization.set_custom_field_values`) with one
+ * audit row** naming the keys that changed (`changedCustomFields`), never
+ * their values (`specs/conventions/audit-state.md`). It is a callback rather
+ * than a pre-merged bag because the read, the validation and the write have
+ * to share that transaction, or a concurrent write is silently lost.
+ *
+ * **The owner does not validate.** Whatever `merge` returns is stored, so the
+ * caller validates inside it through `CustomFieldValuePort.validateAndMerge`
+ * (the administrator's rules — an `internal` field is accepted, unknown keys
+ * are dropped, every `required` definition is enforced):
+ *
+ * ```ts
+ * await organizationCustomFieldWritePort.setCustomFieldValues(organizationId, (current) =>
+ *   customFieldValueService.validateAndMerge('organization', current, { acquisition_source: 'trade_fair' }),
+ * );
+ * ```
+ *
+ * **Failures propagate unchanged.** A throwing `merge` — `custom_fields`'
+ * validation failure included — rolls the transaction back, stores nothing,
+ * records nothing, and reaches the caller as it was thrown. An unknown or
+ * soft-deleted Organization (or an id that is not a uuid) throws the platform's
+ * `404 NOT_FOUND` HTTP error before `merge` is called, as the account port does.
+ *
+ * **The actor is the ambient one.** The Command Bus records the actor of the
+ * caller's tenant context, never one passed in: an administrator inside an
+ * admin request, and a null actor (system) for a subscriber or a worker. A
+ * subscriber runs in its emitter's context, and `organization.registered.v1` is
+ * emitted by the anonymous registration request, which the platform scopes as
+ * system — so the entry records no actor. With no tenant context at all the bus
+ * refuses before `merge` runs (`MissingTenantContextError`); a detached caller
+ * (a timer, a script) opens one with `enterSystemScope`.
+ *
+ * **It is not transactional with registration.** Called from an
+ * `organization.registered.v1` subscriber it runs after the registration
+ * committed, in a transaction of its own: best effort. A failure leaves the
+ * Organization registered without the value, and the event bus logs a
+ * subscriber's error rather than surfacing it to the buyer.
+ *
+ * When `organizations` is off the method fails closed (503 `MODULE_DISABLED`);
+ * the module is the platform's one tenant concept, so in practice the gate
+ * cannot close.
+ */
+export interface OrganizationCustomFieldWritePort {
+  /**
+   * Runs `organization.set_custom_field_values`, delegating to the aggregate
+   * port's method of the same name: the same Command, the same entry.
+   *
+   * @deprecated since 0.113.0; use {@link OrganizationCommandPort.setCustomFieldValues} instead.
+   */
+  setCustomFieldValues(
+    organizationId: string,
+    merge: (current: Record<string, unknown>) => Promise<Record<string, unknown>>,
+    options?: OrganizationCustomFieldWriteOptions,
+  ): Promise<OrganizationRecord>;
+}
+
+/** Container name of {@link OrganizationWritePort}. */
+export const ORGANIZATION_WRITE_PORT = 'organizationWritePort' as const;
+
+/** What {@link OrganizationWritePort.create} writes — the admin create's fields, plus the legal name. */
+export interface OrganizationWriteCreateInput {
+  name: string;
+  legalName?: string | null;
+  /** Normalised with {@link normalizeTaxId} and stored in that form, as on every creation path. */
+  taxId: string;
+  /** Defaults to `vat_payer`, as on every other creation path. */
+  vatStatus?: VatStatus;
+  registeredAddress: OrganizationRegisteredAddress;
+  /** The stores its members may shop on, bound in the creating transaction. */
+  salesChannelIds: readonly [string, ...string[]];
+  /** The statuses an operator may create an Organization in. */
+  status: 'active' | 'pending_verification';
+  /**
+   * Create it as a branch under this live Organization, in the same Command.
+   * In the `per-tree-root` tax-ID scope a branch may carry the tax ID its tree
+   * already holds. No permission is checked: the caller is the gate.
+   */
+  parentId?: string;
+  /** Custom-field values, validated with the administrator's rules, as the admin create does. */
+  customFieldValues?: Record<string, unknown>;
+}
+
+/**
+ * The identity and contact fields {@link OrganizationWritePort.update} may
+ * change; an absent key is left as it is. The tax ID is not among them: a
+ * correction is `OrganizationCommandPort.changeTaxId`.
+ */
+export interface OrganizationWriteUpdatePatch {
+  name?: string;
+  /** `null` clears it. */
+  legalName?: string | null;
+  vatStatus?: VatStatus;
+  /** Replaces the whole address. */
+  registeredAddress?: OrganizationRegisteredAddress;
+  /** Replaces the whole list. */
+  orderConfirmationEmails?: string[];
+}
+
+export interface OrganizationWriteUpdateOptions {
+  /**
+   * The {@link OrganizationRecord.version} the caller read. When given and the
+   * row has moved on, the write is refused with `409 VERSION_CONFLICT`.
+   */
+  expectedVersion?: number;
+}
+
+/**
+ * Container name: `organizationWritePort` ({@link ORGANIZATION_WRITE_PORT}).
+ * Owner: `organizations`. Issue #1029.
+ *
+ * **Deprecated since 0.113.0, removed in a later release** (`specs/186-aggregate-ports/`):
+ * every method has its replacement on {@link OrganizationCommandPort} or
+ * {@link OrganizationDetailsPort}, and delegates to it meanwhile, so the
+ * entries, the refusals and the actor rules below are unchanged.
+ *
+ * Find, create and update an Organization's own identity and contact fields
+ * from another module — the case it was published for is a connector that
+ * synchronises an external system's customer master (an ERP, a CRM): it looks
+ * an Organization up by tax ID, creates it when there is none, and applies a
+ * later change of name or address to the same row. Before it the only ways were
+ * the admin HTTP API or a native write to this module's table.
+ *
+ * **Scope.** Identity and contact fields. Moderation (approve, reject, block),
+ * re-parenting, roles, members, credit and sales-channel changes after
+ * creation stay with their existing owners and surfaces; a tax-ID correction
+ * and the personal-to-company conversion are {@link OrganizationCommandPort}'s;
+ * custom-field values after creation are {@link OrganizationCustomFieldWritePort}'s;
+ * addresses beyond the registered one are `addressServicePort`'s.
+ *
+ * **Each write is one Command with one audit entry.** `create` runs
+ * `organization.create` — the Command the admin create runs — and `update`
+ * runs `organization.update`. Both entries carry names and codes, never the
+ * Organization's values (`specs/conventions/audit-state.md`): `update` records
+ * the VAT status code and the sorted names of the fields it changed. An
+ * `update` that changes nothing writes nothing and records nothing. The actor
+ * is the ambient one, never passed in: an administrator inside an admin
+ * request, a null actor for a worker in `withSystemScope`, the administrator a
+ * worker acts for in `withSystemScopeActingFor`. With no tenant context the bus
+ * refuses before writing (`MissingTenantContextError`).
+ *
+ * **Refusals are the platform's `HttpError`, typed by `code`**, so a caller can
+ * record an issue for one record and go on to the next:
+ *
+ * - `422 VALIDATION_FAILED` — an input outside the admin API's own limits
+ *   (an empty name, a tax ID that is not 8–32 characters once normalised, a
+ *   country that is not two letters, an empty or duplicated channel list, an
+ *   invalid e-mail);
+ * - `409 DICTIONARY_ENTRY_NOT_FOUND` / `DICTIONARY_ENTRY_INACTIVE` — a country
+ *   an operator has not made available, checked as the admin create checks it
+ *   (on `update`, only when the country changes);
+ * - `409 ORGANIZATION_TAX_ID_EXISTS` — `create` with a tax ID the active scope
+ *   does not allow: in `global`, any other row holds it; in `per-tree-root`, a
+ *   row outside the new Organization's tree does. Soft-deleted rows count, so
+ *   `findByTaxId` may answer `[]` and `create` still refuse;
+ * - `422 UNKNOWN_SALES_CHANNEL` — `create` naming a channel that does not exist;
+ * - `422 CUSTOM_FIELD_VALUE_INVALID` — `create` with custom-field values the
+ *   administrator's rules refuse;
+ * - `404 NOT_FOUND` — `create` under an unknown or deleted parent; `update` of
+ *   an unknown or soft-deleted Organization, or an id that is not a uuid;
+ * - `422 ORGANIZATION_TREE_INVALID` — `create` under a parent at the depth bound;
+ * - `409 VERSION_CONFLICT` — `update` with an `expectedVersion` the row has
+ *   moved past, or a concurrent write that won the race;
+ * - `409 ORGANIZATION_WRITE_CONTENDED` — a lock lost to a concurrent write; retry.
+ *
+ * When `organizations` is off every method fails closed (503
+ * `MODULE_DISABLED`); the module is the platform's one tenant concept and
+ * declares itself non-deactivatable, so in practice the gate cannot close.
+ * Callers resolve it per use with `lazyPort`.
+ */
+export interface OrganizationWritePort {
+  /**
+   * Every live Organization holding this tax ID — exactly
+   * {@link OrganizationDetailsPort.findByTaxId}: the input normalised with
+   * {@link normalizeTaxId}, the tree's root first, then by depth, creation time
+   * and id; `[]` for none. A list because in the `per-tree-root` scope a head
+   * office and its branches share one tax ID; in `global` it holds at most one.
+   * A caller that needs the single match uses
+   * {@link OrganizationDetailsPort.resolveByTaxId}.
+   *
+   * @deprecated since 0.113.0; use {@link OrganizationDetailsPort.findByTaxId} instead.
+   */
+  findByTaxId(taxId: string): Promise<OrganizationRecord[]>;
+
+  /**
+   * Runs `organization.create`, the same Command the admin create uses.
+   *
+   * @deprecated since 0.113.0; use {@link OrganizationCommandPort.create} instead.
+   */
+  create(input: OrganizationWriteCreateInput): Promise<OrganizationRecord>;
+
+  /**
+   * Updates identity and contact fields only, through the `organization.update` Command.
+   *
+   * @deprecated since 0.113.0; use {@link OrganizationCommandPort.update} instead.
+   */
+  update(
+    id: string,
+    patch: OrganizationWriteUpdatePatch,
+    options?: OrganizationWriteUpdateOptions,
+  ): Promise<OrganizationRecord>;
+}
+
+/**
+ * What a server-side caller may hand `setCustomFieldValues` besides the merge
+ * (`specs/176-command-hooks-outbox/` FR-018, architect ruling on #1055 Q2).
+ *
+ * `extensions` is extension input for the command-hook modules on
+ * `organization.set_custom_field_values`, keyed by module id; each hook sees only
+ * its own module's key. A key no present hook module claims is refused
+ * `422 COMMAND_EXTENSION_UNCLAIMED` before the merge runs. No HTTP body carries
+ * it — that field is spec 178's.
+ */
+export interface OrganizationCustomFieldWriteOptions {
+  readonly extensions?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The tax id a reader may print or hand out for an Organization: a company's,
+ * never a personal (B2C) Organization's. A personal Organization stores no tax
+ * id at all since `specs/177-tax-id-scope/` (it carried an internal 32-hex
+ * placeholder derived from the account id until then, issue #767), and the flag
+ * is still honoured for a payload written before that. `null` — not an empty
+ * string — when there is nothing to show, so every renderer drops its tax-id
+ * line rather than printing a label with no value.
+ *
+ * Published as a **function, not a port**, for the reason
+ * {@link normalizeOrganizationName} is: it is pure over its argument. Every
+ * module that prints an {@link OrganizationRecord}'s tax id asks it — the quote
+ * request document, the admin order and quote request panels, the price-book
+ * and push audience pickers, and the storefront's checkout — so the rule has
+ * one home.
+ */
+export function organizationCompanyTaxId(organization: {
+  /** Absent reads as a company, as a session payload without the flag does. */
+  readonly isPersonal?: boolean | undefined;
+  readonly taxId: string | null;
+}): string | null {
+  if (organization.isPersonal) return null;
+  const taxId = organization.taxId?.trim() ?? '';
+  return taxId === '' ? null : taxId;
 }
 
 /**
@@ -622,44 +1695,6 @@ export interface OrganizationInheritancePort {
   creditOwner(organizationId: string): Promise<OrganizationCreditOwner>;
 }
 
-/** What a cart-approval-policy write answers with. */
-export interface CartApprovalPolicyWriteResult {
-  readonly organization: OrganizationRecord;
-  /**
-   * `false` when the row already carried the requested value, so nothing was
-   * written and nothing was audited. It is part of the return type rather than
-   * something the caller re-derives from a read, because the caller's cascade
-   * hangs off it: `carts` resets its pending and approved carts when — and only
-   * when — the policy actually moved to `false`.
-   */
-  readonly changed: boolean;
-}
-
-/**
- * Container name: `organizationCartApprovalWritePort`. Owner: `organizations`.
- *
- * The per-organisation "an Org Admin must approve a cart before checkout"
- * policy (feature 027 US4). `carts` drives both surfaces that flip it — the
- * platform-admin route and the Org-Admin self-service one — but the column is
- * this module's, so the operation is (issue #175, D-78 step 1).
- *
- * The write runs through `CommandBus.run`, so it carries the audit row it had
- * never had while `carts` was writing the column directly, with the actor
- * derived from the caller's ambient context (Constitution XIII). The cart
- * cascade that follows a switch-off stays with `carts`: those are its rows, and
- * they are audited in its own per-cart trail.
- *
- * This module is non-deactivatable, so the gate the port registration applies
- * cannot be reached; the registration is a `providePort` anyway, for the reason
- * its siblings give.
- */
-export interface OrganizationCartApprovalWritePort {
-  setCartApprovalPolicy(
-    organizationId: string,
-    requiresCartApproval: boolean,
-  ): Promise<CartApprovalPolicyWriteResult>;
-}
-
 /** The three allow-list kinds an organisation can restrict. */
 export type OrganizationAllowListKind =
   | 'paymentMethodIds'
@@ -687,6 +1722,16 @@ export interface OrganizationRestrictionPort {
     organizationId: string,
     kind: OrganizationAllowListKind,
   ): Promise<string[] | null>;
+}
+
+/**
+ * A personal organisation as {@link PersonalOrganizationPort.provisionPersonalOrganization}
+ * answers it: the record, and the id of its *Administrator* role — the role
+ * its single member holds (`specs/170-organization-roles/`, owner ruling PR-3,
+ * research R-34), which a caller moving the account there writes with it.
+ */
+export interface ProvisionedPersonalOrganizationRecord extends OrganizationRecord {
+  administratorRoleId: string;
 }
 
 /**
@@ -729,28 +1774,70 @@ export interface PersonalOrganizationPort {
    * the authority check and the "an organisation keeps an administrator" guard
    * that must precede it are `customers`' policy.
    *
-   * Idempotent: the personal organisation's `taxId` is derived from the account
-   * id, so a second call re-finds the row rather than creating a second one.
+   * Idempotent by the account link: the personal organisation records the
+   * account it was provisioned for (`specs/177-tax-id-scope/`, FR-003), so a
+   * second call re-finds the row rather than creating a second one. It has no
+   * tax ID.
    */
-  provisionPersonalOrganization(customerAccountId: string): Promise<OrganizationRecord>;
+  provisionPersonalOrganization(customerAccountId: string): Promise<ProvisionedPersonalOrganizationRecord>;
 
   /**
    * Feature 051, the other end of the same rule — the retention sweep's
    * cascade. Once the single member of a personal organisation has been
-   * anonymised, the organisation is left with nobody in it and its name is
+   * soft-deleted, the organisation is left with no live member and its name is
    * derived from that person's name, so it is scrubbed and soft-deleted too.
    *
-   * Answers `null`, and writes nothing, in every case where the cascade does
-   * not apply: an org-less account, an organisation that is not personal, one
-   * already soft-deleted, and one that still has a live member. That is why it
-   * takes the **account** id rather than the organisation's — the caller
-   * (`customers`' anonymisation sweep) knows which customer it just scrubbed
-   * and must not be the one deciding whether the organisation qualifies.
+   * **Convergent** (issue #800). The sweep calls this *before* it anonymises
+   * the account, and calls it again on the next tick if anything after it
+   * failed. It writes only what part of the scrub is still missing (the name,
+   * the registered address, the legal name, the order-confirmation e-mails,
+   * every custom field value, the block and rejection reasons (issue #843:
+   * set to `null`, while the status and its dates stay), `deletedAt` — an
+   * existing `deletedAt` is kept),
+   * in one transaction with its audit row, and records nothing when nothing
+   * was missing. The audit row names none of the erased data (issue #802).
+   * It answers the organisation **whether or not it wrote anything**,
+   * so a repeat call still tells the caller which saved addresses to clear.
    *
-   * Idempotent: a second call over the same account finds the organisation
-   * already soft-deleted and answers `null`.
+   * Answers `null`, and writes nothing, only where the cascade does not apply:
+   * an org-less account, an organisation that is not personal, and one that
+   * still has a live member. That is why it takes the **account** id rather
+   * than the organisation's — the caller (`customers`' anonymisation sweep)
+   * knows which customer it is scrubbing and must not be the one deciding
+   * whether the organisation qualifies.
    */
   anonymizeIfOrphaned(customerAccountId: string): Promise<OrganizationRecord | null>;
+
+  /**
+   * Issue #923 — the ids of the personal organisations a scrub has reached
+   * (they carry its name) that do not yet hold all of the **current** scrub:
+   * one an earlier release scrubbed before the rule grew, or one a crash left
+   * half-written. The retention sweep runs each one's anonymised member
+   * through the cascade again, and {@link anonymizeIfOrphaned} writes what is
+   * missing, so a field added to the scrub reaches every earlier subject on
+   * the next run with no backfill.
+   *
+   * The selection is free of any retention cutoff: a subject already
+   * anonymised is finished whatever the window reads today. It agrees field by
+   * field with the owner's own "fully scrubbed" test, which stays the
+   * in-transaction re-check; a live organisation that merely carries the name
+   * may be listed, and is left alone because it still has a live member.
+   *
+   * Reads only the owner's rows; writes nothing. Unbounded, like
+   * `CustomerAccountReadPort.listDueForAnonymization`: in steady
+   * state it answers an empty list.
+   */
+  listIncompletelyScrubbed(): Promise<string[]>;
+
+  /**
+   * Whether {@link listIncompletelyScrubbed} would list anything — **yes or
+   * no, and nothing else**. The retention sweep's scheduled tick asks it with
+   * no tenant context, before it enters the system scope, beside
+   * `CustomerAccountReadPort.hasDueForAnonymization`, so that a tick
+   * with organisation-side residue to finish is not taken for an idle one. It
+   * is the list's own row source; no id, row or count leaves it.
+   */
+  hasIncompletelyScrubbed(): Promise<boolean>;
 }
 
 /** One sales-rep ↔ organisation assignment row. */
@@ -779,6 +1866,12 @@ export interface SalesRepAssignmentPort {
   canSeeOrganization(adminUserId: string, organizationId: string): Promise<boolean>;
   listAssignedOrganizationIds(adminUserId: string): Promise<string[]>;
   listForOrganization(organizationId: string): Promise<SalesRepAssignmentRow[]>;
+  /**
+   * Issue #317 — every organization that carries at least one assignment row,
+   * each once: the complement of the "unassigned" organizations, answered in
+   * one read rather than one {@link listForOrganization} per organization.
+   */
+  listOrganizationIdsWithAssignments(): Promise<string[]>;
   assign(input: {
     organizationId: string;
     adminUserId: string;
@@ -788,10 +1881,12 @@ export interface SalesRepAssignmentPort {
 }
 
 /**
- * Which organizations an admin's requests may reach: every one, or a named set.
+ * Which organizations an admin's requests may reach: every one, a named set, or
+ * every one but a named set (issue #305).
  *
- * The same two-member answer the admin list resolvers already give, so the
- * tenant context and the lists built over it cannot disagree about one admin.
+ * The platform turns it into the ambient tenant context, and the admin lists
+ * read their scope from that context, so the two cannot disagree about one
+ * admin.
  */
 export type AdminTenantScope =
   | { readonly allowAll: true }
@@ -806,16 +1901,57 @@ export type AdminTenantScope =
        * can only turn an answer into a refusal, never widen one.
        */
       readonly unresolved?: Error;
+    }
+  | {
+      /**
+       * Issue #305 — a sales representative's reach, described by its
+       * **complement**: every Organization except those governed by somebody
+       * else. Under the reach rule a representative sees every Organization
+       * nobody is assigned to (B2C personal organizations included, which can
+       * never carry an assignment), so the reachable set grows with the
+       * customer base while the excluded one is bounded by the B2B book.
+       */
+      readonly allowAll: false;
+      readonly reach: 'excluding';
+      /**
+       * Issue #955 (architect ruling, Q2; owner ruling of 2026-11-10) — the excluded organizations as one
+       * uncorrelated SELECT of a single non-null uuid column, read live in each
+       * statement's own snapshot. Built by the owner from the authenticated
+       * admin's identity and permissions only — never from request input. The
+       * platform renders it on the filtered row's own organization column as
+       * `col is not null and col not in (<sql>)`; no module reads it.
+       */
+      readonly excludedOrganizationsQuery: {
+        readonly sql: string;
+        readonly params: readonly (string | boolean)[];
+      };
+      /**
+       * Issue #955 Phase 2 (owner ruling of 2026-11-10) — the lists, on demand:
+       * the organizations governed by another representative, and the
+       * representative's own assignments (roll-up expanded; ranking and "mine"
+       * filters only, never a filter input). They replaced the
+       * `excludedOrganizationIds` / `assignedOrganizationIds` fields, which made
+       * every admin request compute them. The owner memoises the call once per
+       * answered scope; a failure rejects, which refuses rather than widens.
+       */
+      readonly loadReach: () => Promise<{
+        readonly excludedOrganizationIds: readonly string[];
+        readonly assignedOrganizationIds: readonly string[];
+      }>;
+      readonly unresolved?: Error;
     };
 
 /**
  * Container name: `adminTenantScopePort`. Owner: `organizations`.
  *
  * The tenant reach of an authenticated admin, derived from the role the admin
- * holds and never from request inputs (Principle XI). An admin whose role
- * confines them to assigned organizations answers the assigned set — expanded
- * to each assignment's subtree when the admin holds `organizations:rollup` —
- * and an admin holding any other role answers `allowAll`.
+ * holds and never from request inputs (Principle XI). An admin whose role is
+ * the sales-representative one answers the `excluding` reach (issue #305): every
+ * Organization except those governed by another representative — the reach
+ * rule of `SalesRepAssignmentPort.canSeeOrganization`, assigned, roll-up and
+ * the unassigned fallback — and an admin holding any other role answers
+ * `allowAll`. The `allowedOrganizationIds` member remains for the customer
+ * roll-up and API keys, which name their set.
  *
  * **An admin with no role is refused, never widened.** An id that names no
  * live administrator, or an administrator holding no role, answers the empty
@@ -847,6 +1983,15 @@ export type AdminTenantScope =
  */
 export interface AdminTenantScopePort {
   resolveForAdmin(adminUserId: string): Promise<AdminTenantScope>;
+  /**
+   * {@link resolveForAdmin} for many administrators at once, in a fixed number
+   * of reads: every id asked has an entry, the scope `resolveForAdmin` answers
+   * for it. Not the request-scope hook's — a caller judging what **other**
+   * administrators may see (who may be mentioned on a Project) asks it.
+   *
+   * Added for issue #461.
+   */
+  resolveForAdmins(adminUserIds: readonly string[]): Promise<Map<string, AdminTenantScope>>;
 }
 
 /** The address a VAT registry hands back when it recognises the tax id. */
@@ -924,3 +2069,82 @@ export interface OrganizationTaxProfilePort {
     country: string | null;
   } | null>;
 }
+
+// --- Sales-channel assignment and admin creation (feature 154) ------------
+
+/**
+ * A set of sales-channel ids an Organization is assigned to: at least one (an
+ * Organization with no channel may shop nowhere), at most 100, no repeats.
+ */
+const organizationSalesChannelIdsSchema = z
+  .array(uuidSchema)
+  .min(1)
+  .max(100)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: 'Each sales channel may be listed once.',
+  });
+
+/**
+ * `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels` — the channels an
+ * Organization's members may sign in and shop on
+ * (`specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2).
+ *
+ * `options` is every channel the Organization may be assigned to, inactive ones
+ * included and flagged, so the panel needs no `sales_channels:read`.
+ */
+export const OrganizationSalesChannelOptionSchema = SalesChannelOptionSchema.extend({
+  systemDefault: z.boolean(),
+});
+export type OrganizationSalesChannelOption = z.infer<typeof OrganizationSalesChannelOptionSchema>;
+
+export const OrganizationSalesChannelsResponseSchema = z.object({
+  data: z.object({
+    organizationId: uuidSchema,
+    assignedSalesChannelIds: z.array(uuidSchema),
+    options: z.array(OrganizationSalesChannelOptionSchema),
+  }),
+});
+export type OrganizationSalesChannelsResponse = z.infer<
+  typeof OrganizationSalesChannelsResponseSchema
+>;
+
+/** `PUT /api/v1/admin/organizations/:id/sales-channels` — replaces the whole set. */
+export const OrganizationSalesChannelsUpdateBodySchema = z.object({
+  salesChannelIds: organizationSalesChannelIdsSchema,
+});
+export type OrganizationSalesChannelsUpdateBody = z.infer<
+  typeof OrganizationSalesChannelsUpdateBodySchema
+>;
+
+/**
+ * `POST /api/v1/admin/organizations` — an operator creates a customer
+ * Organization and chooses its sales channels (§3). The organization fields are
+ * self-registration's own, so the two creation paths cannot drift apart; the
+ * status is one an operator may start from, and the channels are bound in the
+ * creating transaction.
+ */
+export const AdminOrganizationCreateBodySchema = registerOrganizationRequestSchema.shape.organization
+  .extend({
+    status: z.enum(['active', 'pending_verification']).default('active'),
+    salesChannelIds: organizationSalesChannelIdsSchema,
+    /**
+     * `specs/177-tax-id-scope/` (FR-018) — create the organization as a branch
+     * under this parent, in the same Command, so that in `per-tree-root` it may
+     * carry the head office's tax ID. Naming a parent requires an unscoped
+     * platform administrator (D-260).
+     */
+    parentId: uuidSchema.optional(),
+  });
+export type AdminOrganizationCreateBody = z.infer<typeof AdminOrganizationCreateBodySchema>;
+export type AdminOrganizationCreateRequest = z.input<typeof AdminOrganizationCreateBodySchema>;
+
+/**
+ * `GET /api/v1/admin/organizations/sales-channel-options` — what the *New
+ * organization* form chooses from, before there is an Organization to ask about.
+ */
+export const OrganizationSalesChannelOptionsResponseSchema = z.object({
+  data: z.array(OrganizationSalesChannelOptionSchema),
+});
+export type OrganizationSalesChannelOptionsResponse = z.infer<
+  typeof OrganizationSalesChannelOptionsResponseSchema
+>;

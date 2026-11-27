@@ -32,12 +32,11 @@ describe('sales-channel cache coherence on deactivation (feature 053 / FR-008)',
       defaultCurrency: 'PLN',
       languages: ['en-US'],
       currencies: ['PLN'],
-      isPublic: true,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush(ch);
+    await em.persist(ch).flush();
   });
 
   afterAll(async () => {

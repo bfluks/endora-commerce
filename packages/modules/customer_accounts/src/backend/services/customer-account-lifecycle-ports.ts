@@ -1,80 +1,56 @@
-import { randomUUID } from 'node:crypto';
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql';
-import { QueryOrder, raw, UniqueConstraintViolationException } from '@mikro-orm/core';
+import { QueryOrder, raw } from '@mikro-orm/core';
 import {
   ERROR_CODES,
-  normalizeEmailAddress,
   type CustomerAccountAdminSearchCriteria,
   type CustomerAccountAdminSearchPort,
   type CustomerAccountAdminSearchResult,
+  type CustomerAccountCommandPort,
   type CustomerAccountLifecycleWritePort,
+  type CustomerAccountOrganizationMoveInput,
+  type CustomerAccountReadPort,
   type CustomerAccountRecord,
   type CustomerAccountStandaloneCreateInput,
   type CustomerAccountWriteRequestMeta,
+  isUuidShape,
 } from '@endora-commerce/contracts';
-import type { Command, CommandBus } from '@endora-commerce/platform/commands';
-import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { hashPassword } from '@endora-commerce/platform/kernel';
-// D-178 — the one co-transactional seam this module consumes, and the reason it
-// is imported from another module's directory rather than from
-// `@endora-commerce/contracts` is on the interface itself: its signature carries
-// an `EntityManager`, which FR-034 keeps out of that package. Ledgered
-// `permanent: true` in `scripts/ledgers/cross-module-imports/customer_accounts.ts`,
-// beside the foreign key that holds it.
-import type { PersonalOrganizationProvisionApi } from '@endora-commerce/mod-organizations/ports';
 import { CustomerAccount } from '../entities/customer-account.entity.js';
-import {
-  toCustomerAccountRecord,
-  toCustomerAccountRecords,
-  toOneCustomerAccountRecord,
-} from './customer-account-ports.js';
+import { toCustomerAccountRecords, toOneCustomerAccountRecord } from './customer-account-ports.js';
 import type { TwoFactorEnrolmentReader } from './two-factor-enrolments.js';
+import { organizationMoveAuditState } from './customer-account-audit-state.js';
+
+export { ANONYMIZED_CUSTOMER_NAME, ANONYMIZED_PASSWORD_HASH } from '../commands/customer-account-anonymize.command.js';
 
 /**
- * The account lifecycle `customers` runs over this module's table
- * (feature 075, Phase C).
+ * `customerAccountLifecycleWritePort` — the account lifecycle `customers` runs
+ * over this module's table (feature 075, Phase C).
  *
- * It ran it by loading and mutating the `CustomerAccount` entity in five of its
- * own services and two route files — block, unblock, soft-delete, restore,
- * anonymise, organisation assignment, group assignment, the standalone
- * registration and the admin custom-field patch. Each is one method here, each
- * one unit of work on this table alone, because a write port that took the
- * caller's `EntityManager` would publish the coupling instead of removing it
- * (D-78).
+ * **Deprecated since 0.113.0** (`specs/186-aggregate-ports/` T050, T051, issue
+ * #1822). Every method but the two Organization moves delegates:
  *
- * **The policy stayed with the caller.** Whether the acting staff member may
- * touch this customer, and whether the write would strand an organisation
- * without an administrator, are `customers`' questions and are still asked
- * there; the counting half of the second is
- * `CustomerAccountReadPort.countByOrganizationRole`, which already existed.
+ * - `createStandalone`, `block`, `unblock`, `softDelete`, `restore`,
+ *   `setCustomerGroup`, `setCustomFieldValues` and `anonymize` to
+ *   `customerAccountCommandPort`, whose Commands record the entries this
+ *   service used to write by hand — the same actions and states, inside the
+ *   write's transaction rather than after it. The actor is the ambient one, so
+ *   `actorAdminUserId` is ignored, and the request metadata is the bus's, so
+ *   `audit` is ignored (Principle XIII). A block and a deletion now end the
+ *   account's sessions and run the depletion guard themselves;
+ * - `listDueForAnonymization` and `hasDueForAnonymization` to
+ *   `customerAccountReadPort`.
  *
- * **The audit row came here** — one row, with the action string the caller used
- * to write, so nothing an operator can see moved. Unlike
- * `CustomerAccountMemberWriteService` the caller keeps no second row: there,
- * "an operator edited this member on the organisation panel" and "this
- * account's e-mail changed" are two facts; here "an operator blocked this
- * customer" *is* the write, and recording it twice would be a defect rather
- * than a pair.
+ * `setOrganization` and `detachToPersonalOrganization` are moves between
+ * Organizations, the Membership concern `specs/191-membership-join-requests/`
+ * owns: they keep their hand-written entry here until that feature replaces
+ * them with its Command.
  */
-
-/** The name a scrubbed account's first and last name are replaced with. */
-export const ANONYMIZED_CUSTOMER_NAME = 'Deleted customer';
-
-/**
- * The placeholder written over `password_hash`. It is deliberately not a hash
- * of anything: the column is NOT NULL, and nothing may authenticate against a
- * scrubbed account. `passwordSetAt` is cleared beside it (issue #222).
- */
-export const ANONYMIZED_PASSWORD_HASH = 'anonymized-no-login';
-
-function blockSnapshot(account: CustomerAccount): Record<string, unknown> {
-  return {
-    blockedAt: account.blockedAt ? account.blockedAt.toISOString() : null,
-    blockSource: account.blockSource ?? null,
-    blockReason: account.blockReason ?? null,
-  };
+export interface CustomerAccountLifecycleWriteDeps {
+  /** The aggregate port the deprecated writes delegate to. */
+  readonly commands: CustomerAccountCommandPort;
+  /** The read port the moved work-list reads delegate to. */
+  readonly reads: Pick<CustomerAccountReadPort, 'listDueForAnonymization' | 'hasDueForAnonymization'>;
 }
 
 export class CustomerAccountLifecycleWriteService implements CustomerAccountLifecycleWritePort {
@@ -82,236 +58,44 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
     private readonly emFactory: () => EntityManager,
     private readonly auditLog: AuditPort,
     /**
-     * `mfa`'s answer to which of these accounts hold a second factor. Every
-     * method here answers with a `CustomerAccountRecord`, and that record
-     * carries `twoFactorEnabled` — so the alternative to threading it is a
-     * record that says `false` about an enrolled buyer, which is the defect
-     * this parameter exists to remove.
+     * `mfa`'s answer to which of these accounts hold a second factor: the two
+     * Organization moves answer with a record, and the record carries
+     * `twoFactorEnabled`.
      */
     private readonly twoFactorEnrolments: TwoFactorEnrolmentReader,
-    /**
-     * D-178 — `organizations`' co-transactional provisioning seam, held here
-     * because {@link createStandalone} writes the account **and** the individual's
-     * personal organisation in one transaction. See
-     * `organizations/ports/personal-organization-provision.ts` for the foreign
-     * key that makes that a requirement rather than a preference.
-     */
-    private readonly personalOrganizations: PersonalOrganizationProvisionApi,
-    /**
-     * Only {@link setCustomFieldValues} needs it, because that one write is a
-     * read-modify-write and has to stay in one transaction. The method says so
-     * and refuses without it.
-     */
-    private readonly commandBus?: CommandBus,
+    private readonly deps: CustomerAccountLifecycleWriteDeps,
   ) {}
 
-  /**
-   * Self-registration: the account row **and** the tenant that scopes it, in one
-   * transaction (D-178).
-   *
-   * It used to be two committed units of work — this method wrote
-   * `organizationId: null` and flushed, and `customers`' registration service
-   * then called `personalOrganizationPort.ensureForCustomerAccount`. A failure
-   * between them (the port disabled, the database blipping, the process killed)
-   * left a durable account with no organisation, no session for the visitor to
-   * retry from, and nothing anywhere that re-ran the provisioning. That is one
-   * of the three producers D-178 closed, and the column is `NOT NULL` now, so
-   * the old order would fail at the insert rather than leave a bad row.
-   *
-   * The account id is generated here rather than by the entity default because
-   * the organisation has to exist first — its `taxId` is derived from that id,
-   * which is what makes the provisioning re-runnable — and the account's foreign
-   * key has to point at it.
-   */
-  async createStandalone(
-    input: CustomerAccountStandaloneCreateInput,
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    // Folded, like the other write on this table and like every read of it.
-    // This entrance stored the address verbatim while
-    // `CustomerAccountMemberWriteService.create` folded it, so which spelling a
-    // row held depended on which door the buyer came through; the login read
-    // matched neither reliably. One normalisation now answers for all of them.
-    const email = normalizeEmailAddress(input.email);
-    const existing = await em.findOne(CustomerAccount, { email });
-    if (existing) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.EMAIL_ALREADY_REGISTERED,
-        'An account with this email already exists.',
-      );
-    }
-    const customerAccountId = randomUUID();
-    const passwordHash = await hashPassword(input.password);
-    return em.transactional(async (tem) => {
-      const organization = await this.personalOrganizations.provisionFor(tem, {
-        customerAccountId,
-        email,
-        firstName: input.firstName,
-        lastName: input.lastName,
-      });
-      const account = tem.create(CustomerAccount, {
-        id: customerAccountId,
-        email,
-        passwordHash,
-        // Issue #222 — the visitor typed this password on the registration form.
-        passwordSetAt: new Date(),
-        firstName: input.firstName,
-        lastName: input.lastName,
-        organizationId: organization.id,
-      });
-      // Self-registration is pre-auth, so there is no ambient actor and the row
-      // is recorded with a null one — as it was before this write moved here.
-      recordAuditFromContext(this.auditLog, tem, {
-        action: 'customer_account.register_standalone',
-        objectType: 'customer_account',
-        objectId: account.id,
-        stateBefore: null,
-        stateAfter: { email: account.email },
-      });
-      try {
-        await tem.flush();
-      } catch (err) {
-        // The unique index is the real arbiter; the pre-check above only buys a
-        // better message for the common case. The port call is deliberately
-        // outside this `catch`: a `ModuleDisabledError` from it must reach the
-        // caller as the 503 it is, not as a duplicate-address 409.
-        if (err instanceof UniqueConstraintViolationException) {
-          throw new HttpError(
-            409,
-            ERROR_CODES.EMAIL_ALREADY_REGISTERED,
-            'An account with this email already exists.',
-          );
-        }
-        throw err;
-      }
-      // `false` is **derived** here rather than defaulted: the account was
-      // created microseconds ago inside this transaction, `mfa_enrolments` is
-      // keyed on its id and nobody has had a chance to enrol against it. Asking
-      // `mfa` would take a second pooled connection while this transaction
-      // holds one, on the pre-auth registration path, to be told the same
-      // thing.
-      return toCustomerAccountRecord(account, false);
-    });
+  async createStandalone(input: CustomerAccountStandaloneCreateInput): Promise<CustomerAccountRecord> {
+    return this.deps.commands.createStandalone(input);
   }
 
   async block(
     customerAccountId: string,
-    input: {
-      actorAdminUserId: string;
-      reason?: string | null;
-      audit?: CustomerAccountWriteRequestMeta;
-    },
+    input: { actorAdminUserId: string; reason?: string | null; audit?: CustomerAccountWriteRequestMeta },
   ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    if (account.blockedAt) return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
-
-    const before = blockSnapshot(account);
-    account.blockedAt = new Date();
-    account.blockSource = 'staff';
-    account.blockedByAdminUserId = input.actorAdminUserId;
-    account.blockedByCustomerAccountId = null;
-    account.blockReason = input.reason ?? null;
-    await em.flush();
-    await this.#record(
-      'customer_account.blocked',
-      account.id,
-      input.actorAdminUserId,
-      before,
-      blockSnapshot(account),
-      input.audit,
-    );
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+    return this.deps.commands.block(customerAccountId, { reason: input.reason ?? null });
   }
 
   async unblock(
     customerAccountId: string,
-    input: { actorAdminUserId: string; audit?: CustomerAccountWriteRequestMeta },
+    _input: { actorAdminUserId: string; audit?: CustomerAccountWriteRequestMeta },
   ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    if (!account.blockedAt) {
-      return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
-    }
-
-    const before = blockSnapshot(account);
-    account.blockedAt = null;
-    account.blockSource = null;
-    account.blockedByAdminUserId = null;
-    account.blockedByCustomerAccountId = null;
-    account.blockReason = null;
-    await em.flush();
-    await this.#record(
-      'customer_account.unblocked',
-      account.id,
-      input.actorAdminUserId,
-      before,
-      blockSnapshot(account),
-      input.audit,
-    );
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+    return this.deps.commands.unblock(customerAccountId);
   }
 
-  async softDelete(
-    customerAccountId: string,
-    input: { actorAdminUserId: string },
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#load(em, customerAccountId);
-    if (account.deletedAt) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.CUSTOMER_ALREADY_DELETED,
-        'Customer is already deleted.',
-      );
-    }
-    account.deletedAt = new Date();
-    account.deletionRequestedByAdminUserId = input.actorAdminUserId;
-    await em.flush();
-    await this.#record(
-      'customer_account.deleted',
-      account.id,
-      input.actorAdminUserId,
-      { deletedAt: null },
-      { deletedAt: account.deletedAt.toISOString() },
-    );
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+  async softDelete(customerAccountId: string, _input: { actorAdminUserId: string }): Promise<CustomerAccountRecord> {
+    return this.deps.commands.softDelete(customerAccountId);
   }
 
-  async restore(
-    customerAccountId: string,
-    input: { actorAdminUserId: string },
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#load(em, customerAccountId);
-    if (!account.deletedAt) {
-      throw new HttpError(409, ERROR_CODES.CUSTOMER_NOT_DELETED, 'Customer is not deleted.');
-    }
-    if (account.anonymizedAt) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.CUSTOMER_RESTORE_WINDOW_ELAPSED,
-        'The restore window has elapsed; this account has been permanently anonymized.',
-      );
-    }
-    account.deletedAt = null;
-    account.deletionRequestedByAdminUserId = null;
-    await em.flush();
-    await this.#record(
-      'customer_account.restored',
-      account.id,
-      input.actorAdminUserId,
-      { deletedAt: 'set' },
-      { deletedAt: null },
-    );
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+  async restore(customerAccountId: string, _input: { actorAdminUserId: string }): Promise<CustomerAccountRecord> {
+    return this.deps.commands.restore(customerAccountId);
   }
 
   async setOrganization(
     customerAccountId: string,
     organizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord> {
     return this.#writeOrganization(
       'customer_account.organization_assigned',
@@ -338,7 +122,7 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
   async detachToPersonalOrganization(
     customerAccountId: string,
     personalOrganizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord> {
     return this.#writeOrganization(
       'customer_account.organization_unassigned',
@@ -352,144 +136,67 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
     action: string,
     customerAccountId: string,
     organizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord> {
     const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    const before = { organizationId: account.organizationId };
+    if (!isUuidShape(customerAccountId)) {
+      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
+    }
+    const account = await em.findOne(CustomerAccount, { id: customerAccountId, deletedAt: null });
+    if (!account) {
+      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
+    }
+    const before = { organizationId: account.organizationId, organizationRoleId: account.organizationRoleId };
+    // The role moves with the Organization, in one statement: the composite
+    // foreign key refuses the previous Organization's role
+    // (`specs/170-organization-roles/` research R-34).
     account.organizationId = organizationId;
+    account.organizationRoleId = input.organizationRoleId;
     await em.flush();
-    await this.#record(action, account.id, input.actorAdminUserId, before, { organizationId });
+    // A tenant move by name: the Organization ids stay out of the audit log (D-288).
+    const { stateBefore, stateAfter } = organizationMoveAuditState(before, {
+      organizationId,
+      organizationRoleId: input.organizationRoleId,
+    });
+    await this.auditLog.record({
+      actorAdminUserId: input.actorAdminUserId,
+      action,
+      objectType: 'customer_account',
+      objectId: account.id,
+      stateBefore,
+      stateAfter,
+      ipAddress: null,
+      userAgent: null,
+      requestId: null,
+    });
     return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
   }
 
   async setCustomerGroup(
     customerAccountId: string,
     customerGroupId: string | null,
-    input: { actorAdminUserId: string },
+    _input: { actorAdminUserId: string },
   ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    const before = { customerGroupId: account.customerGroupId ?? null };
-    account.customerGroupId = customerGroupId;
-    await em.flush();
-    await this.#record(
-      'customer_account.group_assigned',
-      account.id,
-      input.actorAdminUserId,
-      before,
-      { customerGroupId },
-    );
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+    return this.deps.commands.setCustomerGroup(customerAccountId, { customerGroupId });
   }
 
   async setCustomFieldValues(
     customerAccountId: string,
     merge: (current: Record<string, unknown>) => Promise<Record<string, unknown>>,
   ): Promise<CustomerAccountRecord> {
-    const commandBus = this.commandBus;
-    if (!commandBus) {
-      throw new Error(
-        'CustomerAccountLifecycleWriteService: the custom-field write runs a Command; construct the service with a CommandBus.',
-      );
-    }
-    // Asked **before** the Command opens its transaction. The answer belongs to
-    // another module's table and is only needed to shape the response, so
-    // reading it inside `run` would put a foreign read on the caller's
-    // transaction for no benefit.
-    const enrolled = await this.twoFactorEnrolments([customerAccountId]);
-    const command: Command<CustomerAccountRecord> = {
-      action: 'customer.custom_fields.update',
-      objectType: 'customer_account',
-      objectId: customerAccountId,
-      capture: async ({ em }) => {
-        const account = await em.findOne(CustomerAccount, { id: customerAccountId });
-        return account ? { customFieldValues: account.customFieldValues ?? {} } : null;
-      },
-      run: async ({ em }) => {
-        const account = await em.findOne(CustomerAccount, { id: customerAccountId });
-        if (!account) {
-          throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Customer not found.');
-        }
-        account.customFieldValues = await merge(account.customFieldValues ?? {});
-        return {
-          result: toCustomerAccountRecord(account, enrolled.has(account.id)),
-          after: { customFieldValues: account.customFieldValues },
-        };
-      },
-    };
-    return commandBus.run(command);
+    return this.deps.commands.setCustomFieldValues(customerAccountId, merge);
   }
 
   async listDueForAnonymization(cutoff: Date): Promise<CustomerAccountRecord[]> {
-    const accounts = await this.emFactory().find(CustomerAccount, {
-      deletedAt: { $ne: null, $lt: cutoff },
-      anonymizedAt: null,
-    });
-    return toCustomerAccountRecords(this.twoFactorEnrolments, accounts);
+    return this.deps.reads.listDueForAnonymization(cutoff);
+  }
+
+  async hasDueForAnonymization(cutoff: Date): Promise<boolean> {
+    return this.deps.reads.hasDueForAnonymization(cutoff);
   }
 
   async anonymize(customerAccountId: string): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#load(em, customerAccountId);
-    if (account.anonymizedAt) {
-      return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
-    }
-
-    const before = { email: account.email };
-    account.email = `deleted+${account.id}@anonymized.invalid`;
-    account.firstName = ANONYMIZED_CUSTOMER_NAME;
-    account.lastName = ANONYMIZED_CUSTOMER_NAME;
-    account.passwordHash = ANONYMIZED_PASSWORD_HASH;
-    // Issue #222 — the scrubbed hash is a placeholder, not a credential, so the
-    // account has no password on record any more. Leaving the stamp would say
-    // the opposite of what the scrub just did.
-    account.passwordSetAt = null;
-    account.twoFactorConfirmedAt = null;
-    account.anonymizedAt = new Date();
-    await em.flush();
-    // The sweep runs on a timer, so there is no operator to attribute it to.
-    await this.#record('customer_account.anonymized', account.id, null, before, {
-      anonymizedAt: account.anonymizedAt.toISOString(),
-    });
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
-  }
-
-  async #record(
-    action: string,
-    objectId: string,
-    actorAdminUserId: string | null,
-    stateBefore: Record<string, unknown>,
-    stateAfter: Record<string, unknown>,
-    meta?: CustomerAccountWriteRequestMeta,
-  ): Promise<void> {
-    await this.auditLog.record({
-      actorAdminUserId,
-      action,
-      objectType: 'customer_account',
-      objectId,
-      stateBefore,
-      stateAfter,
-      ipAddress: meta?.ipAddress ?? null,
-      userAgent: meta?.userAgent ?? null,
-      requestId: meta?.requestId ?? null,
-    });
-  }
-
-  async #load(em: EntityManager, id: string): Promise<CustomerAccount> {
-    const account = await em.findOne(CustomerAccount, { id });
-    if (!account) {
-      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
-    }
-    return account;
-  }
-
-  async #loadLive(em: EntityManager, id: string): Promise<CustomerAccount> {
-    const account = await em.findOne(CustomerAccount, { id, deletedAt: null });
-    if (!account) {
-      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
-    }
-    return account;
+    return this.deps.commands.anonymize(customerAccountId);
   }
 }
 
@@ -544,11 +251,20 @@ export class CustomerAccountAdminSearchService implements CustomerAccountAdminSe
 
     if (criteria.excludeDeleted) and.push({ deletedAt: null, anonymizedAt: null });
 
+    // Issue #1903 — the custom-field filters, one id sub-select built by
+    // `custom_fields`' list-filter port over this table. It is intersected with
+    // this statement, whose tenant filter is the reach rule, so it narrows and
+    // never widens; `findAndCount` applies it to both the page and the total,
+    // as the Quote Requests list's does. The raw fragment is created fresh per
+    // call, never kept (threat model F-2).
+    const custom = criteria.customFieldCondition;
+    if (custom) and.push({ id: { $in: raw(`(${custom.sql})`, [...custom.params]) } });
+
     const q = criteria.q?.trim();
     // `specs/150-admin-global-search/` — a field selection makes the match
     // literal and the order relevance-first; without one, nothing changes.
     const fields = criteria.qFields === undefined ? null : new Set(criteria.qFields);
-    let orderBy: unknown = { createdAt: 'desc' };
+    let orderBy: unknown = { createdAt: 'desc', id: 'desc' };
     if (q && fields === null) {
       const like = `%${q}%`;
       and.push({

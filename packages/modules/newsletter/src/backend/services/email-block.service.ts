@@ -5,6 +5,7 @@ import {
   type NewsletterEmailBlockDetail,
   type NewsletterEmailBlockSummary,
   type UpdateNewsletterEmailBlockRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { NewsletterEmailBlock } from '../entities/newsletter-email-block.entity.js';
@@ -65,7 +66,13 @@ export class NewsletterEmailBlockService {
   async create(input: CreateNewsletterEmailBlockRequest): Promise<NewsletterEmailBlockDetail> {
     const em = this.emFactory();
     const existing = await em.findOne(NewsletterEmailBlock, { code: input.code });
-    if (existing) throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Block code already exists.');
+    // `blockCode`, not `code`: the error envelope reads `details.code` as the
+    // refusal token that picks the sentence.
+    if (existing) {
+      throw new HttpError(409, ERROR_CODES.NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN, 'Block code already exists.', {
+        blockCode: input.code,
+      });
+    }
     const block = em.create(NewsletterEmailBlock, {
       code: input.code,
       name: input.name,
@@ -90,7 +97,7 @@ export class NewsletterEmailBlockService {
     if (input.content !== undefined) block.content = wrap(input.content) as unknown as Record<string, unknown>;
     block.version += 1;
     this.#audit(em, 'newsletter_email_block.update', block.id, { name: block.name });
-    await em.persistAndFlush(block);
+    await em.persist(block).flush();
     return this.toDetail(block);
   }
 
@@ -98,10 +105,13 @@ export class NewsletterEmailBlockService {
     const em = this.emFactory();
     const block = await this.load(em, id);
     if (block.isSystem) {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'System blocks cannot be deleted.');
+      throw new HttpError(422, ERROR_CODES.NEWSLETTER_EMAIL_BLOCK_SYSTEM, 'System blocks cannot be deleted.', {
+        blockId: block.id,
+        blockCode: block.code,
+      });
     }
     this.#audit(em, 'newsletter_email_block.delete', block.id, null);
-    await em.removeAndFlush(block);
+    await em.remove(block).flush();
   }
 
   /** Build the renderer embeds map from active blocks for the given language. */
@@ -114,6 +124,7 @@ export class NewsletterEmailBlockService {
   }
 
   private async load(em: EntityManager, id: string): Promise<NewsletterEmailBlock> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Block not found.');
     const block = await em.findOne(NewsletterEmailBlock, { id });
     if (!block) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Block not found.');
     return block;

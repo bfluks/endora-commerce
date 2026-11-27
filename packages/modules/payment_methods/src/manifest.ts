@@ -31,7 +31,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'payment_methods',
-  name: 'Payment Methods',
+  name: 'Payment methods',
   description:
     'Payment method definitions and per-channel availability.',
   version: '1.0.0',
@@ -47,6 +47,19 @@ export const manifest = defineModuleManifest({
    * the owner disappearing is a state this module handles.
    */
   nonBindingDependencies: [
+    {
+      moduleId: 'related_payers',
+      name: 'relatedPayerPolicyPort',
+      kind: 'refuses-without',
+      whenAbsent:
+        'the storefront cannot list the payment methods of a related payer; every other listing is unaffected',
+      reason:
+        '`specs/182-related-payers/` (FR-066) — `GET /api/v1/payment-methods?payerOrganizationId=` ' +
+        'lists the payer`s allowed methods after the policy port vouched for the payer. A ' +
+        '`lazyPort` forward with no fallback, reached only when the query names a payer. Not ' +
+        '`dependencies`: `related_payers` ships off, and binding on it would make its activation ' +
+        'control a dead switch.',
+    },
     {
       moduleId: 'payments',
       name: 'paymentReadPort',
@@ -123,6 +136,15 @@ export const manifest = defineModuleManifest({
   // which is the intended meaning of switching a payment catalog off.
   demo,
   activation: { settingCode: 'payment_methods.enabled', default: true },
+  /**
+   * Issue #635 (#86) — the two refusals of the FR-003 delete guard, which were
+   * `409 VALIDATION_FAILED` with an English sentence the envelope never
+   * replaces. Both are this module's: the noun is the payment method, and the
+   * one raise site is `makeDeletePaymentMethodCommand`. No tokens: the guard
+   * protects one write, so each code has one reason and a `details.code` would
+   * add nothing.
+   */
+  errorCodes: [{ code: 'PAYMENT_METHOD_IN_USE' }, { code: 'PAYMENT_METHOD_USAGE_UNKNOWN' }],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   // Feature 076 (D-83 item 8) — a standing Principle XVI gap, closed here
@@ -143,7 +165,8 @@ export const manifest = defineModuleManifest({
       icon: 'CreditCard',
       targetRoute: '/payment-methods',
       requiredPermission: 'payment_methods:read',
-      keywords: ['payment', 'method', 'availability', 'checkout', 'płatność', 'metoda'],
+      keywords: ['payment', 'method', 'availability', 'checkout'],
+      keywordsKey: 'actions.openPaymentMethods.keywords',
       weight: 150,
     },
   ],

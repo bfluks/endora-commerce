@@ -40,7 +40,7 @@
  *     @import "./tailwind.generated.css";
  *
  *     :root { --accent-h: 262; }
- *     .b2b-btn { border-radius: 2px; }
+ *     .b2b-badge { border-radius: 2px; }
  *
  * The token half works because every semantic token in the mapping block below
  * is an indirection — `--color-primary: hsl(var(--primary))` — so a utility this
@@ -220,6 +220,20 @@ body,
   --field-h: 36px;
   --field-pad: 10px;
 
+  /*
+   * Card and section density (issue #1438, DS-04). The kit's `Card` reads them
+   * as `p-(--card-pad)` and `text-(length:--fs-section-title)`; it is the one
+   * card since issue #1502 retired `.b2b-card*`. Write a gap or a size from
+   * these rather than a Tailwind step.
+   */
+  --card-pad: 16px;        /* inside a card: header, content, footer */
+  --card-pad-sm: 12px;     /* a compact strip: a card footer, a toolbar row */
+  --card-gap: 16px;        /* between sibling cards */
+  --section-gap: 24px;     /* between sections inside one card */
+  --fs-page-title: 20px;   /* the page's h1 */
+  --fs-section-title: 14px; /* a card or section heading */
+  --fs-hint: 12px;         /* a hint or sub-line under a title */
+
   /* ---------- Typography ---------- */
   --ff: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ff-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -249,28 +263,6 @@ body,
   --input: 220 7% 90%;
   --ring: var(--accent-h) 70% 38%;
   --radius: 0.5rem;
-}
-
-.dark {
-  --background: 222.2 47.4% 11.2%;
-  --foreground: 210 40% 98%;
-  --card: 222.2 47.4% 11.2%;
-  --card-foreground: 210 40% 98%;
-  --popover: 222.2 47.4% 11.2%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 210 40% 98%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 217.2 32.6% 17.5%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 217.2 32.6% 17.5%;
-  --input: 217.2 32.6% 17.5%;
-  --ring: 212.7 26.8% 83.9%;
 }
 
 [data-density="compact"] {
@@ -348,7 +340,13 @@ body,
   color: var(--sidebar-fg);
   display: flex; flex-direction: column;
   height: 100vh;
-  position: sticky; top: 0;
+  /* A sticky box is a stacking context of its own, so the collapsed rail's
+     fly-out (`.b2b-sidebar__rail-popover`) is only ever as high as the sidebar
+     itself. Above the topbar (35) and everything in the page — sticky
+     form-action bars (30), sticky table columns — so the fly-out is drawn over
+     the content (#380); below the mobile nav backdrop (40) and the
+     scrim, drawers and palette (50/60). The mobile drawer sets its own. */
+  position: sticky; top: 0; z-index: 36;
   border-right: 1px solid #000;
   width: 248px;
 }
@@ -495,9 +493,36 @@ body,
    one, so the order is logo, divider, release, divider, the rest. Its left
    edge is the brand link's (16px), so the badge lines up with the logo tile. */
 .b2b-sidebar__version {
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+/* *Send feedback* (#379): a quiet link beside the release, in the sidebar's
+   muted text (5.32:1 on the sidebar), brightening on hover like the nav. The
+   row grows its hit area to 44px on touch screens (Fitts). */
+.b2b-sidebar__feedback {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 24px;
+  padding: 0 4px;
+  margin-left: auto;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--sidebar-fg-muted);
+  font-size: 11px; font-weight: 500; line-height: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.b2b-sidebar__feedback:hover { color: var(--sidebar-fg-active); background: var(--bg-sidebar-hover); }
+.b2b-sidebar__feedback:focus-visible,
+.b2b-sidebar__feedback-rail:focus-visible {
+  outline: 2px solid var(--ring-color);
+  outline-offset: 1px;
+}
+@media (pointer: coarse) {
+  .b2b-sidebar__feedback { min-height: 44px; }
+}
+.b2b-sidebar__feedback-rail-row {
+  display: flex; justify-content: center;
+  padding: 8px 0 0;
 }
 /* Sidebar tokens rather than the badge's own: the sidebar is #1a1c1e in both
    themes, and the `outline` variant's `text-foreground` is near-black in the
@@ -565,12 +590,26 @@ body,
   padding: 0 36px 0 32px;
   font-family: inherit;
   cursor: pointer;
+  /* Issue #1480 — a button styled as a search field. */
+  display: flex; align-items: center;
+  text-align: left;
 }
-.b2b-sidebar__search-input::placeholder { color: var(--sidebar-fg-muted); }
-.b2b-sidebar__search-input:focus {
-  outline: none;
+.b2b-sidebar__search-placeholder {
+  color: var(--sidebar-fg-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.b2b-sidebar__search-input:hover {
   background: rgba(255,255,255,0.12);
   border-color: rgba(255,255,255,0.25);
+}
+.b2b-sidebar__search-input:focus-visible {
+  outline: 2px solid var(--ring-color);
+  outline-offset: 2px;
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.25);
+}
+@media (pointer: coarse) {
+  .b2b-sidebar__search-input { height: 44px; }
 }
 .b2b-sidebar__search-icon {
   position: absolute; left: 22px; top: 50%; transform: translateY(-50%);
@@ -607,6 +646,7 @@ body,
   text-align: left;
 }
 .b2b-sidebar__group-label:hover { color: var(--sidebar-fg); }
+.b2b-sidebar__group-label:focus-visible { outline: 2px solid var(--ring-color); outline-offset: -2px; }
 .b2b-sidebar__group-label svg { transition: transform .12s; }
 .b2b-sidebar__group--collapsed .b2b-sidebar__group-label svg { transform: rotate(-90deg); }
 .b2b-sidebar__group--collapsed .b2b-sidebar__items { display: none; }
@@ -638,6 +678,78 @@ body,
 }
 .b2b-nav-item.is-active .b2b-nav-badge {
   background: hsl(var(--accent-h) 70% 50%); color: #fff;
+}
+
+/* Feature 164 — a sidebar row with its pin control (FR-004). The control is a
+   sibling of the link, revealed on the row's hover and focus, always shown with
+   a 44 px target on touch (the mobile drawer, and any coarse pointer). */
+.b2b-nav-row { display: flex; align-items: center; gap: 2px; }
+.b2b-nav-row > .b2b-nav-item { flex: 1; min-width: 0; }
+.b2b-nav-pin {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 24px; height: 24px;
+  padding: 0;
+  border: none; border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--sidebar-fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .1s, background .1s, color .1s;
+}
+.b2b-nav-row:hover .b2b-nav-pin,
+.b2b-nav-row:focus-within .b2b-nav-pin { opacity: 1; }
+.b2b-nav-pin:hover { color: var(--sidebar-fg-active); background: var(--bg-sidebar-hover); }
+.b2b-nav-pin:focus-visible { opacity: 1; outline: 2px solid var(--ring-color); outline-offset: -2px; }
+.b2b-nav-pin--touch { opacity: 1; min-width: 44px; min-height: 44px; }
+@media (pointer: coarse) {
+  .b2b-nav-pin { opacity: 1; min-width: 44px; min-height: 44px; }
+}
+/* The Pinned section's reorder handle and touch buttons (FR-009). */
+.b2b-nav-row--pinned .b2b-nav-reorder-handle { cursor: grab; }
+.b2b-nav-row--pinned.is-grabbed .b2b-nav-reorder-handle,
+.b2b-nav-row--pinned.is-dragging .b2b-nav-reorder-handle { opacity: 1; cursor: grabbing; }
+.b2b-nav-row--pinned.is-grabbed { background: var(--bg-sidebar-hover); border-radius: var(--r-sm); }
+.b2b-nav-row--pinned.is-drop-target { box-shadow: inset 0 2px 0 hsl(var(--accent-h) 90% 75%); }
+.b2b-nav-row--pinned .b2b-touch-reorder { flex-direction: row; }
+.b2b-nav-row--pinned .b2b-touch-reorder__btn {
+  background: transparent; border-color: rgba(255,255,255,0.12); color: var(--sidebar-fg-muted);
+}
+.b2b-sidebar__rail-popover-row { display: flex; align-items: center; gap: 2px; }
+.b2b-sidebar__rail-popover-row > .b2b-sidebar__rail-popover-item { flex: 1; min-width: 0; }
+.b2b-sidebar__rail-popover-row > .b2b-nav-pin { opacity: 1; }
+
+/* The palette's pin control beside a result (FR-027). A pointer shortcut,
+   hidden from assistive technology inside its `role="option"` row (#481) —
+   its keyboard equivalent is Alt+Enter on the highlighted row, and the pin
+   state is part of the option's accessible name. */
+.b2b-palette__pin {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  padding: 0;
+  border: none; border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.b2b-palette__pin:hover { color: var(--fg); background: var(--bg-muted, rgba(0,0,0,0.06)); }
+.b2b-palette__pin[data-pinned="true"] { color: var(--fg); }
+.b2b-palette__pin-hint {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--fg-muted);
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .b2b-palette__pin { min-width: 44px; min-height: 44px; }
+}
+
+/* The save-failure notice below the top bar (FR-017). */
+.b2b-preferences-notice:empty { display: none; }
+.b2b-preferences-notice__alert {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-radius: 0; border-left: 0; border-right: 0;
+  padding: 8px 16px;
 }
 
 .b2b-sidebar__foot {
@@ -747,6 +859,25 @@ body,
   background: var(--danger);
   box-shadow: 0 0 0 2px var(--surface);
 }
+/* Issue #1784 — on a coarse pointer every top-bar control is a 44 × 44 px
+   target (Fitts's Law; WCAG 2.5.5), from this one rule rather than a size per
+   button, so a control added to the bar later inherits it. A mouse keeps the
+   34 px density above. The icon buttons and the language pill are transparent
+   until hovered, so the box itself grows; the avatar keeps its 28 px circle
+   and grows its target with padding the gradient does not paint. The bar is
+   56 px tall, so nothing shifts vertically. Held by
+   admin/test/components/AppShell.topbar-touch-targets.test.tsx. */
+@media (pointer: coarse) {
+  .b2b-topbar__menu-btn,
+  .b2b-topbar__actions :is(button, a[href]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .b2b-topbar__actions .b2b-avatar {
+    padding: 8px;
+    background-clip: content-box;
+  }
+}
 
 /* ============================================================
    Page header
@@ -780,26 +911,7 @@ body,
 .cms-page-builder [data-pb-drawer-filtering] [class*="ComponentList-content"] {
   display: block !important;
 }
-.cms-page-builder .cms-pb-header-shell,
-.email-builder-pane .cms-pb-header-shell {
-  display: contents;
-}
-/* Left column: sidebar toggles + template actions, flush start. */
-.cms-page-builder .cms-pb-header-left,
-.email-builder-pane .cms-pb-header-left {
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-.cms-page-builder .cms-pb-header-leading,
-.email-builder-pane .cms-pb-header-leading {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  /* Puck's left toggle column sets a muted `color` — reset so our buttons match. */
-  color: hsl(var(--foreground));
-}
+/* The one canvas toolbar (issue #1494): module actions, "More", Fullscreen. */
 .cms-page-builder .cms-pb-header-actions,
 .email-builder-pane .cms-pb-header-actions {
   display: flex;
@@ -837,166 +949,17 @@ body,
     display: inline;
   }
 }
-/* Left template actions keep their labels. */
-.cms-page-builder .cms-pb-header-leading .cms-pb-header-actions__label,
-.email-builder-pane .cms-pb-header-leading .cms-pb-header-actions__label {
-  display: inline;
-}
-/* Email header: Preview sits beside Clear/Fullscreen from PageBuilderHeaderActions. */
-.email-builder-pane [class*="PuckHeader-tools"] > .cms-pb-header-actions > .cms-pb-header-actions {
-  display: contents;
-}
 @media (max-width: 1023px) {
   .cms-content-editor__builder .cms-page-builder {
     min-height: min(70vh, 640px);
   }
 }
 
-.b2b-page-head {
-  display: flex; align-items: flex-start; gap: 16px;
-  margin-bottom: 20px;
-}
-.b2b-page-head__back {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 12px; color: var(--fg-muted);
-  margin-bottom: 6px;
-  background: transparent; border: none; cursor: pointer; padding: 0;
-  text-decoration: none;
-}
-.b2b-page-head__back:hover { color: var(--fg); }
-.b2b-page-head__title {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
-  color: var(--fg);
-}
-.b2b-page-head__sub {
-  color: var(--fg-muted); font-size: 13px; margin-top: 4px;
-}
-.b2b-page-head__actions {
-  display: flex; gap: 8px; margin-left: auto;
-  flex-shrink: 0;
-}
-
 /* ============================================================
-   Buttons (used inside in-scope pages alongside shadcn ones)
+   Form controls. The legacy `.b2b-btn`, `.b2b-field`, `.b2b-label`,
+   `.b2b-help` and `.b2b-select` were retired in issue #1502 — render the
+   kit's `Button`, `Input`, `Textarea`, `Select` and `FormField`.
    ============================================================ */
-.b2b-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  gap: 6px;
-  height: var(--field-h);
-  padding: 0 14px;
-  border-radius: var(--r-sm);
-  font-weight: 500; font-size: 13px;
-  white-space: nowrap;
-  border: 1px solid transparent;
-  background: var(--surface);
-  color: var(--fg);
-  font-family: inherit;
-  cursor: pointer;
-  user-select: none;
-  transition: background .12s ease, border-color .12s ease, box-shadow .12s ease, color .12s ease;
-}
-.b2b-btn:focus-visible {
-  outline: none; box-shadow: 0 0 0 3px var(--ring-color);
-}
-.b2b-btn[disabled] { opacity: .5; cursor: not-allowed; pointer-events: none; }
-
-.b2b-btn--primary {
-  background: var(--primary-color); color: var(--primary-fg);
-  border-color: hsl(var(--accent-h) var(--accent-s) calc(var(--accent-l) - 8%));
-  box-shadow: var(--sh-1), inset 0 1px 0 rgba(255,255,255,0.18);
-}
-.b2b-btn--primary:hover { background: var(--primary-hover); }
-.b2b-btn--primary:active { background: var(--primary-active); }
-
-.b2b-btn--default {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  color: var(--fg);
-  box-shadow: var(--sh-1);
-}
-.b2b-btn--default:hover { background: var(--surface-sunken); }
-
-.b2b-btn--ghost {
-  background: transparent; border-color: transparent; color: var(--fg-muted);
-}
-.b2b-btn--ghost:hover { background: var(--surface-sunken); color: var(--fg); }
-
-.b2b-btn--danger {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  color: var(--danger);
-  box-shadow: var(--sh-1);
-}
-.b2b-btn--danger:hover { background: var(--danger-soft); border-color: var(--danger); }
-
-.b2b-btn--sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: var(--r-xs); }
-.b2b-btn--lg { height: 40px; padding: 0 18px; font-size: 14px; }
-.b2b-btn--icon { width: var(--field-h); padding: 0; }
-.b2b-btn--sm.b2b-btn--icon { width: 28px; }
-
-/* ============================================================
-   Field / Input
-   ============================================================ */
-.b2b-field {
-  display: block;
-  width: 100%;
-  height: var(--field-h);
-  padding: 0 var(--field-pad);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 13px;
-  transition: border-color .12s, box-shadow .12s;
-}
-textarea.b2b-field {
-  height: auto; padding: 8px var(--field-pad);
-  resize: vertical; min-height: 80px; line-height: 1.5;
-}
-.b2b-field:hover { border-color: var(--fg-subtle); }
-.b2b-field:focus {
-  outline: none; border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px var(--ring-color);
-}
-.b2b-field::placeholder { color: var(--fg-subtle); }
-.b2b-field--mono { font-family: var(--ff-mono); font-size: 12px; }
-.b2b-field--addon { padding-left: 32px; }
-
-.b2b-input-wrap { position: relative; }
-.b2b-input-wrap > svg.lead, .b2b-input-wrap > svg.trail {
-  position: absolute; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; color: var(--fg-subtle); pointer-events: none;
-}
-.b2b-input-wrap > svg.lead { left: 10px; }
-.b2b-input-wrap > svg.trail { right: 10px; }
-
-.b2b-label {
-  display: block;
-  font-size: 12px; font-weight: 500;
-  color: var(--fg);
-  margin-bottom: 6px;
-}
-.b2b-help {
-  font-size: 12px; color: var(--fg-muted); margin-top: 4px;
-}
-
-/* Select (native, restyled).
-   MODIFIER ONLY — it strips the browser chrome and draws the chevron, but every
-   visible property (height, border, radius, background, focus ring) comes from
-   `.b2b-field`. Applied alone it yields a borderless control that reads as
-   plain text, so always pair the two: `class="b2b-field b2b-select"`.
-   React code should reach for the `Select` primitive instead
-   (`admin/src/components/ui/select.tsx`), which bundles both. */
-.b2b-select {
-  appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b636d' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 30px;
-}
-
 /* Checkbox */
 .b2b-cbx {
   appearance: none; width: 16px; height: 16px;
@@ -1039,39 +1002,9 @@ textarea.b2b-field {
 .b2b-switch input:checked + i { background: var(--primary-color); }
 .b2b-switch input:checked + i::before { transform: translateX(14px); }
 
-/* ============================================================
-   Card / surface
-   ============================================================ */
-.b2b-card {
-  background: var(--surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-1);
-}
-.b2b-card--clickable {
-  display: block;
-  cursor: pointer;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-}
-.b2b-card--clickable:hover {
-  border-color: var(--border-strong, var(--fg-muted));
-  box-shadow: var(--sh-2, var(--sh-1));
-  transform: translateY(-1px);
-}
-.b2b-card__head {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-}
-.b2b-card__title { font-size: 14px; font-weight: 600; color: var(--fg); }
-.b2b-card__sub { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
-.b2b-card__body { padding: 16px; }
-.b2b-card__body--flush { padding: 0; }
-.b2b-card__foot {
-  padding: 12px 16px; border-top: 1px solid var(--border-subtle);
-  background: var(--surface-muted); border-radius: 0 0 var(--r-lg) var(--r-lg);
-  display: flex; align-items: center; justify-content: space-between;
-}
+/* `.b2b-card*` was retired in issue #1502 (SHELL-18) — render the kit's
+   `Card`, `CardHeader`, `CardTitle`, `CardContent`, `CardFooter` and
+   `<Card flush>` from `@endora-commerce/admin-kit/ui`. */
 
 /* ============================================================
    Badge / Pill / Status
@@ -1099,45 +1032,6 @@ textarea.b2b-field {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: currentColor; flex-shrink: 0;
 }
-
-/* ============================================================
-   Table
-   ============================================================ */
-.b2b-tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-.b2b-tbl thead th {
-  position: sticky; top: 0;
-  text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  background: var(--surface-muted);
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-color);
-  height: 36px;
-  white-space: nowrap;
-  z-index: 2;
-}
-.b2b-tbl tbody td {
-  padding: 0 12px;
-  height: var(--row-h);
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--fg);
-  vertical-align: middle;
-}
-.b2b-tbl tbody tr { transition: background .08s; }
-.b2b-tbl tbody tr:hover { background: var(--surface-muted); }
-.b2b-tbl tbody tr.is-selected { background: var(--primary-soft); }
-.b2b-tbl tbody tr.is-selected:hover {
-  background: hsl(var(--accent-h) calc(var(--accent-s) - 10%) 92%);
-}
-.b2b-tbl tbody tr:last-child td { border-bottom: none; }
-.b2b-tbl tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.b2b-tbl thead th.num { text-align: right; }
-.b2b-tbl tbody td.actions { width: 1%; white-space: nowrap; }
-.b2b-tbl .col-cb { width: 32px; padding-left: 14px; padding-right: 0; }
-.b2b-tbl tbody tr.is-clickable { cursor: pointer; }
 
 /* Empty state */
 .b2b-empty {
@@ -1189,6 +1083,8 @@ textarea.b2b-field {
 }
 .b2b-tab:hover { color: var(--fg); }
 .b2b-tab.is-active { color: var(--fg); border-bottom-color: var(--primary-color); }
+.b2b-tab:focus-visible { outline: 2px solid var(--ring-color); outline-offset: -2px; border-radius: var(--r-sm); }
+.b2b-tab:disabled { opacity: .5; cursor: not-allowed; }
 .b2b-tab .b2b-badge { font-size: 10px; padding: 0 6px; }
 
 /* ============================================================
@@ -1228,34 +1124,6 @@ textarea.b2b-field {
 .b2b-filterchip svg { width: 12px; height: 12px; }
 
 /* ============================================================
-   Bulk action bar
-   ============================================================ */
-.b2b-bulkbar {
-  background: var(--fg);
-  color: #fff;
-  border-radius: var(--r-md);
-  padding: 8px 12px 8px 16px;
-  display: flex; align-items: center; gap: 12px;
-  font-size: 13px;
-  margin: 0 12px 12px;
-  box-shadow: var(--sh-2);
-}
-.b2b-bulkbar .count { font-weight: 500; }
-.b2b-bulkbar .actions { margin-left: auto; display: flex; gap: 6px; }
-.b2b-bulkbar .b2b-btn {
-  height: 28px; font-size: 12px;
-  background: rgba(255,255,255,0.10);
-  border-color: rgba(255,255,255,0.15);
-  color: #fff;
-}
-.b2b-bulkbar .b2b-btn:hover { background: rgba(255,255,255,0.18); }
-.b2b-bulkbar .b2b-btn--danger {
-  background: rgba(255,255,255,0.10);
-  color: #ffb4ab;
-  border-color: rgba(255,255,255,0.15);
-}
-
-/* ============================================================
    Save bar (sticky)
    ============================================================ */
 .b2b-savebar {
@@ -1272,8 +1140,6 @@ textarea.b2b-field {
 }
 .b2b-savebar__msg { font-size: 13px; flex: 1; }
 .b2b-savebar__msg b { color: #fff; }
-.b2b-savebar .b2b-btn--ghost { color: #d7d9dc; }
-.b2b-savebar .b2b-btn--ghost:hover { background: rgba(255,255,255,.06); color: #fff; }
 @keyframes b2b-slide-up {
   from { transform: translateY(8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
@@ -1478,13 +1344,7 @@ textarea.b2b-field {
 /* ============================================================
    Misc helpers (used by in-scope pages)
    ============================================================ */
-.b2b-row { display: flex; align-items: center; gap: 12px; }
-.b2b-col { display: flex; flex-direction: column; gap: 8px; }
-.b2b-grow { flex: 1; }
 .b2b-muted { color: var(--fg-muted); }
-.b2b-mono { font-family: var(--ff-mono); }
-.b2b-tabular { font-variant-numeric: tabular-nums; }
-.b2b-hr { height: 1px; background: var(--border-subtle); border: none; margin: 0; }
 
 .b2b-thumb {
   border-radius: var(--r-sm);
@@ -1585,22 +1445,6 @@ textarea.b2b-field {
   .b2b-main {
     padding: 16px 16px 48px;
   }
-  .b2b-page-head {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-  .b2b-page-head__title {
-    font-size: 18px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .b2b-page-head__actions {
-    margin-left: 0;
-    width: 100%;
-    flex-wrap: wrap;
-  }
   .b2b-page:has(.b2b-sticky-form-actions) {
     padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
   }
@@ -1617,39 +1461,12 @@ textarea.b2b-field {
     flex-shrink: 0;
     gap: 4px;
   }
-  .b2b-topbar__hide-mobile {
-    display: none !important;
-  }
   .b2b-lang-picker__label {
     display: none;
   }
-  .b2b-main button.b2b-btn,
-  .b2b-main .b2b-topbar__icon-btn,
-  .b2b-main button[type="submit"],
-  .b2b-main a.b2b-btn {
+  .b2b-main button[type="submit"] {
     min-height: 44px;
     min-width: 44px;
-  }
-  /* Combine both classes so this beats the unconditional `.b2b-sticky-form-actions`
-     flex rule below (equal specificity would otherwise let the later flex rule win,
-     stacking every button onto its own row via flex-wrap + width:100%). */
-  .b2b-page-head__actions.b2b-sticky-form-actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-    justify-items: stretch;
-  }
-  .b2b-page-head__actions.b2b-sticky-form-actions .b2b-btn {
-    min-width: 0;
-    width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  /* Primary (Save) spans the full width on its own row — also keeps it full-width
-     when it's the only button (new-product create view). */
-  .b2b-page-head__actions.b2b-sticky-form-actions .b2b-btn--primary {
-    grid-column: 1 / -1;
   }
   .b2b-palette {
     top: 8vh;
@@ -1679,15 +1496,6 @@ textarea.b2b-field {
   .b2b-grid--cols-2 {
     grid-template-columns: 1fr !important;
   }
-  .b2b-page .b2b-row:not(.b2b-kpi-grid) {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .b2b-page .b2b-row .b2b-field,
-  .b2b-page .b2b-row select.b2b-field {
-    max-width: none !important;
-    width: 100%;
-  }
   .b2b-impersonation-slot {
     flex-shrink: 0;
   }
@@ -1697,9 +1505,7 @@ textarea.b2b-field {
   .b2b-touch-reorder {
     display: flex;
   }
-  .b2b-table,
-  .b2b-table-wrap,
-  .b2b-tbl {
+  .b2b-table-wrap {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -1740,6 +1546,9 @@ textarea.b2b-field {
   flex-direction: column;
   gap: 8px;
 }
+.b2b-responsive-card[data-state='selected'] {
+  background: hsl(var(--muted));
+}
 .b2b-responsive-card__headline {
   font-weight: 600;
   font-size: 14px;
@@ -1759,7 +1568,6 @@ textarea.b2b-field {
   gap: 8px;
   margin-top: 4px;
 }
-.b2b-responsive-card__actions .b2b-btn,
 .b2b-responsive-card__actions button {
   min-height: 44px;
   min-width: 44px;
@@ -1785,6 +1593,17 @@ textarea.b2b-field {
     padding: 0;
     background: transparent;
     backdrop-filter: none;
+  }
+  /* Issue #1449 (DS-19) — a long editor's one Save stays in view while the form scrolls
+     under it, and settles at the end of the form (`StickyFormActions desktop="sticky"`). */
+  .b2b-sticky-form-actions--sticky {
+    position: sticky;
+    bottom: 0;
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--surface) 95%, transparent);
+    backdrop-filter: blur(8px);
   }
 }
 

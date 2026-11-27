@@ -1,9 +1,9 @@
 ---
-title: languages
+title: Languages
 description: Pool of supported BCP-47 language tags + translation-fallback helper
 ---
 
-# `languages`
+# Languages (`languages`)
 
 The installation-wide pool of supported BCP-47 language tags. Owns the
 public `i18n/config` read path that storefront + admin consume to render
@@ -39,8 +39,10 @@ MikroORM transaction so the partial unique index is never violated
 mid-flight.
 
 The `LanguageService.setDefault()` rejects rows where `isActive=false`
-(`409 VALIDATION_FAILED`), and the `remove()` path refuses to delete a
-row that is currently the default.
+(`409 DICTIONARY_DEFAULT_ENTRY_INACTIVE`, `details.code: "language"` and the
+language's `details.entryCode`; `409 VALIDATION_FAILED` until issue #643), and
+the `remove()` path refuses to delete a row that is currently the default.
+Creating a language whose code exists is `409 DICTIONARY_ENTRY_CODE_TAKEN`.
 
 ## Bootstrap
 
@@ -68,11 +70,11 @@ implements the lookup chain:
 3. first present value in the record.
 4. empty string.
 
-`resolveRequestLocale(acceptLanguageHeader, activeLocales)` parses an
-`Accept-Language` header (q-weighted) and returns the highest-priority
-match from the active language pool, with a language-only fallback so
-`en-GB` matches `en-US`. Falls back to the configured default when nothing
-matches.
+`LocaleService` does not read `Accept-Language`. A request's content
+language is resolved against its sales channel by `requestScopeLanguage`
+from `@endora-commerce/contracts` (q-weighted, exact then language-only
+match, else the channel's default), and the language of a backend message
+by `request.responseLanguage()`.
 
 The default-locale lookup is cached for 60 seconds; admin mutations call
 `invalidateDefault()` so the cache flushes immediately after a change.
@@ -80,14 +82,15 @@ The default-locale lookup is cached for 60 seconds; admin mutations call
 ## Entities
 
 `Language` — natural primary key on the BCP-47 code; `label`,
-`isDefault`, `isActive`, `sortOrder`.
+`nativeLabel`, `isRtl`, `fallbackCode` (a reference to another language,
+`languages_fallback_fk`), `isDefault`, `isActive`, `sortOrder`. This module
+creates `native_label`, `is_rtl`, `fallback_code` and the foreign key itself,
+in `20261114T003519_languages_dictionary_columns.ts` (issue #611); until then
+only the `dictionaries` module's init migration did. On a database that
+already has them the migration changes nothing.
 
 ## Extension points
 
-- **Per-Sales-Channel default** — when a Sales Channel ships its own
-  language, hook the resolver before
-  `LocaleService.resolveRequestLocale()` and use the channel's default
-  instead of the global one.
 - **Translation pull/push** — emit a domain event when a localized field
   changes and let an integration consume it for an external translation
   workflow.

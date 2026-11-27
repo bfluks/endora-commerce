@@ -4,14 +4,10 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
+import { seedBaseTiersSql } from '../../helpers/price-book-sql.js';
+import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID, SEED_PRODUCT_103_ID } from '../../helpers/seed-catalog.js';
 import { QuoteRequestItem } from '../../helpers/package-entities.js';
-import { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
-import {
-  DefaultPriceListMigrator,
-  DEFAULT_PRICE_LIST_ID,
-} from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
-import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { createMinimumPackagingUnit, minimumFixtureRun } from '../../helpers/order-minimum-fixture.js';
 
 /**
  * Feature 146, Phase 6 (T035, T036) — a rewrite keeps what nobody changed
@@ -31,15 +27,18 @@ describe('146 — line data carried across rewrites [integration]', () => {
   const admin = { b2b_session: 'stub-admin-session' };
   const VARIANT_V = '00000000-0000-4000-8000-0000001460a1';
   const VARIANT_W = '00000000-0000-4000-8000-0000001460a2';
-  let lists: PriceListService;
+  // Feature 155 (FR-026) — a buyer's line may only name a unit the product
+  // has, so the units these lines name are real catalogue units, per run.
+  const RUN = minimumFixtureRun();
+  const PALETA = `Paleta ${RUN}`;
+  const KARTON = `Karton ${RUN}`;
+  const PALETA_10 = `Paleta10 ${RUN}`;
 
   const setPrices = (below10: string, from10: string) =>
-    lists.replaceBrackets(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID, {
-      PLN: [
-        { minQuantity: 1, maxQuantity: 9, amount: below10 },
-        { minQuantity: 10, maxQuantity: null, amount: from10 },
-      ],
-    });
+    seedBaseTiersSql(h.em(), SEED_PRODUCT_101_ID, [
+      { minQuantity: 1, maxQuantity: 9, amount: below10 },
+      { minQuantity: 10, maxQuantity: null, amount: from10 },
+    ]);
 
   const create = async (items: Array<Record<string, unknown>>) => {
     const res = await h.app.inject({
@@ -84,11 +83,12 @@ describe('146 — line data carried across rewrites [integration]', () => {
     h = await setupBackendServer();
     // `setupBackendServer` has already emptied the price tables (`price_lists`
     // is a seeded table, truncated with cascade); this file only adds its own
-    // default list and brackets, and wipes nothing (`check-shared-table-wipes`).
-    await new DefaultPriceListMigrator(h.em).seedDefault();
-    lists = new PriceListService(h.em, undefined, undefined, undefined, neighbourReadPorts(h.em));
-    await lists.addProduct(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID);
+    // base-price tiers, and wipes nothing (`check-shared-table-wipes`).
     await setPrices('130.0000', '110.0000');
+    const em = h.em();
+    await createMinimumPackagingUnit(em, { productId: SEED_PRODUCT_101_ID, name: PALETA, baseQuantity: 2 });
+    await createMinimumPackagingUnit(em, { productId: SEED_PRODUCT_101_ID, name: KARTON, baseQuantity: 6 });
+    await createMinimumPackagingUnit(em, { productId: SEED_PRODUCT_101_ID, name: PALETA_10, baseQuantity: 10 });
   });
 
   afterAll(async () => {
@@ -104,7 +104,7 @@ describe('146 — line data carried across rewrites [integration]', () => {
           quantity: 4,
           desiredUnitPrice: 100,
           lineNote: 'note A',
-          packagingUnitName: 'Paleta',
+          packagingUnitName: PALETA,
           packagingUnitBaseQuantity: 2,
         },
         { productId: SEED_PRODUCT_101_ID, quantity: 3, desiredUnitPrice: 90 },
@@ -112,7 +112,7 @@ describe('146 — line data carried across rewrites [integration]', () => {
       const before = await linesOf(created.id);
       const withVariant = before.find((l) => l.variantId === VARIANT_V)!;
       const plain = before.find((l) => l.variantId == null)!;
-      expect(plain.referenceUnitPrice).toBe('130.00');
+      expect(plain.referenceUnitPrice).toBe('130.0000');
 
       await adminModify(created.id, created.version, {
         items: [
@@ -123,20 +123,20 @@ describe('146 — line data carried across rewrites [integration]', () => {
 
       const after = await linesOf(created.id);
       expect(after).toHaveLength(2);
-      const keptVariant = after.find((l) => l.agreedUnitPrice === '95.00')!;
+      const keptVariant = after.find((l) => l.agreedUnitPrice === '95.0000')!;
       expect(keptVariant.variantId).toBe(VARIANT_V);
       expect(keptVariant.lineNote).toBe('note A');
-      expect(keptVariant.packagingUnitName).toBe('Paleta');
+      expect(keptVariant.packagingUnitName).toBe(PALETA);
       expect(keptVariant.packagingUnitBaseQuantity).toBe(2);
       expect(keptVariant.productName).toBe(withVariant.productName);
-      expect(keptVariant.productName).toMatch(/\(Paleta\)$/);
-      expect(keptVariant.desiredUnitPrice).toBe('100.00');
+      expect(keptVariant.productName.endsWith(`(${PALETA})`)).toBe(true);
+      expect(keptVariant.desiredUnitPrice).toBe('100.0000');
       expect(keptVariant.referenceUnitPrice ?? null).toBe(withVariant.referenceUnitPrice ?? null);
       expect(keptVariant.referenceCurrency ?? null).toBe(withVariant.referenceCurrency ?? null);
 
-      const keptPlain = after.find((l) => l.agreedUnitPrice === '85.00')!;
-      expect(keptPlain.desiredUnitPrice).toBe('90.00');
-      expect(keptPlain.referenceUnitPrice).toBe('130.00');
+      const keptPlain = after.find((l) => l.agreedUnitPrice === '85.0000')!;
+      expect(keptPlain.desiredUnitPrice).toBe('90.0000');
+      expect(keptPlain.referenceUnitPrice).toBe('130.0000');
       expect(keptPlain.referenceCurrency).toBe('PLN');
       expect(keptPlain.referenceCapturedAt?.getTime()).toBe(plain.referenceCapturedAt?.getTime());
     });
@@ -190,7 +190,7 @@ describe('146 — line data carried across rewrites [integration]', () => {
       expect(added.referenceCapturedAt ?? null).toBeNull();
       expect(added.desiredUnitPrice ?? null).toBeNull();
       // The kept line still has its reference.
-      expect(after.find((l) => l.productId === SEED_PRODUCT_101_ID)!.referenceUnitPrice).toBe('130.00');
+      expect(after.find((l) => l.productId === SEED_PRODUCT_101_ID)!.referenceUnitPrice).toBe('130.0000');
     });
   });
 
@@ -202,15 +202,15 @@ describe('146 — line data carried across rewrites [integration]', () => {
           productId: SEED_PRODUCT_101_ID,
           quantity: 12,
           desiredUnitPrice: 90,
-          packagingUnitName: 'Karton',
+          packagingUnitName: KARTON,
           packagingUnitBaseQuantity: 6,
         },
       ]);
       const before = await linesOf(created.id);
       const unchanged = before.find((l) => l.packagingUnitName == null)!;
-      const changing = before.find((l) => l.packagingUnitName === 'Karton')!;
-      expect(unchanged.referenceUnitPrice).toBe('130.00');
-      expect(changing.referenceUnitPrice).toBe('110.00');
+      const changing = before.find((l) => l.packagingUnitName === KARTON)!;
+      expect(unchanged.referenceUnitPrice).toBe('130.0000');
+      expect(changing.referenceUnitPrice).toBe('110.0000');
 
       // The price moves after submission: only a line whose inputs changed may
       // see the new price.
@@ -224,7 +224,7 @@ describe('146 — line data carried across rewrites [integration]', () => {
               productId: SEED_PRODUCT_101_ID,
               quantity: 18,
               desiredUnitPrice: 88,
-              packagingUnitName: 'Karton',
+              packagingUnitName: KARTON,
               packagingUnitBaseQuantity: 6,
             },
           ],
@@ -237,17 +237,17 @@ describe('146 — line data carried across rewrites [integration]', () => {
       expect(after).toHaveLength(2);
       const kept = after.find((l) => l.packagingUnitName == null)!;
       expect(kept.quantity).toBe(2);
-      expect(kept.referenceUnitPrice).toBe('130.00');
+      expect(kept.referenceUnitPrice).toBe('130.0000');
       expect(kept.referenceCapturedAt?.getTime()).toBe(unchanged.referenceCapturedAt?.getTime());
-      expect(kept.desiredUnitPrice).toBe('100.00');
+      expect(kept.desiredUnitPrice).toBe('100.0000');
 
-      const reResolved = after.find((l) => l.packagingUnitName === 'Karton')!;
+      const reResolved = after.find((l) => l.packagingUnitName === KARTON)!;
       expect(reResolved.quantity).toBe(18);
       expect(reResolved.packagingUnitBaseQuantity).toBe(6);
-      expect(reResolved.productName).toMatch(/\(Karton\)$/);
-      expect(reResolved.referenceUnitPrice).toBe('115.00');
+      expect(reResolved.productName.endsWith(`(${KARTON})`)).toBe(true);
+      expect(reResolved.referenceUnitPrice).toBe('115.0000');
       expect(reResolved.referenceCurrency).toBe('PLN');
-      expect(reResolved.desiredUnitPrice).toBe('88.00');
+      expect(reResolved.desiredUnitPrice).toBe('88.0000');
     });
 
     it('a line the customer adds in the edit gets a reference of its own', async () => {
@@ -255,13 +255,64 @@ describe('146 — line data carried across rewrites [integration]', () => {
       await customerPatch(created.id, {
         items: [
           { productId: SEED_PRODUCT_101_ID, quantity: 2 },
-          { productId: SEED_PRODUCT_101_ID, quantity: 20, packagingUnitName: 'Paleta', packagingUnitBaseQuantity: 10 },
+          { productId: SEED_PRODUCT_101_ID, quantity: 20, packagingUnitName: PALETA_10, packagingUnitBaseQuantity: 10 },
         ],
       });
       const after = await linesOf(created.id);
-      const added = after.find((l) => l.packagingUnitName === 'Paleta')!;
-      expect(added.referenceUnitPrice).toBe('110.00');
+      const added = after.find((l) => l.packagingUnitName === PALETA_10)!;
+      expect(added.referenceUnitPrice).toBe('110.0000');
       expect(added.desiredUnitPrice ?? null).toBeNull();
+    });
+  });
+
+  describe('customer draft edit keeps the grouping (feature 159, T027, R-13)', () => {
+    it('a paired line keeps its group and the body’s order within it; a new line is ungrouped; no group changes', async () => {
+      const created = await create([
+        { productId: SEED_PRODUCT_101_ID, quantity: 1 },
+        { productId: SEED_PRODUCT_102_ID, quantity: 1 },
+      ]);
+      // No representative's save can have happened on a draft the customer may
+      // still edit, so the group is laid in directly: defence in depth.
+      const conn = h.em().getConnection();
+      const groupId = '00000000-0000-4000-8000-000000159c01';
+      await conn.execute(
+        `insert into "quote_request_item_groups" ("id", "quote_request_id", "name", "position", "created_at", "updated_at")
+         values (?, ?, 'Hall', 0, now(), now())`,
+        [groupId, created.id],
+      );
+      await conn.execute(`update "quote_request_items" set "group_id" = ? where "quote_request_id" = ?`, [groupId, created.id]);
+
+      await customerPatch(created.id, {
+        items: [
+          { productId: SEED_PRODUCT_103_ID, quantity: 1 },
+          { productId: SEED_PRODUCT_102_ID, quantity: 1 },
+          { productId: SEED_PRODUCT_101_ID, quantity: 1 },
+        ],
+      });
+      const after = await linesOf(created.id);
+      const of = (productId: string) => after.find((l) => l.productId === productId)!;
+      expect([of(SEED_PRODUCT_102_ID).groupId, of(SEED_PRODUCT_102_ID).position]).toEqual([groupId, 0]);
+      expect([of(SEED_PRODUCT_101_ID).groupId, of(SEED_PRODUCT_101_ID).position]).toEqual([groupId, 1]);
+      expect([of(SEED_PRODUCT_103_ID).groupId ?? null, of(SEED_PRODUCT_103_ID).position]).toEqual([null, 0]);
+      const groups = await conn.execute<Array<{ id: string; name: string; position: number }>>(
+        `select "id", "name", "position" from "quote_request_item_groups" where "quote_request_id" = ?`,
+        [created.id],
+      );
+      expect(groups).toEqual([{ id: groupId, name: 'Hall', position: 0 }]);
+    });
+
+    it('a customer body carrying groups is refused (400) and a groupKey on a line is ignored (FR-025)', async () => {
+      const created = await create([{ productId: SEED_PRODUCT_101_ID, quantity: 1 }]);
+      const refused = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/quote-requests/${created.id}`,
+        cookies: customer,
+        payload: { groups: [{ key: 'g', name: 'Mine' }], items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1, groupKey: 'g' }] },
+      });
+      expect(refused.statusCode, refused.body).toBe(400);
+      await customerPatch(created.id, { items: [{ productId: SEED_PRODUCT_101_ID, quantity: 2, groupKey: 'g' }] });
+      const after = await linesOf(created.id);
+      expect(after.map((l) => l.groupId ?? null)).toEqual([null]);
     });
   });
 });

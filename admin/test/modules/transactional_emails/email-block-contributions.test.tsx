@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { render } from '@testing-library/react';
 import { Puck, usePuck, type ComponentConfig, type Config } from '@puckeditor/core';
-import { countBlockNames } from '@endora-commerce/page-builder-core';
+import { countComponentNames } from '@endora-commerce/page-builder-core';
 import {
   defaultEmailBuilderConfig,
   renderEmailHtml,
@@ -157,7 +157,7 @@ describe('a stored e-mail block nothing can render (FR-016)', () => {
     ],
     zones: {},
   };
-  const names = [...countBlockNames(stored).keys()];
+  const names = [...countComponentNames(stored).keys()];
 
   it('is a visible placeholder naming the block and its module', () => {
     const merged = withMissingBlockPlaceholders({ components: BASE } as Config, names);
@@ -206,6 +206,9 @@ describe('the pane reaches all of it', () => {
     expect(source).toContain('loadEmailBlockRenderers(');
     expect(source).toContain('composeEmailBlocks(');
     expect(source).toContain('withMissingBlockPlaceholders(');
+    // Feature 163, T197: the names are the components the document places, never a rich text's TipTap nodes.
+    expect(source).toContain('countComponentNames(');
+    expect(source).not.toContain('countBlockNames(');
   });
 
   it('hands the loaded renderers to both renderEmailHtml calls', () => {

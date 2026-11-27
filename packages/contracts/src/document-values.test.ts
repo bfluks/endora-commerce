@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  documentCellLink,
   documentValueHasValue,
   evaluateDocumentCondition,
   formatDocumentValue,
@@ -59,6 +60,25 @@ describe('formatDocumentValue', () => {
     expect(formatDocumentValue(money(1234.5), { currencyDisplay: 'code' }, 'en-US')).toBe(`PLN${NBSP}1,234.50`);
     expect(formatDocumentValue(money(1234.5), { currencyDisplay: 'none' }, 'en-US')).toBe('1,234.50');
     expect(formatDocumentValue(money(10), { decimals: 0 }, 'en-US')).toBe('PLN 10'.replace(' ', NBSP));
+  });
+
+  it('a unit price shows its significant places, up to four, and never fewer than the format says (§10.18)', () => {
+    const unit = (amount: number) => ({ kind: 'money' as const, amount, currency: 'PLN', unitPrice: true });
+    expect(formatDocumentValue(unit(0.0125), { decimals: 2 }, 'pl-PL')).toBe(`0,0125${NBSP}zł`);
+    expect(formatDocumentValue(unit(1.505), {}, 'pl-PL')).toBe(`1,505${NBSP}zł`);
+    expect(formatDocumentValue(unit(1.5), { decimals: 2 }, 'pl-PL')).toBe(`1,50${NBSP}zł`);
+    expect(formatDocumentValue(unit(0.0125), { currencyDisplay: 'none' }, 'en-US')).toBe('0.0125');
+    // An amount (a line value, a total) keeps its two places.
+    expect(formatDocumentValue(money(0.0125), {}, 'pl-PL')).toBe(`0,01${NBSP}zł`);
+  });
+
+  it('issue #430: an amount that is not zero but rounds to no cent prints a dash, never 0,00', () => {
+    const below: DocumentValue = { kind: 'money', amount: 0, currency: 'PLN', belowMinorUnit: true };
+    expect(formatDocumentValue(below, { decimals: 2 }, 'pl-PL')).toBe('—');
+    expect(formatDocumentValue(below, { currencyDisplay: 'none' }, 'en-US')).toBe('—');
+    expect(documentValueHasValue(below)).toBe(true);
+    // A real zero is still a zero.
+    expect(formatDocumentValue(money(0), {}, 'pl-PL')).toBe(`0,00${NBSP}zł`);
   });
 
   it('money in a currency Intl cannot format prints the number and the code', () => {
@@ -126,6 +146,12 @@ describe('sumDocumentValues', () => {
   it('sums money of one currency, rounded to the minor unit', () => {
     expect(sumDocumentValues([money(0.1), money(0.2), money(10.005)])).toEqual(money(10.31));
   });
+  it('issue #430: a sum of discounts that round to no cent keeps the mark; a real cent drops it', () => {
+    const below: DocumentValue = { kind: 'money', amount: 0, currency: 'PLN', belowMinorUnit: true };
+    expect(sumDocumentValues([below, below])).toEqual(below);
+    expect(sumDocumentValues([below, money(0.01)])).toEqual(money(0.01));
+    expect(sumDocumentValues([money(0), money(0)])).toEqual(money(0));
+  });
   it('mixed currencies, mixed kinds, or nothing with a value answer no value', () => {
     expect(sumDocumentValues([money(1), money(1, 'EUR')])).toBeNull();
     expect(sumDocumentValues([money(1), { kind: 'number', value: 1 }])).toBeNull();
@@ -147,5 +173,30 @@ describe('resolveDocumentAlign', () => {
     expect(resolveDocumentAlign('auto', undefined, 'text')).toBe('left');
     expect(resolveDocumentAlign('auto', undefined, 'date')).toBe('left');
     expect(resolveDocumentAlign('bogus' as never, undefined, undefined)).toBe('left');
+  });
+});
+
+describe('documentCellLink (issue #1904)', () => {
+  const linked = { linkPath: 'productUrl' };
+  const row = item({ productName: { kind: 'text', value: 'Bolt' }, productUrl: { kind: 'text', value: 'https://shop.example.com/p/bolt' } });
+
+  it('a column printed as a link answers its field’s URL field', () => {
+    expect(documentCellLink(true, linked, row)).toBe('https://shop.example.com/p/bolt');
+    expect(documentCellLink('true', linked, row)).toBe('https://shop.example.com/p/bolt');
+  });
+
+  it('off by default: no option, a false option, or a field that declares no URL field', () => {
+    expect(documentCellLink(undefined, linked, row)).toBeNull();
+    expect(documentCellLink(false, linked, row)).toBeNull();
+    expect(documentCellLink(true, {}, row)).toBeNull();
+    expect(documentCellLink(true, undefined, row)).toBeNull();
+  });
+
+  it('no link where the line has no URL, or one that is not an absolute http(s) address', () => {
+    expect(documentCellLink(true, linked, item({ productUrl: null }))).toBeNull();
+    expect(documentCellLink(true, linked, item({ productUrl: { kind: 'text', value: '  ' } }))).toBeNull();
+    expect(documentCellLink(true, linked, item({ productUrl: { kind: 'text', value: '/p/bolt' } }))).toBeNull();
+    expect(documentCellLink(true, linked, item({ productUrl: { kind: 'text', value: 'javascript:alert(1)' } }))).toBeNull();
+    expect(documentCellLink(true, linked, item({ productUrl: { kind: 'number', value: 3 } }))).toBeNull();
   });
 });

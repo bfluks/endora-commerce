@@ -1,5 +1,5 @@
 /**
- * `webhooks`' admin surface — one route and one sidebar entry, declared by the
+ * `webhooks`' admin surface — two routes and one sidebar entry, declared by the
  * module that owns them (feature 091, Phase 4, the plan's batch 6;
  * `specs/091-module-owned-admin-surfaces/contracts/admin-contribution.md`).
  *
@@ -30,9 +30,10 @@
  * whether or not anybody remembers to ask for one.
  */
 import type { AdminContributions } from '@endora-commerce/admin-kit/contributions';
+import { WEBHOOKS_NEW_PATH, WEBHOOKS_PATH } from './paths.js';
 
-/** The module's only route: the subscription registry and its delivery log. */
-const ROUTE_PATH = '/webhooks';
+/** The list: the subscription registry and its delivery log. */
+const ROUTE_PATH = WEBHOOKS_PATH;
 
 /**
  * The code every route of this module's admin API enforces —
@@ -51,6 +52,14 @@ export const contributions: AdminContributions = {
       requiredPermission: PERMISSION,
       index: true,
     },
+    {
+      // Subscribing (issue #1501, UX audit SHELL-14): the form that was drawn
+      // open above the list, reached from its *New webhook*. Same gate — the
+      // create route enforces the same code as the list.
+      path: WEBHOOKS_NEW_PATH,
+      component: () => import('./pages/WebhookCreatePage.js'),
+      requiredPermission: PERMISSION,
+    },
   ],
   nav: [
     {
@@ -65,14 +74,14 @@ export const contributions: AdminContributions = {
       // this merge request rather than the sidebar quietly changing to a name
       // that happened to be on the allowlist.
       icon: 'Webhook',
-      section: 'system',
-      // The hand-written position in *System* times a hundred, which is batch
-      // four's convention: `/webhooks` was the eighth row of that section
-      // before the drain began. *System* still holds host-declared entries, so
-      // `composeNav` appends every registry row after all of them whatever the
-      // weight says — what the weight can still do is keep the converted rows
-      // in the order the hand-written table had.
-      weight: 800,
+      section: 'platform',
+      // Issue #1519 (UX audit SHELL-11, DEC-02) split *System*: *Platform* is
+      // how the instance is configured and extended, ordered with the host's
+      // own rows by weight — Modules 100, Settings 200, Custom fields 300,
+      // Import/export 400, Bulk operations 500, Webhooks 600, Global search
+      // 700, PWA 800, Command hooks 900, API description 1000. The first of the
+      // integration rows.
+      weight: 600,
       requiredPermission: PERMISSION,
     },
   ],

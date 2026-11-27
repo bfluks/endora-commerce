@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { Data } from '@puckeditor/core';
 import type { BlogCategoryDetail } from '@endora-commerce/contracts';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, SaveButtonGroup } from '@endora-commerce/admin-kit/ui';
-import { AssetFieldPicker, ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  EditorSection,
+  InlineStatus,
+  Input,
+  Label,
+  PageHeader,
+  SaveButtonGroup,
+  useInlineStatus,
+} from '@endora-commerce/admin-kit/ui';
+import { AssetFieldPicker, ContentLanguageTabs, ScopePicker, UnsavedChangesHint, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import { isDraftEqual } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { PageBuilderEditor } from '@endora-commerce/mod-cms/admin-ui';
 import {
@@ -11,6 +23,7 @@ import {
   usePageBuilderEditorSettingsPanel,
 } from '@endora-commerce/page-builder-admin';
 import { blogClient } from '../api/blog-client.js';
+import { UrlKeysPanel } from '../components/UrlKeysPanel.js';
 import { blogEditorProblem, type BlogEditorProblem } from '../components/editor-validation.js';
 
 interface FormState {
@@ -21,6 +34,38 @@ interface FormState {
   metaDescription: string;
   metaKeywords: string;
   mainImageAssetId: string;
+}
+
+/** The fields a category holds per language. */
+type LanguageFields = Pick<FormState, 'name' | 'metaTitle' | 'metaDescription' | 'metaKeywords'>;
+
+/** A language's fields as last saved (the name falls back to English for display). */
+function savedFields(category: BlogCategoryDetail, language: string): LanguageFields {
+  return {
+    name: pickValue(category.name, language) || pickValue(category.name, 'en-US'),
+    metaTitle: pickValue(category.metaTitle, language),
+    metaDescription: pickValue(category.metaDescription, language),
+    metaKeywords: pickValue(category.metaKeywords, language),
+  };
+}
+
+/** The whole form as `category` was last saved, in `language` (issue #1461: what `dirty` compares against). */
+function savedForm(category: BlogCategoryDetail, language: string): FormState {
+  return {
+    slug: category.slug,
+    enabled: category.enabled,
+    mainImageAssetId: category.mainImageAssetId ?? '',
+    ...savedFields(category, language),
+  };
+}
+
+/** Same channels and languages, in any order. */
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value) => b.includes(value));
+}
+
+function languageFieldsOf(form: FormState): LanguageFields {
+  return { name: form.name, metaTitle: form.metaTitle, metaDescription: form.metaDescription, metaKeywords: form.metaKeywords };
 }
 
 const blankForm: FormState = {
@@ -76,25 +121,25 @@ export function BlogCategoryEditor(): ReactNode {
   // request is sent only then, so saving a slug does not rewrite an untouched
   // description.
   const [descriptionDirty, setDescriptionDirty] = useState(false);
+  /**
+   * The unsaved edits of the languages not on screen — their fields when changed and
+   * their description when touched — kept across a language switch and saved
+   * together with the language on screen.
+   */
+  const [stash, setStash] = useState<Record<string, { fields?: LanguageFields; description?: Data }>>({});
   const [error, setError] = useState<string | null>(null);
   // Which field a refused save was about, so the field itself says so.
   const [problem, setProblem] = useState<BlogEditorProblem | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  // The result of a save, said beside the Save button (InlineStatus, not a banner; issue #1512).
+  const status = useInlineStatus();
   const [saving, setSaving] = useState(false);
 
   const reloadFormFromCategory = useCallback(
     (loaded: BlogCategoryDetail, language: string | null) => {
       const lang = language ?? loaded.languages[0] ?? 'en-US';
-      setForm({
-        name: pickValue(loaded.name, lang) || pickValue(loaded.name, 'en-US'),
-        slug: loaded.slug,
-        enabled: loaded.enabled,
-        metaTitle: pickValue(loaded.metaTitle, lang),
-        metaDescription: pickValue(loaded.metaDescription, lang),
-        metaKeywords: pickValue(loaded.metaKeywords, lang),
-        mainImageAssetId: loaded.mainImageAssetId ?? '',
-      });
+      setForm(savedForm(loaded, lang));
       setParentId(loaded.parentId);
+      setStash({});
     },
     [],
   );
@@ -133,20 +178,36 @@ export function BlogCategoryEditor(): ReactNode {
   }, [isNew]);
 
   /**
-   * Another language's fields and description, read from the category as it
-   * was last saved. Done where the language is chosen rather than in an effect
-   * over `category`, so a save that answers with a new `category` never puts
-   * the stored description back under the one being edited.
+   * Another language's fields and description: its unsaved edits when it has any,
+   * else what was last saved. The language being left keeps its own unsaved edits in
+   * the stash; the fields every language shares are not touched. Done where the
+   * language is chosen rather than in an effect over `category`, so a save that
+   * answers with a new `category` never puts the stored description back under the
+   * one being edited.
    */
   const switchLanguage = useCallback(
     (language: string) => {
+      const leaving = activeLanguage;
       setActiveLanguage(language);
       if (!category) return;
-      reloadFormFromCategory(category, language);
-      setDraftDescription(descriptionFor(category, language));
-      setDescriptionDirty(false);
+      const next = { ...stash };
+      if (leaving && leaving !== language) {
+        const fields = languageFieldsOf(form);
+        const changed = JSON.stringify(fields) !== JSON.stringify(savedFields(category, leaving));
+        const kept = { ...next[leaving] };
+        if (changed) kept.fields = fields;
+        else delete kept.fields;
+        if (descriptionDirty && draftDescription) kept.description = draftDescription;
+        if (kept.fields || kept.description) next[leaving] = kept;
+        else delete next[leaving];
+      }
+      const arriving = next[language];
+      setStash(next);
+      setForm((f) => ({ ...f, ...(arriving?.fields ?? savedFields(category, language)) }));
+      setDraftDescription(arriving?.description ?? descriptionFor(category, language));
+      setDescriptionDirty(Boolean(arriving?.description));
     },
-    [category, reloadFormFromCategory],
+    [activeLanguage, category, descriptionDirty, draftDescription, form, stash],
   );
 
   const refuse = useCallback(
@@ -160,14 +221,11 @@ export function BlogCategoryEditor(): ReactNode {
     [settingsPanel],
   );
 
-  const create = async (): Promise<void> => {
-    setInfo(null);
+  const create = async (): Promise<boolean> => {
+    status.clear();
     const found = blogEditorProblem({ ...form, ...scope });
     setProblem(found);
-    if (found) {
-      refuse(t(found));
-      return;
-    }
+    if (found) return refuse(t(found));
     setSaving(true);
     setError(null);
     const lang = activeLanguage ?? 'en-US';
@@ -185,8 +243,9 @@ export function BlogCategoryEditor(): ReactNode {
         ...(form.metaKeywords ? { metaKeywords: { [lang]: form.metaKeywords } } : {}),
       });
       navigate(`/blog/categories/${created.id}`);
+      return true;
     } catch (err) {
-      refuse(err instanceof Error ? err.message : String(err));
+      return refuse(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -199,49 +258,57 @@ export function BlogCategoryEditor(): ReactNode {
    */
   const save = async (): Promise<boolean> => {
     if (!category) return false;
-    setInfo(null);
+    status.clear();
     const found = blogEditorProblem({ ...form, ...scope });
     setProblem(found);
     if (found) return refuse(t(found));
     setSaving(true);
     setError(null);
     const lang = activeLanguage ?? 'en-US';
+    // Every language with unsaved fields, the one on screen included.
+    const fieldsByLanguage: Record<string, LanguageFields> = {
+      ...Object.fromEntries(
+        Object.entries(stash).flatMap(([language, kept]) => (kept.fields ? [[language, kept.fields]] : [])),
+      ),
+      [lang]: languageFieldsOf(form),
+    };
+    const perLanguage = (key: keyof LanguageFields): Record<string, string> =>
+      Object.fromEntries(Object.entries(fieldsByLanguage).map(([language, fields]) => [language, fields[key]]));
+    // Every touched description, the one on screen included.
+    const descriptions: Record<string, Data> = {
+      ...Object.fromEntries(
+        Object.entries(stash).flatMap(([language, kept]) => (kept.description ? [[language, kept.description]] : [])),
+      ),
+      ...(descriptionDirty && draftDescription ? { [lang]: draftDescription } : {}),
+    };
     try {
       let updated = await blogClient.patchCategory(category.id, {
-        name: { ...category.name, [lang]: form.name },
+        name: { ...category.name, ...perLanguage('name') },
         slug: form.slug,
         enabled: form.enabled,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
         mainImageAssetId: form.mainImageAssetId || null,
-        metaTitle: { ...(category.metaTitle ?? {}), [lang]: form.metaTitle },
-        metaDescription: {
-          ...(category.metaDescription ?? {}),
-          [lang]: form.metaDescription,
-        },
-        metaKeywords: {
-          ...(category.metaKeywords ?? {}),
-          [lang]: form.metaKeywords,
-        },
+        metaTitle: { ...(category.metaTitle ?? {}), ...perLanguage('metaTitle') },
+        metaDescription: { ...(category.metaDescription ?? {}), ...perLanguage('metaDescription') },
+        metaKeywords: { ...(category.metaKeywords ?? {}), ...perLanguage('metaKeywords') },
         version: category.version,
       });
       // The fields are stored from here on, whatever the description request does.
       setCategory(updated);
-      if (descriptionDirty && activeLanguage && draftDescription) {
+      if (Object.keys(descriptions).length > 0) {
         updated = await blogClient.putCategoryDescription(category.id, {
           description: {
             schema_version: updated.description?.schema_version ?? 1,
-            languages: {
-              ...(updated.description?.languages ?? {}),
-              [activeLanguage]: draftDescription,
-            },
+            languages: { ...(updated.description?.languages ?? {}), ...descriptions },
           },
           version: updated.version,
         });
         setCategory(updated);
         setDescriptionDirty(false);
       }
-      setInfo(t('messages.saved'));
+      setStash({});
+      status.show(t('messages.saved'));
       return true;
     } catch (err) {
       return refuse(err instanceof Error ? err.message : String(err));
@@ -257,12 +324,56 @@ export function BlogCategoryEditor(): ReactNode {
   const ready =
     !isNew && category !== null && activeLanguage !== null && draftDescription !== null;
 
+  /**
+   * Issue #1461 (CONTENT-02) — the draft against the last saved version: the
+   * language on screen (fields and description), every stashed language and
+   * the scope. A new category is dirty once anything was typed into it.
+   */
+  const dirty = ((): boolean => {
+    if (!category) {
+      return isNew && (!isDraftEqual(form, blankForm) || scope.salesChannelIds.length > 0);
+    }
+    const lang = activeLanguage ?? category.languages[0] ?? 'en-US';
+    if (!isDraftEqual(form, savedForm(category, lang))) return true;
+    if (!sameMembers(scope.salesChannelIds, category.salesChannelIds) || !sameMembers(scope.languages, category.languages)) return true;
+    if (descriptionDirty && draftDescription && !isDraftEqual(draftDescription, descriptionFor(category, lang))) return true;
+    return Object.entries(stash).some(
+      ([language, kept]) =>
+        (kept.fields !== undefined && !isDraftEqual(kept.fields, savedFields(category, language))) ||
+        (kept.description !== undefined && !isDraftEqual(kept.description, descriptionFor(category, language))),
+    );
+  })();
+
+  // A "Saved." stays only while nothing has changed since: the next edit clears it (issue #1512).
+  const { clear: clearStatus } = status;
+  useEffect(() => {
+    if (dirty) clearStatus();
+  }, [dirty, clearStatus]);
+
+  const discard = (): void => {
+    if (!category) {
+      setForm(blankForm);
+      setScope({ salesChannelIds: [], languages: ['en-US'] });
+      return;
+    }
+    const lang = activeLanguage ?? category.languages[0] ?? 'en-US';
+    setForm(savedForm(category, lang));
+    setScope({ salesChannelIds: category.salesChannelIds, languages: category.languages });
+    setStash({});
+    setDraftDescription(descriptionFor(category, lang));
+    setDescriptionDirty(false);
+  };
+
   return (
     <PageBuilderEditorLayout
       settingsPanel={settingsPanel}
+      dirty={dirty}
+      onSave={isNew ? create : save}
+      onDiscard={discard}
       header={
         <>
           <PageHeader
+            back={{ label: t('categoryTree.title'), to: '/blog/categories' }}
             title={
               isNew ? t('categoryEditor.title.new') : form.name || t('categoryEditor.title.edit')
             }
@@ -271,13 +382,13 @@ export function BlogCategoryEditor(): ReactNode {
                 ? t('categoryEditor.description.new')
                 : category?.isSystem
                   ? t('categoryEditor.description.system')
-                  : t('categoryEditor.description.default')
+                  : undefined
             }
             actions={
-              <div className="flex flex-wrap gap-2">
-                <Button asChild variant="outline">
-                  <Link to="/blog/categories">{t('categoryEditor.backToTree')}</Link>
-                </Button>
+              <div data-save-actions className="flex flex-wrap items-center gap-2">
+                <UnsavedChangesHint dirty={dirty} />
+                {/* Mounted before it has text, so a result is announced and not only shown (WCAG 4.1.3). */}
+                <InlineStatus {...status.props} />
                 {isNew ? (
                   <Button type="button" disabled={saving} onClick={() => void create()}>
                     {saving ? t('common.saving') : t('common.create')}
@@ -301,15 +412,6 @@ export function BlogCategoryEditor(): ReactNode {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          {/* A live region that is there before it has anything to say, so the
-              result of a save is announced and not only shown (WCAG 4.1.3). */}
-          <div role="status">
-            {info ? (
-              <Alert role="none">
-                <AlertDescription>{info}</AlertDescription>
-              </Alert>
-            ) : null}
-          </div>
         </>
       }
       canvasBar={
@@ -347,7 +449,7 @@ export function BlogCategoryEditor(): ReactNode {
               structuredClone(
                 language === activeLanguage && draftDescription
                   ? draftDescription
-                  : (descriptionFor(category, language) ?? emptyCanvas()),
+                  : (stash[language]?.description ?? descriptionFor(category, language) ?? emptyCanvas()),
               )
             }
             resource={{ type: 'blog_category', id: category.id }}
@@ -363,97 +465,101 @@ export function BlogCategoryEditor(): ReactNode {
       }
       settings={
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('sections.metadata')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label htmlFor="cat-name">{t('fields.namePerLanguage')}</Label>
-                <Input
-                  id="cat-name"
-                  aria-invalid={problem === 'validation.nameRequired' ? true : undefined}
-                  aria-describedby={problem === 'validation.nameRequired' ? 'cat-error' : undefined}
-                  value={form.name}
-                  onChange={(event) => setForm((f) => ({ ...f, name: event.target.value }))}
-                  placeholder={t('categoryEditor.namePlaceholder')}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cat-slug">{t('fields.slug')}</Label>
-                <Input
-                  id="cat-slug"
-                  aria-invalid={problem === 'validation.slugInvalid' ? true : undefined}
-                  aria-describedby={problem === 'validation.slugInvalid' ? 'cat-error' : undefined}
-                  value={form.slug}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, slug: event.target.value.toLowerCase() }))
-                  }
-                  className="font-mono"
-                  placeholder={t('categoryEditor.slugPlaceholder')}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cat-image">{t('fields.mainImageAssetId')}</Label>
-                <AssetFieldPicker
-                  id="cat-image"
-                  value={form.mainImageAssetId}
-                  onChange={(assetId) => setForm((f) => ({ ...f, mainImageAssetId: assetId }))}
-                  acceptMimePrefix="image/"
-                  allowUpload
-                />
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id="cat-enabled"
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={(event) => setForm((f) => ({ ...f, enabled: event.target.checked }))}
-                />
-                {t('fields.enabledStorefrontVisible')}
-              </label>
-            </CardContent>
-          </Card>
+          <EditorSection as="h3" title={t('sections.metadata')}>
+            <div className="space-y-1">
+              <Label htmlFor="cat-name">{t('fields.namePerLanguage')}</Label>
+              <Input
+                id="cat-name"
+                aria-invalid={problem === 'validation.nameRequired' ? true : undefined}
+                aria-describedby={problem === 'validation.nameRequired' ? 'cat-error' : undefined}
+                value={form.name}
+                onChange={(event) => setForm((f) => ({ ...f, name: event.target.value }))}
+                placeholder={t('categoryEditor.namePlaceholder')}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cat-slug">{t('fields.slug')}</Label>
+              <Input
+                id="cat-slug"
+                aria-invalid={problem === 'validation.slugInvalid' ? true : undefined}
+                aria-describedby={problem === 'validation.slugInvalid' ? 'cat-error' : undefined}
+                value={form.slug}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, slug: event.target.value.toLowerCase() }))
+                }
+                className="font-mono"
+                placeholder={t('categoryEditor.slugPlaceholder')}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cat-image">{t('fields.mainImageAssetId')}</Label>
+              <AssetFieldPicker
+                id="cat-image"
+                value={form.mainImageAssetId}
+                onChange={(assetId) => setForm((f) => ({ ...f, mainImageAssetId: assetId }))}
+                acceptMimePrefix="image/"
+                allowUpload
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                id="cat-enabled"
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(event) => setForm((f) => ({ ...f, enabled: event.target.checked }))}
+              />
+              {t('fields.enabledStorefrontVisible')}
+            </label>
+          </EditorSection>
 
-          <ScopePicker value={scope} onChange={setScope} />
+          {category && activeLanguage ? (
+            <UrlKeysPanel
+              kind="category"
+              entityId={category.id}
+              language={activeLanguage}
+              // The keys' save bumps the category's version; the form's edits stay.
+              onSaved={() =>
+                void blogClient
+                  .getCategory(category.id)
+                  .then((fresh) => setCategory((c) => (c ? { ...c, version: fresh.version } : fresh)))
+              }
+            />
+          ) : null}
 
-          <Card data-settings-group="seo">
-            <CardHeader>
-              <CardTitle className="text-base">{t('sections.seo')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label htmlFor="cat-meta-title">{t('fields.metaTitlePerLanguage')}</Label>
-                <Input
-                  id="cat-meta-title"
-                  value={form.metaTitle}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, metaTitle: event.target.value }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cat-meta-description">{t('fields.metaDescriptionPerLanguage')}</Label>
-                <Input
-                  id="cat-meta-description"
-                  value={form.metaDescription}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, metaDescription: event.target.value }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cat-meta-keywords">{t('fields.metaKeywordsPerLanguage')}</Label>
-                <Input
-                  id="cat-meta-keywords"
-                  value={form.metaKeywords}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, metaKeywords: event.target.value }))
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <ScopePicker value={scope} onChange={setScope} titleAs="h3" />
+
+          <EditorSection as="h3" title={t('sections.seo')} data-settings-group="seo">
+            <div className="space-y-1">
+              <Label htmlFor="cat-meta-title">{t('fields.metaTitlePerLanguage')}</Label>
+              <Input
+                id="cat-meta-title"
+                value={form.metaTitle}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, metaTitle: event.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cat-meta-description">{t('fields.metaDescriptionPerLanguage')}</Label>
+              <Input
+                id="cat-meta-description"
+                value={form.metaDescription}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, metaDescription: event.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cat-meta-keywords">{t('fields.metaKeywordsPerLanguage')}</Label>
+              <Input
+                id="cat-meta-keywords"
+                value={form.metaKeywords}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, metaKeywords: event.target.value }))
+                }
+              />
+            </div>
+          </EditorSection>
         </>
       }
     />

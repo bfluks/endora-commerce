@@ -1,4 +1,8 @@
-import { defineModuleManifest } from '@endora-commerce/contracts';
+import {
+  defineModuleManifest,
+  PROMOTION_HOOKABLE_ACTIONS,
+  toHookableActionDeclaration,
+} from '@endora-commerce/contracts';
 
 /**
  * Promotions module — rules engine (feature 045).
@@ -108,7 +112,18 @@ export const manifest = defineModuleManifest({
    * No `tokens`, for the same reason and from the same direction: there is no
    * raise site to put a `details.code` on the wire.
    */
-  errorCodes: [{ code: 'PROMOTION_INVALID' }],
+  errorCodes: [
+    { code: 'PROMOTION_INVALID' },
+    // Issue #628 (#86) — refusals that were `VALIDATION_FAILED` with a machine
+    // token glued to an English message. The usage limit is a buyer's: with a
+    // coupon applied, the token `with_coupon` picks the sentence naming it.
+    { code: 'PROMOTION_USAGE_LIMIT_REACHED', tokens: ['with_coupon'] },
+    { code: 'PROMOTION_COUPON_CODE_TAKEN' },
+    { code: 'PROMOTION_COUPON_SPACE_EXHAUSTED' },
+    { code: 'PROMOTION_RULE_NAME_TAKEN' },
+    { code: 'PROMOTION_RULE_IN_USE' },
+    { code: 'PROMOTION_ATTRIBUTE_NOT_ELIGIBLE' },
+  ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   permissions: [
@@ -137,6 +152,39 @@ export const manifest = defineModuleManifest({
       keywords: ['promotion', 'new', 'create', 'discount', 'coupon'],
       weight: 251,
     },
+    // Issue #516 (Principle XVI): the named-rule library is a sidebar screen
+    // of its own, on the read code like the promotion list.
+    {
+      id: 'open-promotion-rules',
+      labelKey: 'actions.openPromotionRules.label',
+      descriptionKey: 'actions.openPromotionRules.description',
+      icon: 'PercentDiamond',
+      targetRoute: '/promotion-rules',
+      requiredPermission: PROMOTION_PERMISSIONS.READ,
+      keywords: ['promotion', 'rules', 'rule', 'conditions'],
+      keywordsKey: 'actions.openPromotionRules.keywords',
+      weight: 252,
+    },
   ],
   activation: { settingCode: 'promotions.enabled', default: true },
+  /**
+   * The promotion and coupon writes an instance may take part in through a
+   * command hook (issue #1844, on `specs/176-command-hooks-outbox/`): the
+   * operator's create and edit of a promotion — the edit is also how one is
+   * switched on and off — and the two coupon creates, single and batch. The
+   * refs are published in `@endora-commerce/contracts`, so this list and every
+   * hook author name one constant, and each Command's tests hold it to its ref
+   * with `expectHookableCommand`.
+   *
+   * None of the four is reversible. Not declared: the promotion delete, the
+   * bulk coupon (de)activation and the named-rule writes, which are not
+   * Commands yet, and a coupon's redemption, which `orders`' placement records
+   * on its own transaction rather than through a Command of this module.
+   */
+  hookableActions: [
+    PROMOTION_HOOKABLE_ACTIONS.create,
+    PROMOTION_HOOKABLE_ACTIONS.update,
+    PROMOTION_HOOKABLE_ACTIONS.createCoupon,
+    PROMOTION_HOOKABLE_ACTIONS.generateCouponBatch,
+  ].map(toHookableActionDeclaration),
 });

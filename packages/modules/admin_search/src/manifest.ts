@@ -77,7 +77,7 @@ export const manifest = defineModuleManifest({
   id: 'admin_search',
   name: 'Global search',
   description:
-    'Find organizations, customers, orders, quote requests, sales opportunities, products and categories from the admin command palette, with configurable searchable fields.',
+    'Find organizations, customers, orders, quote requests, sales opportunities, products, categories, projects and tasks from the admin command palette, with configurable searchable fields.',
   version: '1.0.0',
   // The ports this module resolves: `requireAdmin` (`auth`), the caller's
   // permission list (`admin_roles`), server-side label resolution (`_i18n`) and
@@ -103,7 +103,8 @@ export const manifest = defineModuleManifest({
       descriptionKey: 'actions.openGlobalSearch.description',
       icon: 'Search',
       targetRoute: '/global-search',
-      keywords: ['search', 'find', 'records', 'szukaj', 'wyszukaj', 'rekordy'],
+      keywords: ['search', 'find', 'records'],
+      keywordsKey: 'actions.openGlobalSearch.keywords',
       weight: 50,
     },
     {
@@ -114,7 +115,8 @@ export const manifest = defineModuleManifest({
       targetRoute: '/global-search/configuration',
       // The code the configuration routes enforce (check:action-route-permissions).
       requiredPermission: 'admin_search:configure',
-      keywords: ['search', 'fields', 'configuration', 'pola', 'wyszukiwania', 'konfiguracja'],
+      keywords: ['search', 'fields', 'configuration'],
+      keywordsKey: 'actions.openConfiguration.keywords',
       weight: 900,
     },
   ],

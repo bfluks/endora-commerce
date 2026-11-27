@@ -8,7 +8,14 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import {
+  ADMIN_PREFERENCES_DEFAULTS,
+  federatedSignInErrorCodeSchema,
+  type AdminPreferences,
+  type FederatedSignInErrorCode,
+} from '@endora-commerce/contracts';
 import { ApiError, apiClient, onUnauthorized } from './api-client.js';
+import { AdminPreferencesProvider } from './admin-preferences/AdminPreferencesProvider.js';
 
 /**
  * Admin auth context. The session lives in the `b2b_admin_session` httpOnly
@@ -55,6 +62,10 @@ export interface AdminMe {
     status: 'active' | 'inactive';
     /** Feature 019 — Admin UI preferred language; null = no preference saved (default to English). */
     preferredLanguage: 'en' | 'pl' | null;
+    /** Feature 171 (US6) — the author avatar, a library asset id. */
+    avatarAssetId?: string | null;
+    /** Feature 171 (US6) — the author biography per language. */
+    bio?: Record<string, string> | null;
   };
   role: {
     id: string;
@@ -70,13 +81,45 @@ export interface AdminMe {
    * predates the field. Either way the consumer applies its own default.
    */
   idleLogoutMinutes?: number | null;
+  /**
+   * Feature 164 — the admin's own Admin UI preferences (FR-016). `null` when the
+   * server could not read them; absent from a backend that predates the field.
+   * A **fetched** session in either state opens with the defaults and saves
+   * nothing until a later load succeeds (FR-018). A session **seeded** through
+   * `initial` without the field is read as the defaults, available — the test
+   * that seeded it chose it.
+   */
+  preferences?: AdminPreferences | null;
 }
 
 interface AuthState {
   status: 'loading' | 'authenticated' | 'unauthenticated';
   me: AdminMe | null;
-  /** Last error from a login attempt, surfaced by LoginPage. */
+  /**
+   * Last error from a login attempt, surfaced by LoginPage: the backend's own
+   * sentence. `null` when the attempt failed without one — see
+   * `lastLoginReason`.
+   */
   lastLoginError: string | null;
+  /**
+   * Why the sign-in screen shows a notice, where it words it itself:
+   * `'session_expired'` for the notice set when a signed-in session answers
+   * 401; `'sign_in_failed'` / `'verification_failed'` for a password or code
+   * step that failed with no backend sentence to show (the network dropped, the
+   * answer was no error envelope), with `lastLoginError` left `null`. The kit
+   * holds no copy for these: the sign-in screen renders before any translation
+   * bundle can be fetched, so its words are the shell's pre-auth copy (issue
+   * #1481). `null` for every other message, so the title never has to be
+   * guessed from the text.
+   */
+  lastLoginReason: LoginErrorReason | null;
+  /**
+   * Issue #813 — the code a refused federated sign-in came back with
+   * (`/login?error=<code>`), for LoginPage to word from its own copy. Never the
+   * raw `?error=` value: a value that is not a `federatedSignInErrorCodeSchema`
+   * code arrives as `sign_in_failed`. Cleared by the next sign-in attempt.
+   */
+  federatedSignInError: FederatedSignInErrorCode | null;
   /** Feature 042 — set when login returned `mfaRequired`; LoginPage then
    *  renders the second-step code screen. */
   mfaChallengeId: string | null;
@@ -90,28 +133,50 @@ interface AuthContextValue extends AuthState {
   cancelMfa(): void;
   logout(): Promise<void>;
   hasPermission(code: string): boolean;
+  /**
+   * Issue #458 — whether any one of `codes` is held; `false` for an empty list.
+   *
+   * The any-of a screen gates a control on. Write the codes as a literal array
+   * at the call: the permission inventory reads that literal, so every member is
+   * checked for grantability and judged against the others by the foreign-gate
+   * sweep — `codes.some((code) => hasPermission(code))` hides all of them.
+   */
+  hasAnyPermission(codes: readonly string[]): boolean;
   refresh(): Promise<void>;
 }
+
+/** See {@link AuthState.lastLoginReason}. */
+export type LoginErrorReason = 'session_expired' | 'sign_in_failed' | 'verification_failed';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 /**
  * What a federated sign-in left in the address when it came back to the Admin
- * UI: a pending second-step challenge (`#mfa-challenge=<id>`), or the sentence a
- * refused attempt was answered with (`/login?error=<sentence>`). Both are taken
+ * UI: a pending second-step challenge (`#mfa-challenge=<id>`), or the code a
+ * refused attempt was answered with (`/login?error=<code>`). Both are taken
  * out of the address bar as soon as they are read — the challenge travels in
  * the fragment precisely because a fragment never reaches a server, and it
  * should not outlive the moment it is moved into memory either.
+ *
+ * Issue #813 — `?error=` is text anyone can put there with a crafted link, so
+ * only a `federatedSignInErrorCodeSchema` code is passed on. Any other value, a
+ * sentence an older backend sent included, is passed on as `sign_in_failed`:
+ * the screen still says the sign-in failed, and never prints what it was given.
  */
-function takeFederatedHandover(): { challengeId: string | null; error: string | null } {
+function takeFederatedHandover(): {
+  challengeId: string | null;
+  error: FederatedSignInErrorCode | null;
+} {
   if (typeof window === 'undefined') return { challengeId: null, error: null };
   const { hash, pathname, search } = window.location;
   const fragment = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
   const challengeId = fragment.get('mfa-challenge') || null;
   const query = new URLSearchParams(search);
-  const error = pathname.endsWith('/login') ? query.get('error') || null : null;
-  if (challengeId === null && error === null) return { challengeId: null, error: null };
-  if (error !== null) query.delete('error');
+  const raw = pathname.endsWith('/login') ? query.get('error') || null : null;
+  if (challengeId === null && raw === null) return { challengeId: null, error: null };
+  const error =
+    raw === null ? null : (federatedSignInErrorCodeSchema.safeParse(raw).data ?? 'sign_in_failed');
+  if (raw !== null) query.delete('error');
   const rest = query.toString();
   window.history.replaceState(
     window.history.state,
@@ -147,13 +212,17 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
       ? {
           status: 'loading',
           me: null,
-          lastLoginError: handover.error,
+          lastLoginError: null,
+          lastLoginReason: null,
+          federatedSignInError: handover.error,
           mfaChallengeId: handover.challengeId,
         }
       : {
           status: 'authenticated',
           me: initial,
           lastLoginError: null,
+          lastLoginReason: null,
+          federatedSignInError: null,
           mfaChallengeId: null,
         },
   );
@@ -164,15 +233,24 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const res = await apiClient.get<{ data: AdminMe }>('/api/v1/admin/me');
-      setState({ status: 'authenticated', me: res.data, lastLoginError: null, mfaChallengeId: null });
+      setState({
+        status: 'authenticated',
+        me: res.data,
+        lastLoginError: null,
+        lastLoginReason: null,
+        federatedSignInError: null,
+        mfaChallengeId: null,
+      });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         // Signed out — but a second step already under way (a federated
-        // sign-in's handover) and the sentence it came back with stay.
+        // sign-in's handover) and the refusal it came back with stay.
         setState((prev) => ({
           status: 'unauthenticated',
           me: null,
           lastLoginError: prev.lastLoginError,
+          lastLoginReason: prev.lastLoginReason,
+          federatedSignInError: prev.federatedSignInError,
           mfaChallengeId: challengeRef.current,
         }));
         return;
@@ -182,7 +260,14 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
       // (The `eslint-disable-next-line no-console` this line carried in
       // `admin/src` is redundant here: the kit's config allows `console.error`.)
       console.error('Failed to load /admin/me', err);
-      setState({ status: 'unauthenticated', me: null, lastLoginError: null, mfaChallengeId: null });
+      setState({
+        status: 'unauthenticated',
+        me: null,
+        lastLoginError: null,
+        lastLoginReason: null,
+        federatedSignInError: null,
+        mfaChallengeId: null,
+      });
     }
   }, []);
 
@@ -206,6 +291,8 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
                 status: 'unauthenticated',
                 me: null,
                 lastLoginError: 'Your session expired. Please sign in again.',
+                lastLoginReason: 'session_expired',
+                federatedSignInError: null,
                 mfaChallengeId: null,
               }
             : prev,
@@ -223,22 +310,34 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
         const data = res.data;
         if (data.status === 'mfaRequired') {
           challengeRef.current = data.challengeId ?? null;
-          setState((prev) => ({ ...prev, lastLoginError: null, mfaChallengeId: data.challengeId ?? null }));
+          setState((prev) => ({
+            ...prev,
+            lastLoginError: null,
+            lastLoginReason: null,
+            federatedSignInError: null,
+            mfaChallengeId: data.challengeId ?? null,
+          }));
           return;
         }
         if (data.status === 'mfaSetupRequired') {
           setState((prev) => ({
             ...prev,
             lastLoginError:
-              'Two-factor authentication is required for your account. Please contact a platform administrator to finish setup.',
+              'Two-step verification is required for your account. Please contact a platform administrator to finish setup.',
+            lastLoginReason: null,
+            federatedSignInError: null,
           }));
           return;
         }
         await refresh();
       } catch (err) {
-        const message =
-          err instanceof ApiError ? err.envelope.error.message : 'Sign-in failed.';
-        setState((prev) => ({ ...prev, lastLoginError: message }));
+        const worded = err instanceof ApiError;
+        setState((prev) => ({
+          ...prev,
+          lastLoginError: worded ? err.envelope.error.message : null,
+          lastLoginReason: worded ? null : 'sign_in_failed',
+          federatedSignInError: null,
+        }));
       }
     },
     [refresh],
@@ -254,12 +353,22 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
           { challengeId, code },
         );
         challengeRef.current = null;
-        setState((prev) => ({ ...prev, mfaChallengeId: null, lastLoginError: null }));
+        setState((prev) => ({
+          ...prev,
+          mfaChallengeId: null,
+          lastLoginError: null,
+          lastLoginReason: null,
+          federatedSignInError: null,
+        }));
         await refresh();
       } catch (err) {
-        const message =
-          err instanceof ApiError ? err.envelope.error.message : 'Verification failed.';
-        setState((prev) => ({ ...prev, lastLoginError: message }));
+        const worded = err instanceof ApiError;
+        setState((prev) => ({
+          ...prev,
+          lastLoginError: worded ? err.envelope.error.message : null,
+          lastLoginReason: worded ? null : 'verification_failed',
+          federatedSignInError: null,
+        }));
       }
     },
     [refresh],
@@ -267,7 +376,13 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
 
   const cancelMfa = useCallback((): void => {
     challengeRef.current = null;
-    setState((prev) => ({ ...prev, mfaChallengeId: null, lastLoginError: null }));
+    setState((prev) => ({
+      ...prev,
+      mfaChallengeId: null,
+      lastLoginError: null,
+      lastLoginReason: null,
+      federatedSignInError: null,
+    }));
   }, []);
 
   const logout = useCallback(async (): Promise<void> => {
@@ -277,8 +392,28 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
       // Ignore logout errors — we still drop local state so the user
       // returns to the login page.
     }
-    setState({ status: 'unauthenticated', me: null, lastLoginError: null, mfaChallengeId: null });
+    setState({
+      status: 'unauthenticated',
+      me: null,
+      lastLoginError: null,
+      lastLoginReason: null,
+      federatedSignInError: null,
+      mfaChallengeId: null,
+    });
   }, []);
+
+  // Feature 164 — the store the preference hooks read. Seeded sessions without
+  // the field read as the defaults; fetched ones as unavailable (see `AdminMe`).
+  const [seeded] = useState(() => initial !== undefined);
+  const signedIn = state.status === 'authenticated' ? state.me : null;
+  const preferences =
+    signedIn === null
+      ? null
+      : signedIn.preferences === undefined
+        ? seeded
+          ? ADMIN_PREFERENCES_DEFAULTS
+          : null
+        : signedIn.preferences;
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -292,11 +427,22 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
         const perms = state.me?.permissions ?? [];
         return perms.includes('*') || perms.includes(code);
       },
+      hasAnyPermission: (codes: readonly string[]): boolean => {
+        const perms = state.me?.permissions ?? [];
+        if (codes.length === 0) return false;
+        return perms.includes('*') || codes.some((code) => perms.includes(code));
+      },
     }),
     [state, login, verifyMfa, cancelMfa, logout, refresh],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AdminPreferencesProvider adminUserId={signedIn?.adminUser.id ?? null} initial={preferences}>
+        {children}
+      </AdminPreferencesProvider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {

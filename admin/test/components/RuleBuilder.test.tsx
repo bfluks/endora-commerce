@@ -1,12 +1,20 @@
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PromotionRule } from '@endora-commerce/contracts';
 import {
   RuleBuilder,
   type RuleBuilderBuiltinField,
   type StructuralRule,
-} from '../../../packages/admin-shell/src/components/rule-builder/RuleBuilder';
+} from '@endora-commerce/admin-kit/components';
+import { renderWithI18n } from '../helpers/render-with-i18n';
+import { shippedCoreBundle } from '../helpers/core-bundle';
+
+// The component's own copy comes from the `core` bundle since issue #1433, so
+// every case renders it under the bundle as it ships.
+const render = (ui: ReactElement): ReturnType<typeof renderWithI18n> =>
+  renderWithI18n(ui, shippedCoreBundle('en'));
 
 describe('RuleBuilder', () => {
   it('converts the match-all node into a condition on "Add condition"', async () => {
@@ -68,10 +76,13 @@ describe('RuleBuilder', () => {
       );
     });
 
-    it('still seeds `cartTotal >= 0` and still says "Matches all carts."', async () => {
+    it('still seeds `cartTotal >= 0`, and says everything matches rather than "all carts"', async () => {
+      // "Matches all carts." was promotion copy shown on every rule editor
+      // (product feeds, forms); the kit's default says what an empty rule means
+      // anywhere (issue #1433, SHELL-07).
       const onChange = vi.fn();
       render(<RuleBuilder value={{ kind: 'all' }} onChange={onChange} />);
-      expect(screen.getByText('Matches all carts.')).toBeTruthy();
+      expect(screen.getByText('No conditions: everything matches.')).toBeTruthy();
 
       await userEvent.click(screen.getByRole('button', { name: /add condition/i }));
       expect(onChange.mock.calls[0]![0]).toEqual({
@@ -250,5 +261,143 @@ describe('RuleBuilder', () => {
       );
       expect(screen.getByDisplayValue('red')).toBeTruthy();
     });
+  });
+
+  /**
+   * Issue #1433 (DS-16) and SHELL-07: every word the component draws itself
+   * was an English literal, so a Polish operator editing a promotion, a feed's
+   * criteria or a form condition read English, and the icon-only remove button
+   * had no accessible name at all.
+   */
+  describe('its own copy, in the operator\'s language', () => {
+    const group: StructuralRule = {
+      kind: 'group',
+      op: 'AND',
+      children: [
+        { kind: 'condition', field: { kind: 'builtin', key: 'cartTotal' }, op: 'gte', values: [1] },
+        { kind: 'condition', field: { kind: 'builtin', key: 'cartTotal' }, op: 'lte', values: [9] },
+      ],
+    };
+
+    it('renders the kit defaults from the Polish bundle', () => {
+      const pl = shippedCoreBundle('pl');
+      renderWithI18n(<RuleBuilder value={{ kind: 'all' }} onChange={vi.fn()} />, pl, { language: 'pl' });
+      expect(screen.getByText(pl.core!['ruleBuilder.matchAll']!)).toBeTruthy();
+      expect(screen.getByRole('button', { name: pl.core!['ruleBuilder.add.condition']! })).toBeTruthy();
+      expect(screen.getByRole('button', { name: pl.core!['ruleBuilder.add.group']! })).toBeTruthy();
+      expect(screen.queryByText(/add condition|add group|matches all carts/i)).toBeNull();
+    });
+
+    it('renders a group in Polish, with no English left in it', () => {
+      const pl = shippedCoreBundle('pl');
+      const { container } = renderWithI18n(<RuleBuilder value={group} onChange={vi.fn()} />, pl, {
+        language: 'pl',
+      });
+      const english = /\b(ALL of|ANY of|the following conditions|Condition|Group|Cart & relationship|comma-separated)\b/;
+      expect(container.textContent).not.toMatch(english);
+      const optgroup = container.querySelector('optgroup')?.getAttribute('label');
+      expect(optgroup).toBe(pl.core!['ruleBuilder.group.builtin']);
+      const placeholders = [...container.querySelectorAll('input')].map((i) => i.placeholder);
+      expect(placeholders).not.toContain('value(s), comma-separated');
+    });
+
+    it('names every icon-only remove button', () => {
+      render(<RuleBuilder value={group} onChange={vi.fn()} />);
+      const removeFromGroup = screen.getAllByRole('button', { name: 'Remove from group' });
+      expect(removeFromGroup).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: 'Remove condition' })).toHaveLength(2);
+      for (const button of screen.getAllByRole('button')) {
+        expect(button.getAttribute('aria-label') ?? button.textContent?.trim()).toBeTruthy();
+      }
+    });
+
+    it('names the field, operator and group selects', () => {
+      render(<RuleBuilder value={group} onChange={vi.fn()} />);
+      expect(screen.getByRole('combobox', { name: 'How conditions combine' })).toBeTruthy();
+      expect(screen.getAllByRole('combobox', { name: 'Field' })).toHaveLength(2);
+      expect(screen.getAllByRole('combobox', { name: 'Operator' })).toHaveLength(2);
+    });
+
+    it('still lets a caller override any of it', () => {
+      render(
+        <RuleBuilder
+          value={group}
+          onChange={vi.fn()}
+          labels={{ removeCondition: 'Drop rule', groupAll: 'Every one of' }}
+        />,
+      );
+      expect(screen.getAllByRole('button', { name: 'Drop rule' })).toHaveLength(2);
+      const op = screen.getByRole('combobox', { name: 'How conditions combine' });
+      expect(within(op).getByRole('option', { name: 'Every one of' })).toBeTruthy();
+    });
+  });
+});
+
+/**
+ * Issue #1503 (UX audit SHELL-22, K3; the DS-03 rule, #1437) — the builder is a section of the
+ * card it sits in, not a bordered box inside it. Its controls keep their own borders (they are
+ * fields); a group's children are rows divided by a rule, not a fenced or ruled-off column.
+ */
+describe('RuleBuilder — a section of its host by default (issue #1503, SHELL-22)', () => {
+  const GROUP: PromotionRule = {
+    kind: 'group',
+    op: 'AND',
+    children: [
+      { kind: 'condition', field: { kind: 'builtin', key: 'cartTotal' }, op: 'gte', values: [100] },
+      { kind: 'condition', field: { kind: 'builtin', key: 'cartTotal' }, op: 'lte', values: [900] },
+    ],
+  };
+
+  it('draws no outer border and no card, and has no heading of its own', () => {
+    const { container } = render(<RuleBuilder value={GROUP} onChange={vi.fn()} />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className.split(/\s+/)).not.toContain('border');
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    expect(container.querySelector('h2, h3')).toBeNull();
+  });
+
+  it('lists a group’s children as rows divided by a rule, with no left rule or box around them', () => {
+    const { container } = render(<RuleBuilder value={GROUP} onChange={vi.fn()} />);
+    const rows = container.querySelector('[data-slot="rule-group-children"]') as HTMLElement;
+    expect(rows).not.toBeNull();
+    const classes = rows.className.split(/\s+/);
+    expect(classes).toContain('divide-y');
+    expect(classes).not.toContain('border-l-2');
+    expect(classes).not.toContain('border');
+    // The controls inside keep their borders: they are fields.
+    expect(within(rows).getAllByDisplayValue(/100|900/)).toHaveLength(2);
+  });
+
+  it('takes `chrome="card"` where it stands alone, titled by the kit or by the caller', () => {
+    const kit = render(<RuleBuilder value={{ kind: 'all' }} onChange={vi.fn()} chrome="card" />);
+    const card = kit.container.querySelector('[data-slot="card"]');
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByRole('heading', { level: 2, name: 'Conditions' })).toBeTruthy();
+    kit.unmount();
+
+    const own = render(
+      <RuleBuilder value={{ kind: 'all' }} onChange={vi.fn()} chrome="card" title="Who qualifies" titleAs="h3" />,
+    );
+    expect(screen.getByRole('heading', { level: 3, name: 'Who qualifies' })).toBeTruthy();
+    own.unmount();
+  });
+
+  it('names its card heading in Polish too', () => {
+    renderWithI18n(<RuleBuilder value={{ kind: 'all' }} onChange={vi.fn()} chrome="card" />, shippedCoreBundle('pl'));
+    expect(screen.getByRole('heading', { level: 2, name: 'Warunki' })).toBeTruthy();
+  });
+
+  it('is mounted without a frame by every host, each of which already places it in a card', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    for (const host of [
+      'promotions/src/admin/pages/PromotionEditPage.tsx',
+      'promotions/src/admin/pages/PromotionRulesPage.tsx',
+      'product_feeds/src/admin/components/FeedCriteriaPanel.tsx',
+    ]) {
+      const source = readFileSync(resolve(process.cwd(), '../packages/modules', host), 'utf8');
+      expect(source, host).toMatch(/<RuleBuilder[\s<]/);
+      expect(source, host).not.toMatch(/<RuleBuilder[^>]*chrome="card"/);
+    }
   });
 });

@@ -287,6 +287,8 @@ export function StatusTransitionGraph({
         <Button
           variant={connectMode ? 'default' : 'outline'}
           size="sm"
+          // The state is announced, not only drawn (SC 1.4.1, 4.1.2; issue #1445).
+          aria-pressed={connectMode}
           onClick={(): void => (connectMode ? exitConnectMode() : setConnectMode(true))}
         >
           <Workflow />
@@ -295,10 +297,11 @@ export function StatusTransitionGraph({
         {connectMode ? (
           <span className="text-sm text-muted-foreground">{connectHint}</span>
         ) : null}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1" role="group" aria-label={t('orderStatusConfig.graph.layout')}>
           <Button
             variant={layout === 'none' ? 'default' : 'outline'}
             size="sm"
+            aria-pressed={layout === 'none'}
             onClick={(): void => setLayout('none')}
           >
             {t('orderStatusConfig.graph.layoutNone')}
@@ -306,6 +309,7 @@ export function StatusTransitionGraph({
           <Button
             variant={layout === 'force' ? 'default' : 'outline'}
             size="sm"
+            aria-pressed={layout === 'force'}
             onClick={(): void => setLayout('force')}
           >
             {t('orderStatusConfig.graph.layoutForce')}
@@ -313,6 +317,7 @@ export function StatusTransitionGraph({
           <Button
             variant={layout === 'circular' ? 'default' : 'outline'}
             size="sm"
+            aria-pressed={layout === 'circular'}
             onClick={(): void => setLayout('circular')}
           >
             {t('orderStatusConfig.graph.layoutCircular')}
@@ -357,8 +362,8 @@ export function StatusTransitionGraph({
         <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/40 px-3 py-2">
           <span className="text-sm">
             {t('orderStatusConfig.graph.selected')}:{' '}
-            <span className="font-mono text-xs">
-              {selected.fromStatusCode} → {selected.toStatusCode}
+            <span className="font-medium">
+              {labelOf(selected.fromStatusCode)} → {labelOf(selected.toStatusCode)}
             </span>
           </span>
           <div className="ml-auto flex items-center gap-1">
@@ -389,7 +394,7 @@ export function StatusTransitionGraph({
             <option value="">—</option>
             {statuses.map((s) => (
               <option key={s.code} value={s.code}>
-                {s.code}
+                {labelOf(s.code)}
               </option>
             ))}
           </Select>
@@ -400,12 +405,14 @@ export function StatusTransitionGraph({
             <option value="">—</option>
             {statuses.map((s) => (
               <option key={s.code} value={s.code}>
-                {s.code}
+                {labelOf(s.code)}
               </option>
             ))}
           </Select>
         </div>
+        {/* In-editor Add is outline: the view's one primary is not this form's (issue #1441, DS-07). */}
         <Button
+          variant="outline"
           onClick={(): void => {
             tryAdd(transFrom, transTo);
             setTransFrom('');

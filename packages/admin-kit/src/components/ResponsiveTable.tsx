@@ -32,6 +32,15 @@ export interface ResponsiveTableProps<T> {
   onRowClick?: (row: T) => void;
   /** Force horizontal scroll wrapper instead of cards on mobile. */
   mode?: 'auto' | 'table-scroll';
+  /** The table's accessible name, where the page heading alone does not say what it lists. */
+  label?: string;
+  /**
+   * Whether a row is selected, for a list with row selection (issue #1749):
+   * the row — or the card on a phone — carries `data-state="selected"`, which
+   * the kit `TableRow` draws in the selected tint. The row's checked checkbox
+   * stays what says so; the tint is never the only sign.
+   */
+  isRowSelected?: (row: T) => boolean;
 }
 
 export function ResponsiveTable<T>(props: ResponsiveTableProps<T>): ReactNode {
@@ -43,7 +52,10 @@ export function ResponsiveTable<T>(props: ResponsiveTableProps<T>): ReactNode {
     renderActions,
     onRowClick,
     mode = 'auto',
+    label,
+    isRowSelected,
   } = props;
+  const selectedState = (row: T): 'selected' | undefined => (isRowSelected?.(row) ? 'selected' : undefined);
   const tier = useViewportTier();
   const primaryColumns = columns.filter((c) => c.primary);
   const displayColumns: ResponsiveColumn<T>[] =
@@ -59,7 +71,7 @@ export function ResponsiveTable<T>(props: ResponsiveTableProps<T>): ReactNode {
 
   if (tier === 'desktop' || mode === 'table-scroll') {
     const table = (
-      <Table>
+      <Table aria-label={label}>
         <TableHeader>
           <TableRow>
             {columns.map((col) => (
@@ -74,6 +86,7 @@ export function ResponsiveTable<T>(props: ResponsiveTableProps<T>): ReactNode {
           {data.map((row) => (
             <TableRow
               key={keyExtractor(row)}
+              data-state={selectedState(row)}
               className={onRowClick ? 'cursor-pointer' : undefined}
               onClick={onRowClick ? (): void => onRowClick(row) : undefined}
             >
@@ -101,6 +114,7 @@ export function ResponsiveTable<T>(props: ResponsiveTableProps<T>): ReactNode {
         <div
           key={keyExtractor(row)}
           className="b2b-responsive-card"
+          data-state={selectedState(row)}
           role={onRowClick ? 'button' : undefined}
           tabIndex={onRowClick ? 0 : undefined}
           onClick={onRowClick ? (): void => onRowClick(row) : undefined}

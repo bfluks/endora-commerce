@@ -12,12 +12,10 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { overrideAssetSetting } from '../../helpers/crm-attachment-upload.js';
 
-import { Setting } from '@endora-commerce/platform/kernel';
 
-import { SettingValue } from '@endora-commerce/platform/kernel';
 
-import { SalesChannel } from '@endora-commerce/platform/kernel';
 
 
 /**
@@ -60,21 +58,17 @@ function buildMultipart(parts: Array<{ name: string; filename?: string; mime?: s
 describe('admin asset mutate (T036)', () => {
   let h: BackendServerHandle;
   let baseDir: string;
+  let restoreBaseDir: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     h = await setupBackendServer();
     baseDir = await mkdtemp(join(tmpdir(), 'assets-library-mutate-'));
-    const em = h.em();
-    const setting = await em.findOneOrFail(Setting, { code: 'assets.local.base_dir' });
-    const channel = await em.findOneOrFail(SalesChannel, { code: 'default' });
-    const existing = await em.findOne(SettingValue, { setting });
-    if (existing) existing.value = baseDir;
-    else em.create(SettingValue, { setting, salesChannel: channel, value: baseDir });
-    await em.flush();
+    restoreBaseDir = await overrideAssetSetting(h, 'assets.local.base_dir', baseDir);
     h.assetsLibrary.adapters.invalidate();
   });
 
   afterAll(async () => {
+    await restoreBaseDir?.();
     await teardownBackendServer(h);
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -109,7 +103,7 @@ describe('admin asset mutate (T036)', () => {
     const d = (r.json() as { data: { filename: string; label: string | null } }).data;
     expect(d.filename).toBe('renamed.png');
     expect(d.label).toBe('Hero');
-    await h.em().removeAndFlush(await h.em().findOneOrFail(Asset, { id }));
+    await h.em().remove(await h.em().findOneOrFail(Asset, { id })).flush();
   });
 
   it('flips visibility from public to private', async () => {
@@ -124,7 +118,7 @@ describe('admin asset mutate (T036)', () => {
     expect(r.statusCode).toBe(200);
     const d = (r.json() as { data: { visibility: string } }).data;
     expect(d.visibility).toBe('private');
-    await h.em().removeAndFlush(await h.em().findOneOrFail(Asset, { id }));
+    await h.em().remove(await h.em().findOneOrFail(Asset, { id })).flush();
   });
 
   it('returns 404 ASSET_NOT_FOUND for an unknown id', async () => {
@@ -152,7 +146,7 @@ describe('admin asset mutate (T036)', () => {
       storageBackend: 'legacy',
       visibility: 'public',
     });
-    await em.persistAndFlush(legacy);
+    await em.persist(legacy).flush();
     try {
       const r = await h.app.inject({
         method: 'PATCH',
@@ -166,7 +160,7 @@ describe('admin asset mutate (T036)', () => {
         error: { code: 'ASSET_LEGACY_LOCATOR_CANNOT_HARDEN' },
       });
     } finally {
-      await em.removeAndFlush(legacy);
+      await em.remove(legacy).flush();
     }
   });
 });

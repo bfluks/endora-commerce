@@ -1,4 +1,6 @@
-import { Cart, CustomerAddress } from '../../helpers/package-entities.js';
+import { randomUUID } from 'node:crypto';
+import type { AddressServicePort } from '@endora-commerce/contracts';
+import { Cart } from '../../helpers/package-entities.js';
 import { AdminRole, AdminUser, Organization, OrganizationSalesRepAssignment } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -36,9 +38,11 @@ import { ADMIN_COOKIES } from '../../helpers/test-actors.js';
  *    stated premise ("customer-scoped entities carry no org column") is simply
  *    false for it and the constraint is expressible with `orgConstraintFor()`,
  *    the helper `derived-scope.ts` exists to provide.
- *  - **customer addresses** — `CustomerAddress` carries no org column, but its
- *    owner `CustomerAccount` is `@OrgScoped`; the route already reads the
- *    account and simply does not let the answer decide anything.
+ *  - **customer addresses** — the admin card reads the customer's Organization
+ *    book (`specs/173-b2c-address-book-merge/` OD-1) through the customer's
+ *    `@OrgScoped` account, so a customer outside the scope reads as absent and
+ *    discloses no book. The personal book this used to seed through
+ *    `CustomerAddress` is retired, and its admin write with it (#798).
  *
  * Every assertion runs in both directions: a guard that refuses everybody
  * passes the out-of-scope half on its own. The writes assert the **stored
@@ -49,10 +53,12 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
   let repCookie: string;
   let assignedOrgId: string;
   let foreignOrgId: string;
+  const OTHER_REP_ID = randomUUID();
 
   const carts: Record<string, string> = {};
   const customers: Record<string, string> = {};
   const addresses: Record<string, string> = {};
+  let addressPort: AddressServicePort;
 
   const stamp = Date.now();
 
@@ -73,6 +79,8 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
   beforeAll(async () => {
     h = await setupBackendServer();
     const em = h.em();
+    addressPort = (h.container.cradle as unknown as { addressServicePort: AddressServicePort })
+      .addressServicePort;
 
     // The admin scope resolution keys on this exact role code, so the fixture
     // cannot use a code of its own. Another file in the run may have created it
@@ -89,7 +97,7 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
     } else {
       role.permissions = Array.from(new Set([...role.permissions, ...grants]));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
 
     const rep = em.create(AdminUser, {
       email: `customer-scope-rep-${stamp}@audit.local`,
@@ -100,16 +108,19 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
     });
     const assigned = newOrganization(em, 'Customer scope assigned org', 'A');
     const foreign = newOrganization(em, 'Customer scope foreign org', 'F');
-    await em.persistAndFlush([rep, assigned, foreign]);
+    await em.persist([rep, assigned, foreign]).flush();
     assignedOrgId = assigned.id;
     foreignOrgId = foreign.id;
 
-    await em.persistAndFlush(
+    await em.persist([
       em.create(OrganizationSalesRepAssignment, {
         organizationId: assignedOrgId,
         adminUserId: rep.id,
       }),
-    );
+      // #305 — the foreign organization is another representative's: an
+      // unassigned organization is in every representative's reach.
+      em.create(OrganizationSalesRepAssignment, { organizationId: foreignOrgId, adminUserId: OTHER_REP_ID }),
+    ]).flush();
 
     for (const key of ['own', 'foreign'] as const) {
       const organizationId = key === 'own' ? assignedOrgId : foreignOrgId;
@@ -120,20 +131,20 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
         firstName: 'Scope',
         lastName: key,
       });
-      await em.persistAndFlush(account);
+      await em.persist(account).flush();
       customers[key] = account.id;
 
-      const address = em.create(CustomerAddress, {
-        customerAccountId: account.id,
+      // The Organization book — the one book a customer has — written through
+      // `addresses`' published service, as `organizations` writes it.
+      const address = await addressPort.createAddress(organizationId, {
         kind: 'delivery',
         recipientName: `Recipient ${key} ${stamp}`,
-        street: `ul. Prywatna ${stamp}`,
+        street: `ul. Firmowa ${stamp}`,
         city: 'Warszawa',
         postalCode: '00-100',
         country: 'PL',
         phone: `+48-${key}-${stamp}`,
       });
-      await em.persistAndFlush(address);
       addresses[key] = address.id;
 
       // One cart per read assertion and one per write, so the reject test
@@ -147,7 +158,7 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
           // fixture starts substituting for a row it never created.
           status: 'active',
         });
-        await em.persistAndFlush(cart);
+        await em.persist(cart).flush();
         carts[`${key}-${purpose}`] = cart.id;
       }
     }
@@ -157,6 +168,7 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
   });
 
   afterAll(async () => {
+    await h.em().getConnection().execute('delete from organization_sales_rep_assignments where admin_user_id = ?', [OTHER_REP_ID]);
     delete ADMIN_COOKIES[repCookie];
     await teardownBackendServer(h);
   });
@@ -164,8 +176,13 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
   const cartStatus = async (id: string): Promise<string | null> =>
     (await h.em().findOne(Cart, { id }))?.status ?? null;
 
-  const addressCount = async (customerAccountId: string): Promise<number> =>
-    h.em().count(CustomerAddress, { customerAccountId });
+  const addressCount = async (organizationId: string): Promise<number> =>
+    (await addressPort.list(organizationId)).length;
+
+  const organizationRecipients = (body: string): string[] =>
+    (JSON.parse(body) as { data: { organization: Array<{ recipientName: string }> } }).data.organization.map(
+      (a) => a.recipientName,
+    );
 
   it('lists only carts of organizations inside the scope', async () => {
     const res = await h.app.inject({
@@ -217,14 +234,18 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
     expect(await cartStatus(carts['own-reject']!)).toBe('rejected');
   });
 
-  it('refuses the personal addresses of a customer outside the scope', async () => {
+  it('discloses no address book of a customer outside the scope', async () => {
     const refused = await h.app.inject({
       method: 'GET',
       url: `/api/v1/admin/customers/${customers['foreign']}/addresses`,
       cookies: { b2b_session: repCookie },
     });
+    // The existence guard (#794) reads the customer through its `@OrgScoped`
+    // account, so a customer outside the scope answers as an absent one does.
     expect(refused.statusCode).toBe(404);
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('CUSTOMER_NOT_FOUND');
     expect(refused.body).not.toContain(`Recipient foreign ${stamp}`);
+    expect(refused.body).not.toContain(addresses['foreign']!);
 
     const served = await h.app.inject({
       method: 'GET',
@@ -232,11 +253,14 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
       cookies: { b2b_session: repCookie },
     });
     expect(served.statusCode).toBe(200);
-    expect(served.body).toContain(`Recipient own ${stamp}`);
+    expect(organizationRecipients(served.body)).toContain(`Recipient own ${stamp}`);
   });
 
-  it('refuses creating an address on a customer outside the scope, writing nothing', async () => {
-    const before = await addressCount(customers['foreign']!);
+  it('writes nothing through the retired address write, inside the scope or outside it', async () => {
+    const before = {
+      own: await addressCount(assignedOrgId),
+      foreign: await addressCount(foreignOrgId),
+    };
     const payload = {
       kind: 'delivery',
       recipientName: `Injected ${stamp}`,
@@ -246,23 +270,28 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
       country: 'PL',
     };
 
-    const refused = await h.app.inject({
+    const foreign = await h.app.inject({
       method: 'POST',
       url: `/api/v1/admin/customers/${customers['foreign']}/addresses`,
       payload,
       cookies: { b2b_session: repCookie },
     });
-    expect(refused.statusCode).toBe(404);
-    expect(await addressCount(customers['foreign']!)).toBe(before);
+    expect(foreign.statusCode).toBeGreaterThanOrEqual(400);
+    expect(foreign.statusCode).toBeLessThan(500);
 
-    const accepted = await h.app.inject({
+    const own = await h.app.inject({
       method: 'POST',
       url: `/api/v1/admin/customers/${customers['own']}/addresses`,
       payload,
       cookies: { b2b_session: repCookie },
     });
-    expect(accepted.statusCode).toBe(201);
-    expect(await addressCount(customers['own']!)).toBe(2);
+    expect(own.statusCode).toBe(410);
+    expect((own.json() as { error: { code: string } }).error.code).toBe('CUSTOMER_ADDRESS_BOOK_RETIRED');
+
+    expect({
+      own: await addressCount(assignedOrgId),
+      foreign: await addressCount(foreignOrgId),
+    }).toEqual(before);
   });
 
   it('leaves a platform administrator reaching both organizations', async () => {
@@ -280,7 +309,7 @@ describe('@CustomerScoped surfaces honour the sales-rep assignment scope', () =>
         cookies: { b2b_session: 'stub-admin-session' },
       });
       expect(addr.statusCode).toBe(200);
-      expect(addr.body).toContain(`Recipient ${key} ${stamp}`);
+      expect(organizationRecipients(addr.body)).toContain(`Recipient ${key} ${stamp}`);
     }
   });
 });

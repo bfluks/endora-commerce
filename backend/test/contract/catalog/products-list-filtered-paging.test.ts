@@ -1,4 +1,4 @@
-import { RawQueryFragment, raw } from '@mikro-orm/core';
+import { rawFragmentReferences } from '../../helpers/raw-fragments.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isProductVisibleTo, type ProductAudience } from '@endora-commerce/contracts';
 import {
@@ -9,6 +9,8 @@ import {
 import { OTHER_TEST_ORGANIZATION_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { Category, Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { seedOtherTestOrganization } from '../../helpers/seed-organizations.js';
+import { attributeFilterMatches } from '../../../../packages/modules/catalog/src/backend/services/attribute-filter-match.js';
 
 /**
  * Issue #151 — the storefront product list narrowed a page **after** cutting it.
@@ -104,13 +106,14 @@ const AUDIENCES: ReadonlyArray<{
 
 /**
  * The `material` values of the kinds block. The listing compares
- * `String(value)` with the requested strings, and each of these is a value
- * `String` and PostgreSQL's own text for it part ways on: a one-element array
- * reads as its element, a longer one as a comma-joined list with `null` empty,
- * a JSON `null` as the word, an object as `[object Object]`, and a number as
- * JavaScript prints it — exponent notation from 1e21 up and below 1e-6, plain
- * in between, where PostgreSQL stores `1e21` as 22 digits and switches to
- * exponent notation at other thresholds.
+ * `String(value)` with the requested strings — for a multiselect, `String` of
+ * each option, any of which may match (issue #684) — and each of these is a
+ * value `String` and PostgreSQL's own text for it part ways on: an array
+ * element as its own text and a `null` element as the word, a JSON `null` as
+ * the word, an object as `[object Object]`, and a number as JavaScript prints
+ * it — exponent notation from 1e21 up and below 1e-6, plain in between, where
+ * PostgreSQL stores `1e21` as 22 digits and switches to exponent notation at
+ * other thresholds.
  *
  * `stored` is JSON written past the ORM, for the two values JavaScript cannot
  * write: a decimal with a trailing zero. `material` is then what JavaScript
@@ -292,6 +295,10 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    // Feature 154 — the other-organisation buyer shops only if its Organization
+    // exists and is assigned the store; seeded before any request so no empty
+    // permitted-channel set is cached for it.
+    await seedOtherTestOrganization(h.em());
     const em = h.em();
     const conn = em.getConnection();
 
@@ -316,10 +323,10 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
       const parent = PARENT_OF[slug];
       const category = em.create(Category, {
         ...(parent !== undefined ? { parentCategoryId: categoryIdBySlug.get(parent)! } : {}),
-        name: { 'en-US': `Issue 151 ${slug}` },
+        name: `Issue 151 ${slug}`,
         slug,
       });
-      await em.persistAndFlush(category);
+      await em.persist(category).flush();
       categoryIdBySlug.set(slug, category.id);
     }
 
@@ -329,15 +336,15 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
         slug: f.sku.toLowerCase(),
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Issue 151 product ${f.index}` },
-        description: { 'en-US': 'Paging fixture.' },
+        name: `Issue 151 product ${f.index}`,
+        description: 'Paging fixture.',
         visibility: f.visibility,
         allowedOrganizationIds: f.allowedOrganizationIds,
         attributeValues: f.attributeValues,
         createdAt: new Date(NEWEST - f.index * 1000),
       }),
     );
-    await em.persistAndFlush(products);
+    await em.persist(products).flush();
 
     for (const [i, f] of fixtures.entries()) {
       if (f.storedMaterial !== undefined) {
@@ -549,20 +556,22 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
   });
 
   it('compares an attribute value in the statement exactly as it is compared on the page', async () => {
-    // The statement restates a `String(value)` comparison, and a restatement
-    // can drift in either direction: admitting less loses rows from the walk,
+    // The statement restates the page's comparison, and a restatement can
+    // drift in either direction: admitting less loses rows from the walk,
     // admitting more leaves the page short. Both are visible below, because the
-    // expectation is computed with `String` itself.
+    // expectation is computed with the page-side predicate itself.
     const inCategory = fixtures.filter((f) => f.categories.includes(KINDS_SLUG));
     const carrying = inCategory.filter((f) => 'material' in f.attributeValues);
     const matching = (wanted: string[]): string[] =>
-      skusOf(carrying.filter((f) => wanted.includes(String(f.attributeValues['material']))));
+      skusOf(carrying.filter((f) => attributeFilterMatches(f.attributeValues['material'], wanted)));
+    const rendered = (value: unknown): string[] =>
+      Array.isArray(value) ? value.map((option) => String(option)) : [String(value)];
     const query = (wanted: string[]): string =>
       [`filter%5Bcategory%5D=${KINDS_SLUG}`]
         .concat(wanted.map((v) => `filter%5Battr.material%5D=${encodeURIComponent(v)}`))
         .join('&');
 
-    const every = [...new Set(carrying.map((f) => String(f.attributeValues['material'])))];
+    const every = [...new Set(carrying.flatMap((f) => rendered(f.attributeValues['material'])))];
     // The strings this is about, spelled once so the fixture cannot quietly
     // stop producing them.
     expect(every).toEqual(
@@ -577,21 +586,29 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
         '0.00001',
         '0',
         '2.5',
-        '3.5,4',
-        '1.5,2,1e+21,,true,[object Object]',
+        '3.5',
+        '4',
+        'oak',
+        '1.5',
+        'true',
         '[object Object]',
         'null',
       ]),
     );
+    // Issue #684 — a multiselect's joined text is not one of its options.
+    expect(every).not.toContain('3.5,4');
+    expect(every).not.toContain('steel,oak');
 
     const pages = await walk(h, query(every), 4);
     expectFullPages(pages, 4);
     expect(pages.flatMap((p) => p.skus)).toEqual(skusOf(carrying));
 
     // One at a time, so a kind that only matched in company is named. `oak`
-    // and `1.50` are the two that must match nothing: an element of a longer
-    // array, and the stored spelling JavaScript never sees.
-    for (const wanted of [...every, 'oak', '1.50', '2.50']) {
+    // must match the multiselect holding it beside `steel` (issue #684); the
+    // joined texts and the stored spellings JavaScript never sees must match
+    // nothing.
+    expect(matching(['oak'])).toHaveLength(1);
+    for (const wanted of [...every, 'steel,oak', '3.5,4', '', '1.50', '2.50', '3.50']) {
       const expected = matching([wanted]);
       const walked = (await walk(h, query([wanted]), 1)).flatMap((p) => p.skus);
       expect(walked, `filter[attr.material]=${wanted}`).toEqual(expected);
@@ -604,18 +621,15 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
   });
 
   it('holds no query fragment after a request, whichever way the request ended', async () => {
-    // MikroORM registers a `raw()` fragment process-wide when it is used as a
-    // key and releases it when a statement consumes it. One created on a path
-    // that returns without querying is therefore held for the life of the
-    // process — and the unknown-category answer above is such a path, open to
-    // any anonymous caller. `checkCacheSize` is the ORM's own instrument for
-    // exactly this.
-    const probe = String(raw('select 151'));
-    const withProbe = RawQueryFragment.checkCacheSize();
-    RawQueryFragment.remove(probe);
-    expect(RawQueryFragment.checkCacheSize(), 'the instrument counts a held fragment').toBe(
-      withProbe - 1,
-    );
+    // MikroORM 6 registered a `raw()` fragment process-wide when it was used as
+    // a key and released it only when a statement consumed it, so one created
+    // on a path that returns without querying — the unknown-category answer
+    // above, open to any anonymous caller — was held for the life of the
+    // process, and `checkCacheSize` counted it. MikroORM 7 (#1866) keeps the
+    // back-reference in a `WeakMap` keyed by the fragment's symbol, so an
+    // unconsumed fragment is collected with its key: there is no cache left to
+    // grow. What is held is that the registry stays weak, over every path.
+    expect(rawFragmentReferences(), 'the fragment registry is weak').toBeInstanceOf(WeakMap);
 
     const requests = [
       'filter%5Bcategory%5D=i151-no-such-category',
@@ -624,7 +638,6 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
       'filter%5Battr.material%5D=steel',
       '',
     ];
-    const before = RawQueryFragment.checkCacheSize();
     for (let round = 0; round < 10; round++) {
       for (const query of requests) {
         for (const viewer of AUDIENCES) {
@@ -638,6 +651,6 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
         }
       }
     }
-    expect(RawQueryFragment.checkCacheSize()).toBe(before);
+    expect(rawFragmentReferences()).toBeInstanceOf(WeakMap);
   });
 });

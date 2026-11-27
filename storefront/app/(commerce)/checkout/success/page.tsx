@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getMyOrder } from '../../../../lib/api/orders';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
@@ -11,6 +10,7 @@ import {
   paymentFailureUrl,
   resolvePostPaymentLanding,
 } from '../../../../lib/payments/post-payment-landing';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Checkout Success Page (feature 036, US1). Shows the customer-facing business
@@ -50,16 +50,16 @@ export default async function CheckoutSuccessPage({
     const next = id
       ? `/checkout/success?id=${encodeURIComponent(id)}`
       : '/account/orders';
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
-  if (!id) redirect('/account/orders');
+  if (!id) return await localeRedirect('/account/orders');
 
   let order;
   try {
     order = await getMyOrder(session, id);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) {
-      redirect('/account/orders');
+      return await localeRedirect('/account/orders');
     }
     throw err;
   }
@@ -74,7 +74,7 @@ export default async function CheckoutSuccessPage({
     paymentKind: order.paymentMethod.kind,
     outcome: undefined,
   });
-  if (landing.kind === 'failure') redirect(paymentFailureUrl(order.id, landing.reason));
+  if (landing.kind === 'failure') return await localeRedirect(paymentFailureUrl(order.id, landing.reason));
 
   const { locale } = await getServerContext();
   // Issue #274 — the tracker used to fire for whatever order this page was

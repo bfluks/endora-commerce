@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { uuidSchema } from './common.js';
 import { nextActionSchema } from './orders.js';
+import { lineQuantitySchema, REQUEST_LINE_ITEMS_MAX } from './line-bounds.js';
 
 /**
  * Quick-order contracts (feature 039). The quick-order page lets buyers
@@ -43,6 +44,8 @@ export const quickOrderRejectionReasonSchema = z.enum([
   'variant_not_resolved',
   'variant_ambiguous',
   'row_limit_exceeded',
+  /** Feature 155 — the product's total across the file is below its pieces minimum (P1). */
+  'below_minimum',
 ]);
 export type QuickOrderRejectionReason = z.infer<typeof quickOrderRejectionReasonSchema>;
 
@@ -73,6 +76,17 @@ export const recognizedQuickOrderItemSchema = z.object({
   quantity: z.number().int().positive(),
   /** Other source lines merged into this one (duplicate SKU, summed qty). */
   mergedFromLines: z.array(z.number().int().positive()).optional(),
+  /**
+   * Feature 155 — operator's import only: the product's file total is below its pieces
+   * minimum. The row stays recognised; the build judges it.
+   */
+  warning: z
+    .object({
+      reason: z.literal('below_minimum'),
+      minimum: z.number().int().positive(),
+      productTotal: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 export type RecognizedQuickOrderItem = z.infer<typeof recognizedQuickOrderItemSchema>;
 
@@ -80,6 +94,10 @@ export const rejectedQuickOrderItemSchema = z.object({
   line: z.number().int().positive(),
   raw: z.string(),
   reason: quickOrderRejectionReasonSchema,
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
+  minimum: z.number().int().positive().optional(),
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
+  productTotal: z.number().int().nonnegative().optional(),
 });
 export type RejectedQuickOrderItem = z.infer<typeof rejectedQuickOrderItemSchema>;
 
@@ -88,6 +106,8 @@ export const quickOrderImportSummarySchema = z.object({
   rejectedCount: z.number().int().nonnegative(),
   mergedCount: z.number().int().nonnegative(),
   truncated: z.boolean(),
+  /** Feature 155 — operator's import only: recognised rows carrying a `warning`. */
+  warningCount: z.number().int().nonnegative().optional(),
 });
 export type QuickOrderImportSummary = z.infer<typeof quickOrderImportSummarySchema>;
 
@@ -98,6 +118,79 @@ export const quickOrderImportResponseSchema = z.object({
 });
 export type QuickOrderImportResponse = z.infer<typeof quickOrderImportResponseSchema>;
 
+// --- Preview (the buyer's import, held between the import and the build) ---
+
+/**
+ * Issue #809 — the hard maximum of a preview's line cap: the ceiling `quick_order.import_max_rows`
+ * is clamped to. The cap itself is that setting's effective value, read when the preview is
+ * written (PO ruling of 2026-11-08 on PR #942), and it counts the rows the import read —
+ * recognised and rejected — never the rows past its limit, which the preview keeps as one
+ * `summary.overflowCount`. So an import never exceeds it; it bounds what adding from search can
+ * grow, and a write that adds no line is accepted even above a cap lowered since. Enforced by
+ * `PUT /api/v1/quick-order/preview` as `422 VALIDATION_FAILED`,
+ * `details: { code: 'too_many_lines', maximum }` (`maximum` = the setting), deliberately not by a
+ * schema `.max()`, which would answer 400 — the same shape as {@link QUICK_ORDER_BUILD_MAX_ITEMS}.
+ */
+export const QUICK_ORDER_PREVIEW_MAX_LINES = 10_000;
+
+/**
+ * The largest preview body `PUT /api/v1/quick-order/preview` reads, in bytes; a larger one is
+ * refused `413 VALIDATION_FAILED` before it is parsed. A rejected line's raw CSV text is not
+ * bounded by the line cap, so the line cap alone does not bound what one buyer may store.
+ */
+export const QUICK_ORDER_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How long a preview is kept after it was last written, in seconds. A write (`PUT`) starts the
+ * window again; a read does not, so a page left open does not keep the buyer's file alive.
+ */
+export const QUICK_ORDER_PREVIEW_TTL_SECONDS = 60 * 60;
+
+/**
+ * After a partial cart build (feature 155, FR-011 (b)): why the cart did not take a line, with
+ * the build's product and unit names. The storefront writes it; nothing else reads it.
+ */
+export const quickOrderPreviewNotAddedSchema = z.object({
+  kind: z.enum(['pieces', 'packaging_unit']),
+  minimum: z.number().int().positive(),
+  productName: z.string().max(255),
+  packagingUnitName: z.string().max(255).optional(),
+});
+export type QuickOrderPreviewNotAdded = z.infer<typeof quickOrderPreviewNotAddedSchema>;
+
+export const quickOrderPreviewRecognizedItemSchema = recognizedQuickOrderItemSchema
+  .omit({ warning: true })
+  .extend({ notAdded: quickOrderPreviewNotAddedSchema.optional() });
+export type QuickOrderPreviewRecognizedItem = z.infer<typeof quickOrderPreviewRecognizedItemSchema>;
+
+/**
+ * Issue #809 — the buyer's quick-order preview, as `quick_order` keeps it: one per buyer session,
+ * scoped to the buyer's Organization, for {@link QUICK_ORDER_PREVIEW_TTL_SECONDS}. It is the
+ * import's response (`quickOrderImportResponseSchema`) as the buyer has since edited it.
+ *
+ * `GET /api/v1/quick-order/preview` answers `{ data: QuickOrderPreview | null }` (`null`: none,
+ * or expired), `PUT` replaces it and answers `{ data: QuickOrderPreview }`, `DELETE` drops it and
+ * answers 204. All three need a signed-in buyer, and the session that wrote a preview is the only
+ * one that reads it; no preview id travels anywhere.
+ */
+/**
+ * The import's summary, plus what the preview keeps of the rows past the import's limit: how many
+ * there were (`overflowCount`) and the limit they were past (`rowLimit`, stamped by the backend
+ * when it is absent). The rows themselves are not kept.
+ */
+export const quickOrderPreviewSummarySchema = quickOrderImportSummarySchema.extend({
+  overflowCount: z.number().int().nonnegative().optional(),
+  rowLimit: z.number().int().positive().optional(),
+});
+export type QuickOrderPreviewSummary = z.infer<typeof quickOrderPreviewSummarySchema>;
+
+export const quickOrderPreviewSchema = z.object({
+  recognized: z.array(quickOrderPreviewRecognizedItemSchema),
+  rejected: z.array(rejectedQuickOrderItemSchema),
+  summary: quickOrderPreviewSummarySchema,
+});
+export type QuickOrderPreview = z.infer<typeof quickOrderPreviewSchema>;
+
 // --- Build (confirmed import → Cart or Quote Request) ----------------------
 
 export const quickOrderTargetSchema = z.enum(['cart', 'quote_request']);
@@ -106,9 +199,17 @@ export type QuickOrderTarget = z.infer<typeof quickOrderTargetSchema>;
 export const quickOrderBuildLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.nullable().optional(),
-  quantity: z.number().int().positive(),
+  quantity: lineQuantitySchema,
 });
 export type QuickOrderBuildLine = z.infer<typeof quickOrderBuildLineSchema>;
+
+/**
+ * Feature 155 (FR-038, research R20) — the most items a build accepts, either target.
+ * Enforced by `QuickOrderBuildService.build` as its first step (`422 VALIDATION_FAILED`,
+ * `details: { code: 'too_many_items', maximum }`), deliberately not by a schema `.max()`,
+ * which would answer 400.
+ */
+export const QUICK_ORDER_BUILD_MAX_ITEMS = REQUEST_LINE_ITEMS_MAX;
 
 export const quickOrderBuildRequestSchema = z.object({
   target: quickOrderTargetSchema,
@@ -124,6 +225,25 @@ export const quickOrderBuildResponseSchema = z.object({
   quoteRequestId: uuidSchema.optional(),
   /** Customer-facing business Quote Request ID (shown in confirmations). */
   quoteRequestBusinessId: z.string().optional(),
+  /**
+   * Feature 155 — target `cart`: the lines not added because they would leave their
+   * product below a minimum (R8). Always present for target `cart`; absent otherwise.
+   */
+  rejected: z
+    .array(
+      z.object({
+        productId: uuidSchema,
+        variantId: uuidSchema.nullable(),
+        quantity: z.number().int().positive(),
+        productName: z.string(),
+        reason: z.literal('below_minimum'),
+        kind: z.enum(['pieces', 'packaging_unit']),
+        minimum: z.number().int().positive(),
+        /** Feature 155 — on a `packaging_unit` refusal: the unit's name, so the report can say which. */
+        packagingUnitName: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 export type QuickOrderBuildResponse = z.infer<typeof quickOrderBuildResponseSchema>;
 
@@ -144,7 +264,7 @@ export const quickOrderSearchResultSchema = z.object({
   sku: z.string(),
   name: z.string(),
   slug: z.string(),
-  status: z.enum(['draft', 'active', 'inactive']),
+  status: z.enum(['active', 'inactive']),
   matchedOn: z.array(quickOrderSearchMatchSchema).optional(),
 });
 export type QuickOrderSearchResult = z.infer<typeof quickOrderSearchResultSchema>;
@@ -198,10 +318,23 @@ export type QuickOrderResolvedDefaults = z.infer<typeof quickOrderResolvedDefaul
 
 // --- One-click buy ---------------------------------------------------------
 
+/**
+ * Why one-click buy is not offered. `permission_required` and
+ * `cart_approval_required` (`specs/170-organization-roles/`, FR-050, R-6) are
+ * the member's role — no `quick_order.one_click`, or no
+ * `carts.order_without_approval` — and are judged first, in that order, before
+ * the setting and the defaults.
+ */
 export const quickOrderOneClickEligibilitySchema = z.object({
   enabled: z.boolean(),
   reason: z
-    .enum(['setting_disabled', 'missing_defaults', 'ineligible_default'])
+    .enum([
+      'permission_required',
+      'cart_approval_required',
+      'setting_disabled',
+      'missing_defaults',
+      'ineligible_default',
+    ])
     .nullable()
     .optional(),
 });
@@ -210,7 +343,7 @@ export type QuickOrderOneClickEligibility = z.infer<typeof quickOrderOneClickEli
 export const quickOrderOneClickRequestSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.nullable().optional(),
-  quantity: z.number().int().positive().optional(),
+  quantity: lineQuantitySchema.optional(),
   idempotencyKey: z.string().max(200).optional(),
 });
 export type QuickOrderOneClickRequest = z.infer<typeof quickOrderOneClickRequestSchema>;
@@ -249,8 +382,8 @@ export interface PreferenceAuditContext {
  * Who is writing the preference.
  *
  * A discriminated union, not a bag of optional ids, and that is the point: a
- * buyer editing their own defaults, an org admin editing a member's, a
- * salesperson editing an assigned organisation's and a platform admin editing
+ * buyer editing their own defaults, an Organization administrator editing a member's, a
+ * salesperson editing an organisation in their reach and a platform admin editing
  * anybody's are four different authorisations, and each carries exactly the
  * one identifier its rule needs. A shape with four optional fields has twelve
  * states the rules cannot answer for.
@@ -259,8 +392,19 @@ export interface PreferenceAuditContext {
  */
 export type PreferenceActor =
   | { kind: 'customer'; customerAccountId: string }
-  | { kind: 'org_admin'; organizationId: string }
-  | { kind: 'salesperson'; assignedOrganizationIds: string[] }
+  /**
+   * A member holding the Organization's *Administrator* role — a buyer, not
+   * the operator's `platform_admin`. Managing others' defaults is a reserved
+   * capability, not a permission (`specs/170-organization-roles/` FR-012),
+   * asked of `organizationPermissionPort.isAdministrator`.
+   */
+  | { kind: 'administrator'; organizationId: string }
+  /**
+   * A sales representative. Issue #305: their reach is every organisation
+   * nobody else governs — assigned, roll-up and unassigned — which no list of
+   * ids names, so the actor carries the question rather than an answer.
+   */
+  | { kind: 'salesperson'; reaches: (organizationId: string) => Promise<boolean> }
   | { kind: 'platform_admin' };
 
 /**

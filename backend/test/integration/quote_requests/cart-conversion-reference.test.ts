@@ -26,7 +26,8 @@ describe('146 — cart conversion stores the cart price as the reference [integr
   let h: BackendServerHandle;
   const customer = { b2b_session: 'stub-customer-session' };
   /** A cart price no price list answers, so a fresh resolution cannot pass for it. */
-  const CART_UNIT_PRICE = '77.70';
+  // A cart line's unit price reads back at the column's four places (owner ruling of 2026-10-25).
+  const CART_UNIT_PRICE = '77.7000';
   let convertedId: string;
 
   const readPort = () => h.container.resolve('quoteRequestReadPort') as QuoteRequestReadPort;
@@ -115,7 +116,7 @@ describe('146 — cart conversion stores the cart price as the reference [integr
   });
 
   describe('an in-process caller passing an invalid lineReferencePrices entry (T6)', () => {
-    const ctx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID, isOrgAdmin: false };
+    const ctx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
     const input = { items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1 }] };
 
     const countRequests = async () => {
@@ -127,7 +128,8 @@ describe('146 — cart conversion stores the cart price as the reference [integr
     it.each([
       ['negative', [{ amount: '-1.00', currency: 'PLN' }]],
       ['non-finite', [{ amount: 'Infinity', currency: 'PLN' }]],
-      ['three decimals', [{ amount: '1.005', currency: 'PLN' }]],
+      // A unit price keeps four places (owner ruling of 2026-10-25); a fifth is not a price.
+      ['five decimals', [{ amount: '1.00005', currency: 'PLN' }]],
       ['lower-case currency', [{ amount: '1.00', currency: 'pln' }]],
       ['two-letter currency', [{ amount: '1.00', currency: 'PL' }]],
       ['length ≠ items', [{ amount: '1.00', currency: 'PLN' }, null]],

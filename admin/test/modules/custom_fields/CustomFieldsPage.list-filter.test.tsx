@@ -1,0 +1,274 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type { CustomFieldDefinitionDto, CustomFieldEntityTypeInfo } from '@endora-commerce/contracts';
+import { findEditor, renderCustomFieldsRoutes } from './routes-harness';
+import en from '../../../../packages/modules/custom_fields/i18n/en.json';
+import pl from '../../../../packages/modules/custom_fields/i18n/pl.json';
+import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
+import { chooseRowAction, openRowMenu } from './row-actions';
+
+/**
+ * Feature 157 (T056, US3) — `/custom-fields` shows which definitions are list
+ * filters, lets the create form set the option where the entity type offers
+ * it, and offers no write control to an operator who may only read
+ * (`specs/157-custom-fields-list-filters/contracts/admin-surfaces.md` §3).
+ */
+
+const ENTITY_TYPES: CustomFieldEntityTypeInfo[] = [
+  { entityType: 'order', labelKey: 'customFields.entity.order', listFilter: true, carryTargets: [], customerInputSurfaces: [] },
+  { entityType: 'organization', labelKey: 'customFields.entity.organization', listFilter: false, carryTargets: [], customerInputSurfaces: [] },
+];
+
+function definition(overrides: Partial<CustomFieldDefinitionDto>): CustomFieldDefinitionDto {
+  return {
+    id: '00000000-0000-4000-8000-00000000cf01',
+    entityType: 'order',
+    key: 'region',
+    label: {},
+    labelDefault: 'Region',
+    valueType: 'text',
+    required: false,
+    audience: 'internal',
+    sortOrder: 0,
+    config: {},
+    listFilter: true,
+    carryTo: [],
+    customerInput: [],
+    adminAccess: 'edit',
+    options: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const ORDER_ROWS = [
+  definition({}),
+  definition({ id: '00000000-0000-4000-8000-00000000cf02', key: 'po_ref', labelDefault: 'PO', listFilter: false }),
+];
+
+const create = vi.fn(async (_body: unknown) => ({}));
+const remove = vi.fn(async (_id: string): Promise<unknown> => ({}));
+/** Replaced by a test that needs the definitions read to stay in flight, or to fail. */
+let listOrder: () => Promise<CustomFieldDefinitionDto[]> = async () => ORDER_ROWS;
+
+vi.mock('../../../../packages/modules/custom_fields/src/admin/api/custom-fields-client', () => ({
+  customFieldsClient: {
+    listEntityTypes: async () => ENTITY_TYPES,
+    list: async (entityType?: string) => (entityType === 'order' ? listOrder() : []),
+    get: async () => ORDER_ROWS[0],
+    create: (body: unknown) => create(body),
+    update: async () => ({}),
+    remove: (id: string) => remove(id),
+    createOption: async () => ({}),
+    updateOption: async () => ({}),
+    removeOption: async () => ({}),
+  },
+}));
+
+const { CustomFieldsPage } = await import(
+  '../../../../packages/modules/custom_fields/src/admin/pages/CustomFieldsPage'
+);
+const { CustomFieldEditorPage } = await import(
+  '../../../../packages/modules/custom_fields/src/admin/pages/CustomFieldEditorPage'
+);
+
+function renderPage(permissions: string[], bundle: Record<string, string> = en): void {
+  renderCustomFieldsRoutes(
+    { CustomFieldsPage, CustomFieldEditorPage },
+    { permissions, bundle: { custom_fields: bundle, core: coreEn as Record<string, string> } },
+  );
+}
+
+async function chooseEntity(value: string, entityLabel = 'Record type'): Promise<void> {
+  const select = await screen.findByLabelText(entityLabel);
+  await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(ENTITY_TYPES.length));
+  fireEvent.change(select, { target: { value } });
+}
+
+/** Opens the definition form in its create view (issue #447), on its own page since #1804. */
+async function openCreate(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole('link', { name: 'New field' }));
+  return findEditor('New field');
+}
+
+function cellOf(key: string, column: string): HTMLElement {
+  const table = screen.getByRole('table');
+  const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+  const row = within(table).getByText(key).closest('tr')!;
+  return within(row).getAllByRole('cell')[headers.indexOf(column)]!;
+}
+
+beforeEach(() => {
+  create.mockClear();
+  remove.mockReset().mockResolvedValue({});
+  listOrder = async () => ORDER_ROWS;
+});
+
+describe('CustomFieldsPage — the list-filter option', () => {
+  it('shows a List filter column, Yes or —, in English (US3-3, FR-006)', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    await screen.findByText('po_ref');
+    expect(cellOf('region', 'List filter')).toHaveTextContent('Yes');
+    expect(cellOf('po_ref', 'List filter')).toHaveTextContent('No');
+  });
+
+  it('shows the column in Polish from the Polish bundle', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write'], pl as Record<string, string>);
+    await chooseEntity('order', pl['customFields.form.entity']);
+    await screen.findByText('po_ref');
+    expect(cellOf('region', pl['customFields.table.listFilter'])).toHaveTextContent(pl['customFields.listFilter.yes']);
+  });
+
+  it('offers the option in the create form only where the entity type has it, and sends it (FR-003)', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('organization');
+    const editor = await openCreate();
+    expect(within(editor).queryByLabelText('Use as list filter')).toBeNull();
+    fireEvent.change(within(editor).getByLabelText('Record type'), { target: { value: 'order' } });
+    fireEvent.click(await within(editor).findByLabelText('Use as list filter'));
+    fireEvent.change(within(editor).getByLabelText('Key'), { target: { value: 'channel_ref' } });
+    fireEvent.change(within(within(editor).getByRole('group', { name: 'Labels' })).getByLabelText('Default label'), {
+      target: { value: 'Channel reference' },
+    });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Add field' }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]![0]).toMatchObject({ entityType: 'order', key: 'channel_ref', listFilter: true });
+  });
+
+  /** Issue #1749: Delete is the row menu's last item, confirmed in the kit dialog that runs it. */
+  it('confirms a deletion from the row menu, Cancel giving the focus back to the menu', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    await screen.findByText('po_ref');
+    const menu = await openRowMenu('region', en);
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Edit', 'Delete']);
+    expect(within(menu).getByRole('separator')).toBeInTheDocument();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    await chooseRowAction('region', 'delete', en);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAccessibleDescription('Delete the field “region”?');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Actions for region' })).toHaveFocus());
+    expect(remove).not.toHaveBeenCalled();
+    await chooseRowAction('region', 'delete', en);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(ORDER_ROWS[0]!.id));
+    // The row leaves in place, and focus goes to the row that took its place (WCAG 2.4.3).
+    await waitFor(() => expect(screen.queryByText('region')).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Actions for po_ref' })).toHaveFocus());
+  });
+
+  it('keeps the confirmation open with the reason when the deletion is refused', async () => {
+    remove.mockRejectedValue(new Error('boom'));
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    await screen.findByText('po_ref');
+    await chooseRowAction('region', 'delete', en);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('The change could not be saved.');
+    expect(screen.getByText('region')).toBeInTheDocument();
+  });
+
+  it('draws the kit skeleton while the fields load, then offers one action when a record type has no fields', async () => {
+    let answer!: (rows: CustomFieldDefinitionDto[]) => void;
+    listOrder = () => new Promise((resolve) => (answer = resolve));
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    expect(await screen.findByTestId('list-page-skeleton')).toBeInTheDocument();
+    expect(screen.getByText('Loading…')).toHaveAttribute('role', 'status');
+    answer([]);
+    expect(await screen.findByText('No fields for this record type yet.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'Add a field' }));
+    const editor = await findEditor('New field');
+    await waitFor(() =>
+      expect(within(within(editor).getByRole('group', { name: 'Labels' })).getByLabelText('Default label')).toHaveFocus(),
+    );
+    expect(within(editor).getByLabelText('Record type')).toHaveValue('order');
+  });
+
+  it('says why the list did not load and loads it again on Retry', async () => {
+    let fail = true;
+    listOrder = async () => {
+      if (fail) throw new Error('down');
+      return ORDER_ROWS;
+    };
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    expect(await screen.findByText('The custom fields could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).toBeNull();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('po_ref')).toBeInTheDocument();
+    expect(screen.queryByText('The custom fields could not be loaded.')).toBeNull();
+  });
+
+  it('counts the fields of the record type in the toolbar, announced, under one New field', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    await screen.findByText('po_ref');
+    expect(await screen.findByText('Fields: 2')).toHaveAttribute('role', 'status');
+    expect(screen.getAllByRole('link', { name: 'New field' })).toHaveLength(1);
+  });
+
+  it('offers a reader no action in the empty state', async () => {
+    listOrder = async () => [];
+    renderPage(['custom_fields:read']);
+    await chooseEntity('order');
+    expect(await screen.findByText('No fields for this record type yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Add a field' })).toBeNull();
+  });
+
+  it('offers Required as a checkbox in the create form', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    const editor = await openCreate();
+    expect(within(editor).getByRole('checkbox', { name: 'Required' })).toBeInTheDocument();
+  });
+
+  it('offers no Edit, Delete, audience select or create form to a reader (US3-9)', async () => {
+    renderPage(['custom_fields:read']);
+    await chooseEntity('order');
+    await screen.findByText('po_ref');
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Change… / })).toBeNull();
+    expect(screen.queryByLabelText('Who can see the value of region')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'New field' })).toBeNull();
+    expect(screen.queryByLabelText('Key')).toBeNull();
+    expect(cellOf('region', 'Visible to')).toHaveTextContent('Internal — administrators only');
+  });
+
+  it('every key the page and its components read exists in both bundles, the Polish value different (FR-018)', () => {
+    const dir = resolve(__dirname, '../../../../packages/modules/custom_fields/src/admin');
+    const files = [
+      'pages/CustomFieldsPage.tsx',
+      'pages/CustomFieldEditorPage.tsx',
+      'components/DefinitionEditor.tsx',
+      'components/DefinitionForm.tsx',
+      'components/DefinitionOptionsEditor.tsx',
+      'components/DefinitionBehaviourFields.tsx',
+      'lib/definition-draft.ts',
+    ];
+    const keys = new Set<string>();
+    for (const file of files) {
+      const source = readFileSync(resolve(dir, file), 'utf8');
+      for (const match of source.matchAll(/\bt\(\s*'([\w.]+)'/g)) keys.add(match[1]!);
+      // The checks return bundle keys for the form to say (issue #447).
+      for (const match of source.matchAll(/'(customFields\.validation\.[\w.]+)'/g)) keys.add(match[1]!);
+    }
+    for (const type of ['text', 'number', 'boolean', 'date', 'select', 'multiselect']) keys.add(`customFields.valueType.${type}`);
+    for (const audience of ['internal', 'customer']) keys.add(`customFields.audience.${audience}`);
+    expect(keys.size).toBeGreaterThan(40);
+    const enBundle = en as Record<string, string>;
+    const plBundle = pl as Record<string, string>;
+    for (const key of keys) {
+      expect(enBundle[key], key).toBeTruthy();
+      expect(plBundle[key], key).toBeTruthy();
+      expect(plBundle[key], key).not.toBe(enBundle[key]);
+    }
+  });
+});

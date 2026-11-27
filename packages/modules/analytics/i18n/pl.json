@@ -15,5 +15,12 @@
   "daily.title": "Rozbicie dzienne",
   "column.eventType": "Typ zdarzenia",
   "column.count": "Liczba",
-  "column.day": "Dzień"
+  "column.day": "Dzień",
+  "settingGroups.analytics.name": "Analityka",
+  "settingLabels.analytics.reporting_time_zone.name": "Strefa czasowa raportów",
+  "settingLabels.analytics.reporting_time_zone.description": "Strefa IANA do liczenia dni i miesięcy, np. Europe/Warsaw. Domyślnie UTC.",
+  "actions.openAnalytics.keywords": "analityka, zdarzenia, raport",
+  "settingLabels.analytics.enabled.name": "Analityka włączona",
+  "module.name": "Analityka",
+  "module.description": "Agregowanie danych analitycznych po stronie serwera i źródła danych dla pulpitu."
 }

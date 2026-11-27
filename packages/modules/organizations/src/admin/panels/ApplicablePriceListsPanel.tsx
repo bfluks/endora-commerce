@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, EditorSection, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 type Reason =
   | 'direct_organization_match'
+  | 'ancestor_organization_match'
   | 'customer_group_match'
   | 'sales_channel_inheritance'
   | 'segment_rule_match';
@@ -57,11 +58,8 @@ export function ApplicablePriceListsPanel(props: ApplicablePriceListsPanelProps)
   }, [refresh]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('organizations.applicablePriceLists.title')}</CardTitle>
-      </CardHeader>
-      <CardContent>
+    // Issue #1515 — a section of the Commerce tab's card, not a card of its own.
+    <EditorSection title={t('organizations.applicablePriceLists.title')}>
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -101,8 +99,7 @@ export function ApplicablePriceListsPanel(props: ApplicablePriceListsPanelProps)
             </TableBody>
           </Table>
         ) : null}
-      </CardContent>
-    </Card>
+    </EditorSection>
   );
 }
 
@@ -110,6 +107,7 @@ function ReasonChip({ reason }: { reason: Reason }): ReactNode {
   const t = useTranslation('core');
   const palette: Record<Reason, string> = {
     direct_organization_match: 'bg-emerald-100 text-emerald-900 border-emerald-300',
+    ancestor_organization_match: 'bg-teal-100 text-teal-900 border-teal-300',
     customer_group_match: 'bg-sky-100 text-sky-900 border-sky-300',
     sales_channel_inheritance: 'bg-violet-100 text-violet-900 border-violet-300',
     segment_rule_match: 'bg-slate-100 text-slate-900 border-slate-300',

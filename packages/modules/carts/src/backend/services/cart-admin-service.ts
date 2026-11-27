@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import type {
   AdminCartsListQuery,
   AdminCartsListResponse,
@@ -9,15 +9,23 @@ import type {
   CatalogProductRecord,
   CustomerAccountReadPort,
   OrganizationDetailsPort,
+  ProductTaxRateResolver,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
+import { orgConstraintFor, orgInScope, orgScopeWhere } from '@endora-commerce/platform/tenancy';
 import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import { CartAuditEntry } from '../entities/cart-audit-entry.entity.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import type { CartAuditService } from './cart-audit-service.js';
 import type { CartSnapshot, PromotionApplication } from '@endora-commerce/contracts';
+import {
+  cartLineAmount,
+  cartSubtotal,
+  cartTotalAfterDiscount,
+  cartTotalGross,
+  cartTotalsByCart,
+} from './cart-money.js';
 
 /** Narrow port over the promotion engine for the admin cart-detail discount. */
 export interface AdminCartPromotionPort {
@@ -56,6 +64,12 @@ export class CartAdminService {
     private readonly catalogProducts: CatalogProductReadPort,
     /** Feature 045 (T043) — when wired, the detail shows the real discount. */
     private readonly promotion?: AdminCartPromotionPort,
+    /**
+     * Issue #1350 — the rates the buyer's cart read and placement charge, so a
+     * percent-off or free-unit promotion shows the gross discount the order
+     * takes. Unwired, the lines carry no rate and the discount is the net one.
+     */
+    private readonly taxRates?: ProductTaxRateResolver,
   ) {}
 
   /**
@@ -80,7 +94,7 @@ export class CartAdminService {
    * NULL — so the list needs no separate clause for it and the per-row check
    * below states it explicitly.
    */
-  #orgScopeWhere(requested?: string): Record<string, unknown> | 'refuse' {
+  async #orgScopeWhere(requested?: string): Promise<Record<string, unknown> | 'refuse'> {
     const constraint = orgConstraintFor();
     if (constraint.kind === 'all') {
       return requested ? { organizationId: requested } : {};
@@ -99,17 +113,17 @@ export class CartAdminService {
     // still did, `orgFilterCond`'s `{ organizationId: null }` would start
     // matching real data, and the two semantics would begin disagreeing about
     // rows a buyer can see rather than about an empty set.
-    const allowed =
-      constraint.kind === 'single'
-        ? constraint.organizationId === null
-          ? []
-          : [constraint.organizationId]
-        : [...constraint.organizationIds];
+    if (constraint.kind === 'single' && constraint.organizationId === null) {
+      return requested ? 'refuse' : { organizationId: { $in: [] } };
+    }
     // A caller-supplied filter narrows within the scope; it never widens it,
     // and asking for an organization outside the scope is answered as an empty
     // page rather than as an error, so the filter is no existence oracle.
-    if (requested) return allowed.includes(requested) ? { organizationId: requested } : 'refuse';
-    return { organizationId: { $in: allowed } };
+    // The helpers state the scope for every arm — a sales representative's is
+    // every organization nobody else governs (issue #305) — and never match a
+    // cart with no organization.
+    if (requested) return (await orgInScope(requested, constraint)) ? { organizationId: requested } : 'refuse';
+    return orgScopeWhere('organizationId', constraint);
   }
 
   /**
@@ -119,7 +133,7 @@ export class CartAdminService {
    * gets: an out-of-scope cart must not be distinguishable from one that does
    * not exist.
    */
-  #assertCartInScope(cart: Cart): void {
+  async #assertCartInScope(cart: Cart): Promise<void> {
     const constraint = orgConstraintFor();
     if (constraint.kind === 'all') return;
     // The cart's own organisation is still nullable — an anonymous visitor's
@@ -128,10 +142,7 @@ export class CartAdminService {
     // whose organisation is null, which is why the `single` arm can no longer
     // match one of those carts by having a null of its own.
     const organizationId = cart.organizationId ?? null;
-    const allowed =
-      constraint.kind === 'single'
-        ? constraint.organizationId === organizationId
-        : organizationId !== null && constraint.organizationIds.includes(organizationId);
+    const allowed = organizationId !== null && (await orgInScope(organizationId, constraint));
     if (!allowed) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
@@ -139,12 +150,16 @@ export class CartAdminService {
 
   async list(query: AdminCartsListQuery = {}): Promise<AdminCartsListResponse> {
     const em = this.emFactory();
-    const where: Record<string, unknown> = {};
-    if (query.status && query.status.length > 0) where['status'] = { $in: query.status };
+    // A working basket (issue #169) is transient placement state, never a cart
+    // an operator lists: it is seen once it is `completed` against its order.
+    const where: Record<string, unknown> = { status: { $ne: 'working' } };
+    if (query.status && query.status.length > 0) {
+      where['status'] = { $in: query.status.filter((status) => status !== 'working') };
+    }
     if (query.approvalStatus && query.approvalStatus.length > 0) {
       where['approvalStatus'] = { $in: query.approvalStatus };
     }
-    const orgWhere = this.#orgScopeWhere(query.organizationId);
+    const orgWhere = await this.#orgScopeWhere(query.organizationId);
     if (orgWhere === 'refuse') {
       const emptyPage = query.page ?? 1;
       const emptySize = Math.min(query.pageSize ?? 50, 200);
@@ -224,11 +239,14 @@ export class CartAdminService {
 
   async getById(cartId: string): Promise<AdminCartDetailResponse> {
     const em = this.emFactory();
+    if (!isUuidShape(cartId)) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
+    }
     const cart = await em.findOne(Cart, { id: cartId });
     if (!cart) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
-    this.#assertCartInScope(cart);
+    await this.#assertCartInScope(cart);
     const items = await em.find(CartItem, { cartId });
     const cust = cart.customerAccountId
       ? await this.customerAccounts.findById(cart.customerAccountId)
@@ -244,7 +262,7 @@ export class CartAdminService {
     const products = await this.catalogProducts.findByIds(productIds);
     const productById = new Map(products.map((p) => [p.id, p]));
 
-    const subtotal = items.reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
+    const subtotal = cartSubtotal(items);
     const currency = items[0]?.currency ?? 'PLN';
 
     // Feature 045 (T043) — compute the real discount for the detail view.
@@ -255,6 +273,16 @@ export class CartAdminService {
     // indistinguishable, and an administrator reading this panel would have
     // quoted a customer the undiscounted total as if it were the real one.
     let discountTotal = 0;
+    // Issue #1396 — the rates the buyer's cart read charges, for the gross
+    // total beside the net one; unwired, there is no gross to show.
+    const typeOf = (productId: string) => productById.get(productId)?.type ?? ('simple' as const);
+    const rateByType =
+      this.taxRates && items.length > 0
+        ? await this.taxRates({
+            organizationId: cart.organizationId ?? null,
+            productTypes: items.map((it) => typeOf(it.productId)),
+          })
+        : null;
     if (this.promotion && items.length > 0) {
       const application = await this.promotion.applyToCart({
         organizationId: cart.organizationId ?? null,
@@ -264,20 +292,37 @@ export class CartAdminService {
         // applies to, which is the figure they then quote to that buyer.
         customerGroupId: cust?.customerGroupId ?? org?.customerGroupId ?? null,
         currency,
-        lines: items.map((it) => ({
-          productId: it.productId,
-          variantId: it.variantId ?? null,
-          categoryIds: [],
-          quantity: it.quantity,
-          unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
-        })),
+        lines: items.map((it) => {
+          const taxRate = rateByType?.get(typeOf(it.productId));
+          return {
+            productId: it.productId,
+            variantId: it.variantId ?? null,
+            categoryIds: [],
+            quantity: it.quantity,
+            unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+            ...(taxRate !== undefined ? { taxRate } : {}),
+          };
+        }),
         deliveryTotal: 0,
         promotionCode: cart.appliedPromotionCode ?? null,
         salesChannelId: cart.salesChannelId ?? null,
       });
       discountTotal = application.discountTotal;
     }
-    const total = Math.max(0, Math.round((subtotal - discountTotal) * 100) / 100);
+    const total = cartTotalAfterDiscount(subtotal, discountTotal);
+    const totalGross =
+      items.length === 0
+        ? 0
+        : rateByType
+        ? cartTotalGross(
+            items.map((it) => ({
+              unitPrice: it.unitPrice,
+              quantity: it.quantity,
+              taxRate: rateByType.get(typeOf(it.productId)),
+            })),
+            discountTotal,
+          )
+        : null;
 
     return {
       data: {
@@ -292,6 +337,7 @@ export class CartAdminService {
         approvalStatus: cart.approvalStatus,
         itemCount: items.length,
         total: { amount: total, currency },
+        totalGross: totalGross === null ? null : { amount: totalGross, currency },
         appliedPromotionCode: cart.appliedPromotionCode ?? null,
         lastActivityAt: cart.lastActivityAt.toISOString(),
         createdAt: cart.createdAt.toISOString(),
@@ -300,11 +346,11 @@ export class CartAdminService {
           return {
             id: it.id,
             productId: it.productId,
-            productName: product ? anyLocaleName(product) : it.productId,
+            productName: product ? globalName(product) : it.productId,
             variantId: it.variantId ?? null,
             quantity: it.quantity,
             unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
-            lineTotal: { amount: Number(it.unitPrice) * it.quantity, currency: it.currency },
+            lineTotal: { amount: cartLineAmount(it.unitPrice, it.quantity), currency: it.currency },
           };
         }),
         discount:
@@ -330,16 +376,19 @@ export class CartAdminService {
     pageSize = 50,
   ): Promise<AdminCartAuditResponse> {
     const em = this.emFactory();
+    if (!isUuidShape(cartId)) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
+    }
     const cart = await em.findOne(Cart, { id: cartId });
     if (!cart) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
-    this.#assertCartInScope(cart);
+    await this.#assertCartInScope(cart);
     const capped = Math.min(pageSize, 200);
     const [rows, totalCount] = await em.findAndCount(
       CartAuditEntry,
       { cartId },
-      { orderBy: { occurredAt: 'desc' }, limit: capped, offset: (page - 1) * capped },
+      { orderBy: { occurredAt: 'desc', id: 'desc' }, limit: capped, offset: (page - 1) * capped },
     );
 
     const actorIds = Array.from(
@@ -373,13 +422,23 @@ export class CartAdminService {
     reason: string,
   ): Promise<AdminCartDetailResponse> {
     const em = this.emFactory();
+    if (!isUuidShape(cartId)) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
+    }
     const cart = await em.findOne(Cart, { id: cartId });
     if (!cart) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
-    this.#assertCartInScope(cart);
+    await this.#assertCartInScope(cart);
     if (cart.status === 'completed' || cart.status === 'rejected') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'already_terminal');
+      // Issue #86 — its own code, not `VALIDATION_FAILED` with the token
+      // `already_terminal` as the message the operator read.
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_ALREADY_TERMINAL,
+        'This cart is already completed or rejected.',
+        { cartId: cart.id, status: cart.status },
+      );
     }
     const fromStatus = cart.status;
     cart.status = 'rejected';
@@ -404,23 +463,30 @@ export class CartAdminService {
 
   // Internal helpers ─────────────────────────────────────────────────────
 
+  /**
+   * Every sort ends on `id` in the primary key's direction (issue #1621): the
+   * list pages by offset, so carts sharing a sort key need a total order or a
+   * page boundary repeats one cart and skips another.
+   */
   private sortClause(
     sort: NonNullable<AdminCartsListQuery['sort']>,
   ): Record<string, 'asc' | 'desc'> {
     switch (sort) {
       case 'last_activity_asc':
-        return { lastActivityAt: 'asc' };
+        return { lastActivityAt: 'asc', id: 'asc' };
       case 'total_desc':
-      case 'total_asc':
+      case 'total_asc': {
         // The grand total is computed from cart_items at read time; the
         // SQL-side approximation is `updatedAt` (a write-heavy proxy). A
         // true total-sort needs a subquery — kept as a follow-up.
-        return { updatedAt: sort === 'total_desc' ? 'desc' : 'asc' };
+        const dir = sort === 'total_desc' ? 'desc' : 'asc';
+        return { updatedAt: dir, id: dir };
+      }
       case 'created_desc':
-        return { createdAt: 'desc' };
+        return { createdAt: 'desc', id: 'desc' };
       case 'last_activity_desc':
       default:
-        return { lastActivityAt: 'desc' };
+        return { lastActivityAt: 'desc', id: 'desc' };
     }
   }
 
@@ -428,23 +494,12 @@ export class CartAdminService {
     em: EntityManager,
     cartIds: string[],
   ): Promise<Map<string, { count: number; total: number; currency: string }>> {
-    const result = new Map<string, { count: number; total: number; currency: string }>();
-    if (cartIds.length === 0) return result;
-    const items = await em.find(CartItem, { cartId: { $in: cartIds } });
-    for (const it of items) {
-      const prev = result.get(it.cartId) ?? { count: 0, total: 0, currency: it.currency };
-      prev.count += 1;
-      prev.total += Number(it.unitPrice) * it.quantity;
-      result.set(it.cartId, prev);
-    }
-    return result;
+    if (cartIds.length === 0) return new Map();
+    return cartTotalsByCart(await em.find(CartItem, { cartId: { $in: cartIds } }));
   }
 }
 
-function anyLocaleName(product: CatalogProductRecord): string {
-  if (!product.name || typeof product.name !== 'object') return product.id;
-  const en = product.name['en-US'] ?? product.name['en'];
-  if (typeof en === 'string' && en.length > 0) return en;
-  const first = Object.values(product.name).find((v) => typeof v === 'string' && v.length > 0);
-  return (first as string) ?? product.id;
+/** Feature 174 (FR-031, `contracts/readers.md` §1) — the operator's view shows the Global name. */
+function globalName(product: CatalogProductRecord): string {
+  return product.name || product.id;
 }

@@ -68,7 +68,6 @@ vi.mock('../../../../packages/modules/payment_methods/src/admin/api/payment-meth
 
 const KEYS = [
   'legacyMethods.payment.title',
-  'legacyMethods.payment.description',
   'legacyMethods.payment.empty',
   'legacyMethods.payment.noPermission',
   'legacyMethods.columns.code',
@@ -78,7 +77,6 @@ const KEYS = [
   'legacyMethods.fields.status',
   'legacyMethods.status.active',
   'legacyMethods.status.inactive',
-  'legacyMethods.formTitle',
   'legacyMethods.editTitle',
   'common.state.loading',
   'common.action.edit',

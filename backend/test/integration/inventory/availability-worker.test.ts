@@ -4,12 +4,18 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import type { CatalogProductReadPort, CustomerAccountReadPort } from '@endora-commerce/contracts';
+import type {
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
+  CustomerAccountReadPort,
+  TemplateEmailPort,
+} from '@endora-commerce/contracts';
 import { AvailabilityWorker } from '../../../../packages/modules/inventory/src/backend/services/availability-worker.js';
 import { AvailabilityNotification, type ProductRow } from '../../helpers/package-entities.js';
 import { Product } from '../../helpers/package-entities.js';
 import { CustomerAccount } from '../../helpers/package-entities.js';
 import { InMemoryMailer } from '../../../../packages/modules/email/src/backend/services/mailer.js';
+import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
 
 /**
  * The container's own registrations — feature 075, Phase C. The worker takes
@@ -20,14 +26,20 @@ import { InMemoryMailer } from '../../../../packages/modules/email/src/backend/s
 function ports(handle: BackendServerHandle): {
   catalogProducts: CatalogProductReadPort;
   customerAccounts: CustomerAccountReadPort;
+  catalogAvailability: CatalogProductAvailabilityPort;
+  templateEmail: TemplateEmailPort;
 } {
   const cradle = handle.container.cradle as never as {
     catalogProductReadPort: CatalogProductReadPort;
     customerAccountReadPort: CustomerAccountReadPort;
+    catalogProductAvailabilityPort: CatalogProductAvailabilityPort;
+    templateEmailPort: TemplateEmailPort;
   };
   return {
     catalogProducts: cradle.catalogProductReadPort,
     customerAccounts: cradle.customerAccountReadPort,
+    catalogAvailability: cradle.catalogProductAvailabilityPort,
+    templateEmail: cradle.templateEmailPort,
   };
 }
 
@@ -39,13 +51,14 @@ function ports(handle: BackendServerHandle): {
 
 describe('AvailabilityWorker.dispatchForStockIncrease', () => {
   let h: BackendServerHandle;
-  let mailer: InMemoryMailer;
+  /** The composed transport: the template the worker renders leaves through it (issue #1256). */
+  const mailer = new InMemoryMailer();
   let worker: AvailabilityWorker;
   let product: ProductRow;
   let customer: CustomerAccount;
 
   beforeAll(async () => {
-    h = await setupBackendServer();
+    h = await setupBackendServer({ organizationsMailer: mailer });
     product = await h.em().findOneOrFail(Product, { sku: 'EXAMPLE-SIMPLE-001' });
     // Every fixture below stamps `organizationId: customer.organizationId`
     // beside the account: feature 087 Group B / D-187 gives this table an
@@ -55,7 +68,7 @@ describe('AvailabilityWorker.dispatchForStockIncrease', () => {
     // worker itself is untouched by that — it reads under `withSystemScope`, a
     // deliberate cross-tenant grant, so the fan-out still reaches every
     // organisation and these assertions mean exactly what they meant before.
-    customer = await h.em().findOneOrFail(CustomerAccount, { role: 'organization_admin' });
+    customer = await h.em().findOneOrFail(CustomerAccount, { id: TEST_CUSTOMER_ID });
   });
 
   afterAll(async () => {
@@ -63,9 +76,9 @@ describe('AvailabilityWorker.dispatchForStockIncrease', () => {
   });
 
   beforeEach(async () => {
-    mailer = new InMemoryMailer();
-    const { catalogProducts, customerAccounts } = ports(h);
-    worker = new AvailabilityWorker(h.em, mailer, catalogProducts, customerAccounts);
+    mailer.sent.length = 0;
+    const { catalogProducts, customerAccounts, catalogAvailability, templateEmail } = ports(h);
+    worker = new AvailabilityWorker(h.em, mailer, catalogProducts, customerAccounts, catalogAvailability, templateEmail);
     await h
       .em()
       .getConnection()
@@ -105,6 +118,44 @@ describe('AvailabilityWorker.dispatchForStockIncrease', () => {
       notifiedAt: null,
     });
     expect(remaining).toHaveLength(0);
+
+    // Issue #1291 — consumed means `notified`, as `processRestockedFanOut` writes it: a row left
+    // `queued` beside its `notified_at` shows as waiting in the admin list and its status filter.
+    const rows = (await h
+      .em()
+      .getConnection()
+      .execute(`select status, notified_at from availability_notifications where product_id = ?`, [
+        product.id,
+      ])) as Array<{ status: string; notified_at: Date | null }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.status).toBe('notified');
+      expect(row.notified_at).not.toBeNull();
+    }
+  });
+
+  it('closes a subscription whose account is gone as cancelled, the way the fan-out does (#1291)', async () => {
+    const em = h.em();
+    em.create(AvailabilityNotification, {
+      // No foreign key holds the account id, so a deleted account leaves it dangling.
+      customerAccountId: '88888888-8888-4888-8888-888888888888',
+      organizationId: customer.organizationId,
+      productId: product.id,
+      variantId: null,
+    });
+    await em.flush();
+
+    await worker.dispatchForStockIncrease({ productId: product.id });
+    expect(mailer.sent).toHaveLength(0);
+    const rows = (await h
+      .em()
+      .getConnection()
+      .execute(`select status, notified_at from availability_notifications where product_id = ?`, [
+        product.id,
+      ])) as Array<{ status: string; notified_at: Date | null }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('cancelled');
+    expect(rows[0]?.notified_at).not.toBeNull();
   });
 
   it('skips already-consumed notifications on a second run', async () => {

@@ -27,8 +27,8 @@ const getSpy = vi.fn(async (_path: string) => ({ data: [], items: [], counts: {}
 
 
 
-vi.mock('../../../../packages/admin-shell/src/lib/api-client', async () => {
-  const actual = await vi.importActual('../../../../packages/admin-shell/src/lib/api-client');
+vi.mock('@endora-commerce/admin-kit/lib', async () => {
+  const actual = await vi.importActual('@endora-commerce/admin-kit/lib');
   return {
     ...(actual as Record<string, unknown>),
     apiClient: {
@@ -49,7 +49,6 @@ const { HomePage } = await import('../../../../packages/admin-shell/src/modules/
 
 const BUNDLE = passthroughBundle('core', [
   'home.welcomeBack',
-  'home.subtitle',
   'home.defaultName',
   'home.kpi.activeProducts',
   'home.kpi.pendingQuotes',
@@ -61,7 +60,6 @@ const BUNDLE = passthroughBundle('core', [
   'home.quickActions.importInventory',
   'home.quickActions.convertQuote',
   'home.stockAlerts.title',
-  'home.stockAlerts.subtitle',
   'home.stockAlerts.empty',
   'home.stockAlerts.seeAll',
 ]);

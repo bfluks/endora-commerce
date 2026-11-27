@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import { tForLocale } from '../../lib/i18n/messages';
 import type { PaymentFailureReason } from '../../lib/payments/post-payment-landing';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * The failure page for a buyer whose **order already exists** (issue #287).
@@ -77,9 +77,9 @@ export function PaymentFailurePanel({
       )}
 
       <p className="b2b-auth__hint">
-        <Link href={`/orders/${orderId}`}>{t('checkout.paymentFailure.viewOrder')}</Link>
+        <LocalizedLink href={`/orders/${orderId}`}>{t('checkout.paymentFailure.viewOrder')}</LocalizedLink>
         {' · '}
-        <Link href="/orders">{t('checkout.paymentFailure.allOrders')}</Link>
+        <LocalizedLink href="/orders">{t('checkout.paymentFailure.allOrders')}</LocalizedLink>
       </p>
     </div>
   );

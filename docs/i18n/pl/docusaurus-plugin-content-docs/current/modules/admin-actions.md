@@ -36,7 +36,8 @@ export const manifest = defineModuleManifest({
       icon: 'Plus',
       targetRoute: '/catalog/products/new',
       requiredPermission: 'catalog:write',
-      keywords: ['product', 'new', 'add', 'create', 'produkt', 'nowy', 'dodaj'],
+      keywords: ['product', 'new', 'add', 'create'],
+      keywordsKey: 'actions.newProduct.keywords',
       weight: 100,
     },
   ],
@@ -44,8 +45,16 @@ export const manifest = defineModuleManifest({
 ```
 
 Każdy wpis MUSI mieć stabilne `id`, tłumaczalny `labelKey`, `icon` z zamkniętej listy dozwolonych
-ikon oraz `targetRoute`. Pola opcjonalne to `descriptionKey`, `requiredPermission`, `keywords` (do
-10) i `weight` (domyślnie 100).
+ikon oraz `targetRoute`. Pola opcjonalne to `descriptionKey`, `requiredPermission`,
+`entryApiRoute`, `keywords` (do 10), `keywordsKey` i `weight` (domyślnie 100).
+
+`keywords` są po angielsku i pasują w każdym języku panelu. Słowa wyszukiwania w innym języku
+nie trafiają do manifestu: `keywordsKey` wskazuje wpis we własnych pakietach tłumaczeń modułu —
+względny wobec przestrzeni nazw modułu, tak jak `labelKey` — którego wartością jest lista
+rozdzielona przecinkami, na przykład `"actions.newProduct.keywords": "produkt, nowy, dodaj"`
+w `i18n/pl.json` i `"product, new, add"` w `i18n/en.json`. Serwer rozwiązuje go w języku
+operatora (z powrotem do angielskiego) i zwraca te słowa po `keywords` z manifestu, więc polski
+operator znajdzie akcję po polskim słowie, a nadal także po angielskim.
 
 `requiredPermission` jest w schemacie opcjonalne, ale w praktyce obowiązkowe: musi to być **kod,
 który backend egzekwuje na trasie stojącej za `targetRoute`**, żeby paleta nigdy nie proponowała
@@ -59,6 +68,29 @@ nich, bo sprawdza, czy kod jest egzekwowany *gdziekolwiek*, a nie czy jest egzek
 tylko wtedy, gdy cel naprawdę nie jest niczym chroniony; jeśli ekran jest chroniony uprawnieniem do
 odczytu, a etykieta akcji obiecuje zapis, pole nie może wyrazić obu tych rzeczy naraz, więc
 rozbieżność jest zapisywana w rejestrze wyjątków tej kontroli, a nie zgadywana.
+
+Kontrola ustala tę trasę na podstawie adresu: najpierw szuka ścieżki API równej celowi, potem
+najpłytszej ścieżki pod nim, a na końcu najbliższej trasy zarejestrowanej przez moduł. Ten
+domysł zawodzi, gdy ekran korzysta z API, którego jego ścieżka w panelu nie nazywa. Kolejka
+wychodząca poleceń jest zakładką `/platform/command-hooks`, ale jej dane pochodzą z
+`GET /api/v1/admin/command-outbox`. Dla takiego ekranu `entryApiRoute` wskazuje trasę API
+administracyjnego, którą ekran otwiera, a kontrola porównuje `requiredPermission` tylko z tą
+trasą:
+
+```ts
+{
+  id: 'open-command-outbox',
+  targetRoute: '/platform/command-hooks/outbox',
+  requiredPermission: 'platform.command_outbox.read',
+  entryApiRoute: '/api/v1/admin/command-outbox',
+  // …
+}
+```
+
+Wartość to ścieżka pod `/api/v1/admin/`, zapisana dokładnie tak, jak rejestruje ją trasa.
+Metoda wynika z celu: `GET` albo metody zapisu dla formularza `/new`. Jeśli żadna rejestracja nie
+odpowiada zadeklarowanej ścieżce, kontrola zgłasza to, zamiast wracać do domysłu. W czasie
+działania nic tego pola nie odczytuje. Deklaruj je tylko tam, gdzie domysł wybiera złą trasę.
 
 Unikalność `id` w obrębie modułu wymusza schemat Zod manifestu — instalacja manifestu z dwiema
 akcjami o tym samym identyfikatorze kończy się błędem z czytelnym komunikatem wskazującym indeks.
@@ -124,6 +156,7 @@ platformy; paleta po prostu nie czyta jej już z pominięciem platformy.
 | `target_route` | `varchar(255)` | Trasa w panelu administracyjnym. |
 | `required_permission` | `varchar(64) NULL` | Kod uprawnienia, w dowolnej notacji. |
 | `keywords` | `jsonb` | Tablica ciągów znaków. |
+| `keywords_key` | `varchar(255) NULL` | Klucz i18n słów wyszukiwania w danym języku, rozwiązywany przy odczycie. |
 | `weight` | `integer` | Klucz sortowania (domyślnie 100). |
 | `version` | `bigint` | Licznik dla wiersza; zwiększany przy każdym UPSERT. |
 | `installed_at`, `updated_at` | `timestamptz` | Metadane wiersza. |
@@ -148,8 +181,8 @@ Wagi są tylko zaleceniem, ale recenzenci oczekują, że nowe akcje trafią do w
 ## Lista dozwolonych ikon
 
 Dozwolone nazwy ikon to typ wyliczeniowy w `packages/contracts/src/admin-actions.ts`. Dodanie nowej
-ikony to jednowierszowa zmiana w tym typie i w `icon-map.ts` pakietu admin shell
-(`@endora-commerce/admin-shell`, `src/lib/admin-actions/icon-map.ts`).
+ikony to jednowierszowa zmiana w tym typie i w `icon-map.ts` systemu projektowego panelu
+(`@endora-commerce/admin-kit`, `src/lib/admin-actions/icon-map.ts`).
 
 ## Jakie akcje istnieją
 

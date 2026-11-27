@@ -1,10 +1,11 @@
 import type {
   ChannelMemberEntityType,
-  SalesChannelCreateBody,
+  ChannelMemberIdListResponse,
+  EntityMembershipListResponse,
+  SalesChannelCreateRequest,
   SalesChannelDetail,
   SalesChannelListResponse,
   SalesChannelSetDefaultResponse,
-  SalesChannelSummary,
   SalesChannelUpdateBody,
 } from '@endora-commerce/contracts';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
@@ -42,7 +43,7 @@ export const salesChannelsClient = {
     );
   },
 
-  create(body: SalesChannelCreateBody): Promise<SalesChannelDetail> {
+  create(body: SalesChannelCreateRequest): Promise<SalesChannelDetail> {
     return apiClient.post<SalesChannelDetail>('/api/v1/admin/sales-channels', body);
   },
 
@@ -99,14 +100,7 @@ export const salesChannelsClient = {
     code: string,
     entityType: ChannelMemberEntityType,
     options: { page?: number; pageSize?: number } = {},
-  ): Promise<{
-    salesChannelCode: string;
-    entityType: ChannelMemberEntityType;
-    entityIds: string[];
-    page: number;
-    pageSize: number;
-    total: number;
-  }> {
+  ): Promise<ChannelMemberIdListResponse> {
     const qs = new URLSearchParams();
     if (options.page !== undefined) qs.set('page', String(options.page));
     if (options.pageSize !== undefined) qs.set('pageSize', String(options.pageSize));
@@ -120,11 +114,7 @@ export const salesChannelsClient = {
   listChannelsForEntity(
     entityType: ChannelMemberEntityType,
     entityId: string,
-  ): Promise<{
-    entityType: ChannelMemberEntityType;
-    entityId: string;
-    channels: SalesChannelSummary[];
-  }> {
+  ): Promise<EntityMembershipListResponse> {
     return apiClient.get(
       `/api/v1/admin/sales-channels/by-entity/${entityType}/${encodeURIComponent(entityId)}`,
     );

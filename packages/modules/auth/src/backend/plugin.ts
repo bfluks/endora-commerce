@@ -46,10 +46,17 @@ import type { SessionService } from './services/session-service.js';
  * The account behind a customer session, as the request hook needs it.
  * `active` is `false` for an account that is blocked or deleted; `null` stands
  * for an account that does not exist.
+ *
+ * `organizationRoleId` is the member's organization role
+ * (`specs/170-organization-roles/`, research R-15), stamped on the actor so a
+ * permission check needs no read of its own. Optional until `customer_accounts`'
+ * resolver answers it; the actor then carries `null` and the permission port
+ * reads the account itself.
  */
 export type CustomerSessionAccount = {
   readonly organizationId: string | null;
   readonly active: boolean;
+  readonly organizationRoleId?: string | null;
 } | null;
 
 export interface AuthPluginOptions {
@@ -174,6 +181,9 @@ async function authPluginImpl(app: FastifyInstance, opts: AuthPluginOptions): Pr
         request.adminActor = {
           kind: 'admin',
           adminUserId: resolvedAdmin.session.adminUserId,
+          // Issue #349, E-349-1 — so a write whose consequence ends other
+          // sessions, reached through an event, can spare this one.
+          sessionId: resolvedAdmin.session.id,
         };
         // An administrator's presence, kept as a customer's is below: until
         // this line `lastSeenAt` held an administrator's sign-in time and
@@ -205,6 +215,7 @@ async function authPluginImpl(app: FastifyInstance, opts: AuthPluginOptions): Pr
             kind: 'customer',
             customerAccountId: session.customerAccountId,
             organizationId: account?.organizationId ?? '',
+            organizationRoleId: account?.organizationRoleId ?? null,
             impersonatorAdminUserId: session.impersonatorAdminUserId ?? null,
           };
         } else if (
@@ -222,6 +233,7 @@ async function authPluginImpl(app: FastifyInstance, opts: AuthPluginOptions): Pr
             kind: 'customer',
             customerAccountId: session.customerAccountId,
             organizationId: account?.organizationId ?? '',
+            organizationRoleId: account?.organizationRoleId ?? null,
             impersonatorAdminUserId: null,
           };
         }

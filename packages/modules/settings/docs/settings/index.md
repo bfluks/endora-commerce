@@ -105,10 +105,14 @@ The code is written whole, dots included. For the manifest above:
 }
 ```
 
-Resolution is per key: the administrator's language, then English, then the
-string the manifest declared. Every key is optional, so a module that ships none
-of them renders exactly as it did before, and you can translate one setting at a
-time. Three things follow from how the lookup works:
+Resolution is per key. A **name** is looked up in the administrator's language,
+then English, then the string the manifest declared. A **description** is never
+shown in another language: in Polish it is the Polish key or nothing, and the
+manifest's English sentence is shown only to an English reader. Keep each
+description to one row of the screen — at most 120 English characters, which
+`pnpm --filter backend run check:text-budget` holds — and put the full
+explanation in your module's documentation page. Three things follow from how
+the lookup works:
 
 - **Only the owning module's bundle is read** — the module whose settings
   manifest declared the row (`moduleCode`, which must equal the module's `id`
@@ -161,6 +165,56 @@ keeps its asset or image editor. And removing the flag does not rewrite
 anything: a stored value keeps its line breaks until an operator next edits it
 in the single-line field, which cannot hold them.
 
+### Validating writes, and saying a value is not in force
+
+Two contribution registries let the module that declared a setting answer for
+it, from a boot hook, while `settings` keeps owning storage and resolution. A
+contributor whose module is off is skipped by both.
+
+- `settingWriteValidatorRegistry` (`SettingWriteValidatorRegistryPort`): a
+  validator refuses a value before it is stored, by throwing an `HttpError`.
+- `settingNoticeRegistry` (`SettingNoticeRegistryPort`): a provider says that
+  the stored platform-wide value is not what is in force, by answering
+  `{ code, message }`, or `null` when there is nothing to say. Every admin
+  settings response then carries it as `notice`; the key is absent otherwise.
+  The Settings screen shows it under the description, translated from your
+  bundle at `settingLabels.<setting code>.notice.<code>`, else `message`. A
+  provider that throws is logged and skipped: the setting is shown without
+  its notice. `mfa` uses it for `mfa.admin.totp_enforced` when no encryption
+  key is configured.
+
+  A provider may also implement `confirmation`, which says what to ask before a
+  write: `{ whenValue, code, message, params? }`, or `null`. The response then
+  carries it as `confirmation`. When an operator saves exactly `whenValue`, the
+  Settings screen re-reads the setting just before saving and asks with that
+  read's `confirmation`, so a count in `params` is the one in force at save
+  time; if the re-read carries none, it saves without asking. The question is
+  the text from your bundle at `settingLabels.<setting code>.confirmation.<code>`
+  filled in from `params`, else `message`; declining saves nothing. After an
+  accepted save the screen shows `settingLabels.<setting code>.confirmed.<code>`
+  from your bundle, when you ship it, in place of the saved-count line. A
+  provider whose `confirmation` throws is logged and skipped, and the write is
+  saved without asking.
+
+  `mfa` uses it for `mfa.admin.totp_enforced`. The sign-out itself is not tied
+  to the question: `mfa` ends the sessions of administrators without a second
+  factor after any write that leaves `mfa.admin.totp_enforced` on, through
+  `settings.value_changed`. The question is asked only when a save turns it on,
+  with how many administrators that is.
+
+```ts
+ctx.onBoot(() => {
+  lazyPort<SettingNoticeRegistryPort>(ctx, 'settingNoticeRegistry').register({
+    contributorModuleId: 'your_module',
+    codes: ['your_module.enabled'],
+    notice: async ({ value }) =>
+      value === true && !configured()
+        ? { code: 'not_configured', message: 'Not in force: the connection is not configured.' }
+        : null,
+  });
+});
+```
+
 ## For platform admins — editing values
 
 Open `Admin → Operations → Settings`. Settings are grouped by their owning
@@ -176,7 +230,14 @@ someone else has changed the setting since you opened it, the save returns
 `409 VERSION_CONFLICT` and a banner asks you to refresh and retry — no silent
 overwrites.
 
-Setting groups are managed under `Admin → Operations → Setting groups`.
+The settings screen has three tabs under one *Settings* entry in the
+*Platform* section of the sidebar: **Settings**, **Groups** and **Cache and
+search index** (the last one only for administrators holding
+`settings:write`). Each tab can also be opened directly from the command
+palette (⌘K / CTRL+K): *Open platform settings*, *Setting groups* and
+*Clear cache*.
+
+Setting groups are managed on the **Groups** tab.
 The `general` group is system-protected; the platform refuses to delete it.
 Deleting any other group reassigns its settings to `general` and preserves
 their per-channel values.
@@ -188,6 +249,25 @@ and after side by side. That is the value stored at the level being written —
 the all-channels value, or that channel's own — and not the value the channel
 resolved to: a first write records `stored: false` rather than the manifest
 default. A `secret` setting is recorded as `[redacted]` on both sides.
+
+## Shop information
+
+The **Shop information** group (`shop`) holds the facts about the shop that the
+storefront publishes: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails`, and
+two settings for search engines:
+
+| Setting | Type | What it is |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — a public image from the Assets Library, chosen with the asset picker. Empty publishes no logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — the full `https://` addresses of the organisation's profiles on social networks and other sites, one per entry. A write holding any other value is refused with `422 VALIDATION_FAILED` and nothing is stored. |
+
+The storefront reads them through `GET /api/v1/storefront/shop-info`, which
+returns `logoUrl` (the logo asset's public URL, or `null` when the setting is
+empty or the asset is gone or not public) and `socialProfiles` (only `https:`
+entries). It publishes both in its `Organization` structured data, as `logo`
+and `sameAs`, on the home page and on every CMS page. Resolving the logo is why
+this module depends on `assets_library`.
 
 ## For module consumers — reading values
 
@@ -232,7 +312,9 @@ loaded rather than from the last read, so even a setting read on every request
 ages out.
 
 That window is the bound on how long a missed invalidation can be visible. It
-is also why the operator-facing "clear cache" page is a diagnostic tool rather
+is also why the operator-facing *Clear cache* action (on the **Cache and search
+index** tab, beside *Rebuild search index* and *Reload translations*) is a
+diagnostic tool rather
 than a repair: it drops both layers in the process that serves it and the
 shared entries for everyone, and every other process converges within the same
 30 s.
@@ -240,22 +322,26 @@ shared entries for everyone, and every other process converges within the same
 ## CLI
 
 Settings rows are installed and removed by the module lifecycle commands, not
-by commands of their own:
+by commands of their own. Run them in the root of the instance:
 
 ```bash
 # Install a module: runs its migrations and reconciles its settings manifest.
-pnpm --filter backend run module:install <module-id> [--dry-run] [--json]
+pnpm run module:install <module-id> [--dry-run] [--json]
 
 # Soft uninstall (default): unregisters the module's settings and marks the
 # module uninstalled; its tables and data stay. --hard also reverts the
 # module's migrations and must be combined with --force.
-pnpm --filter backend run module:uninstall <module-id> [--hard --force] [--json]
+pnpm run module:uninstall <module-id> [--hard --force] [--json]
 ```
+
+In a checkout of the Endora Commerce repository the same two commands are
+`pnpm --filter backend run module:install` and
+`pnpm --filter backend run module:uninstall`, with the same arguments.
 
 `--remove-settings` and `--preserve-settings` are still accepted by
 `module:uninstall` for backward compatibility: the first means `--hard --force`,
 the second does nothing. The argument grammar and exit codes belong to
-`@endora-commerce/platform`'s lifecycle commands; the Module Lifecycle page
+`@endora-commerce/platform`'s lifecycle commands; the Module lifecycle page
 lists the exit codes. Both commands write `audit_log_entries` rows.
 
 ## Database

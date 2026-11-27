@@ -7,6 +7,7 @@ import {
   type UseOrganizationsQueryOptions,
 } from './useOrganizationsQuery.js';
 import { OrganizationStatusBadge } from './OrganizationStatusBadge.js';
+import { useTranslation } from '../../i18n/useTranslation.js';
 import { cn } from '../../lib/utils.js';
 
 export interface OrganizationPickerMultiProps {
@@ -16,9 +17,10 @@ export interface OrganizationPickerMultiProps {
   /**
    * Labels keyed by id for organizations that may not appear in the
    * current page of search results. Lets the chip render correctly even
-   * after the dropdown has scrolled past the original selection.
+   * after the dropdown has scrolled past the original selection. `status` is
+   * optional: without one the chip shows no status badge.
    */
-  selectedLabels?: Record<string, { name: string; status: OrganizationStatus }>;
+  selectedLabels?: Record<string, { name: string; status?: OrganizationStatus }>;
   statusFilter?: OrganizationStatus[];
   placeholder?: string;
   emptyMessage?: string;
@@ -39,6 +41,7 @@ export interface OrganizationPickerMultiProps {
 export function OrganizationPickerMulti(
   props: OrganizationPickerMultiProps,
 ): React.ReactElement {
+  const t = useTranslation('core');
   const [query, setQuery] = useState('');
 
   const queryOptions = useMemo<UseOrganizationsQueryOptions>(
@@ -92,11 +95,11 @@ export function OrganizationPickerMulti(
         <button
           type="button"
           className="text-slate-500 hover:text-slate-900"
-          aria-label={`Remove ${label}`}
+          aria-label={t('organizationPicker.remove', { name: label })}
           onClick={(): void => handleRemove(id)}
           disabled={props.disabled ?? false}
         >
-          <X className="h-3 w-3" />
+          <X className="h-3 w-3" aria-hidden="true" />
         </button>
       </span>
     );
@@ -131,9 +134,9 @@ export function OrganizationPickerMulti(
         loading={loading}
         clearable={false}
         disabled={props.disabled ?? false}
-        placeholder={props.placeholder ?? 'Add organization…'}
-        emptyMessage={props.emptyMessage ?? 'No organizations found'}
-        ariaLabel={props.ariaLabel ?? 'Add organizations'}
+        placeholder={props.placeholder ?? t('organizationPicker.multi.placeholder')}
+        emptyMessage={props.emptyMessage ?? t('organizationPicker.empty')}
+        ariaLabel={props.ariaLabel ?? t('organizationPicker.multi.label')}
         id={props.id ?? ''}
         renderOption={renderOption}
       />

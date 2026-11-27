@@ -1,5 +1,1758 @@
 # @endora-commerce/mod-i18n
 
+## 0.112.0
+
+### Minor Changes
+
+- b2cd2d3: `@endora-commerce/admin-kit/ui` publishes `FormField` and `HelpTip` (issue #1432).
+
+  `FormField` renders a label, its control, a one-line hint and an error, and wires them together: it generates the control's `id`, points the `<label>` at it, links the error, hint and description through `aria-describedby`, marks the control `aria-invalid` when there is an error and `aria-required` when the field is `required`. The child is cloned with that wiring — `Input`, `Select`, `Textarea`, `Checkbox`, or any component that forwards `id` and `aria-*` — or, for a control that needs it elsewhere, the child is a function receiving it as `FormFieldControlProps`:
+
+  ```tsx
+  <FormField label={t('field.email')} hint={t('field.emailHint')} error={errors.email} required>
+    <Input type="email" value={email} onChange={onEmail} />
+  </FormField>
+  ```
+
+  `group` labels a composite control (`role="group"` named by the label); `help` puts a longer explanation behind a `HelpTip` beside the label; `description`, `labelAddon`, `action` and `describedBy` cover editor rows that carry more than a label. `HelpTip` is the ⓘ disclosure on its own, for a page header or a table column.
+
+  `core` gains `common.formField.required` and `common.helpTip.label`, in English and Polish.
+
+- 90320fd: **Breaking:** `PATCH /api/v1/admin/organizations/:id` no longer accepts `status` (issue #1468). A body that carries it is refused with `400 VALIDATION_ERROR` at `status`, and nothing else in that body is written. To change an organization's status, call the moderation endpoints instead: `POST /api/v1/admin/organizations/:id/approve`, `…/reject`, `…/block` or `…/unblock`. They are the only path that checks the allowed transitions, records `approvedAt` / `blockedAt` / `blockedReason`, emits `organization.status_changed.v1` and sends the customer e-mail.
+
+  - Old: `PATCH /api/v1/admin/organizations/:id` with `{ "status": "blocked" }`.
+  - New: `POST /api/v1/admin/organizations/:id/block` with `{ "expectedVersion": <version>, "reason": "…" }`.
+
+  In `@endora-commerce/contracts`, `adminPatchOrganizationRequestSchema` refuses `status` with the message in the new `ADMIN_PATCH_ORGANIZATION_STATUS_REFUSAL` export. `vatStatus` is still accepted.
+
+  On the organization screen, the status and VAT status selects are gone, and the page's Save no longer counts or sends either field:
+
+  - The **Moderation** section is the only place the status is shown and changed. Its actions are offered only to operators who hold `customers:manage`.
+  - The VAT status is shown in the header. It is changed by the new **Change VAT status…** dialog. The dialog needs `customers:manage`, applies immediately and is audited as `organization.admin_patch`.
+  - The remaining section is titled **Contact & notifications**.
+
+  `ModerationActionsPanel` takes a required `canModerate` prop. In the core catalogue, `organizations.detail.accountStatus` and `organizations.detail.statusCard` are removed and `organizations.detail.notificationsCard` is added. A deployment that overrides the removed keys must drop them.
+
+- 9a27b93: New kit composite `BoardCardFieldsEditor` (`@endora-commerce/admin-kit/components`), with the types `BoardCardFieldChoice`, `BoardCardFieldsConfig`, `BoardCardFieldsEditorCopy` and `BoardCardFieldsEditorProps` (issue #1506). It edits which fields a board card shows and in what order: `load` and `save` answer `{ fields, available, maxFields }` (the catalogue and the limit come from the server), `fieldLabel` names a field, and `copy` carries the three lines that name the module's record. Its other copy is `core`'s new `boardCardFields.*` keys in `@endora-commerce/mod-i18n`.
+
+  CRM's and Tasks' own `BoardCardFieldsEditor` copies are removed, along with their duplicated `boardCard.*` keys (the title, `shown.titleAlways`, `available.builtin` and `available.noCustom` stay). CRM's `ITEM_COUNT_LABEL_KEY` and `opportunity.tabs.counted` are removed too, because the kit's `common.tabs.counted` reads the same. The Opportunity and Project record tabs now use the kit `RecordTabs`, and the form builder's tabs use `Tabs` / `TabPanel`. The form builder's strip now looks like every other strip in the admin.
+
+- bfbcac2: The admin kit publishes `ViewModeToggle` from `@endora-commerce/admin-kit/components`: the _List | Board_ switch that Tasks and My Tasks used, now named from the shared `common.viewMode.*` strings. The Tasks module no longer ships its own copy, and its `view.label`, `view.list` and `view.board` strings are removed.
+
+  CRM's Opportunities list and board are one page. `/crm/opportunities` shows the list, and `/crm/opportunities?view=board` shows the board, switched by the toggle in the page header. The two views share one address: the search, organization, assignee, tag, sales-channel and creation-date filters carry over when the view changes. The list's state, status, sort and custom-field filters are now in the address too, so a reload or a shared link keeps them. **Clear all filters** clears the filters of both views. The sidebar loses its _Board_ row. `/crm/board`, and the command palette's _Opportunity board_ that targets it, redirect to the board view and keep the filters a bookmark carried. The CRM strings `nav.board.label` and `board.title` are removed.
+
+- ee6062c: **A status or priority list is reordered in one request** (issue #1560). Three new endpoints take the
+  whole list in its new order and change it in one audited Command, so a move is one history entry and
+  one undo step, and a list is never left half-moved:
+
+  | Route                                      | Permission        | Command                  | Answers                                |
+  | ------------------------------------------ | ----------------- | ------------------------ | -------------------------------------- |
+  | `PUT /api/v1/admin/crm/statuses/order`     | `crm:configure`   | `crm.status.reorder`     | the workflow, as `GET /crm/workflow`   |
+  | `PUT /api/v1/admin/tasks/statuses/order`   | `tasks:configure` | `tasks.status.reorder`   | the workflow, as `GET /tasks/workflow` |
+  | `PUT /api/v1/admin/tasks/priorities/order` | `tasks:configure` | `tasks.priority.reorder` | the list, as `GET /tasks/priorities`   |
+
+  The body is `{ orderedCodes: string[] }` and must be exactly the configured codes, each once.
+  Anything else — a code that is not configured, a row left out, a row named twice — answers
+  `409 ORDER_STALE`, a new code in
+  `ERROR_CODES` with an English and Polish sentence in `@endora-commerce/mod-i18n` — the list changed
+  since the caller loaded it, so reload it. The weights are rewritten 10, 20, 30, … in the new order.
+  The audit entry records `{ order: [codes] }` before and after.
+
+  New in `@endora-commerce/contracts`: `ReorderOpportunityStatusesRequestSchema`,
+  `ReorderTaskStatusesBodySchema`, `ReorderTaskPrioritiesBodySchema` (and their types) and
+  `ERROR_CODES.ORDER_STALE`.
+
+  In the admin, the CRM status settings and the Tasks status and priority settings move a row with
+  up/down buttons on the row instead of a position number in the status or priority dialog; the
+  position field is gone from the dialogs, and a new status or priority goes last. A move shows at
+  once, is undone with a message if the server refuses it, and reloads the list with a message if
+  somebody else changed it meanwhile. The `PATCH` endpoints still accept `weight`. No setting,
+  permission or migration changes.
+
+- bdcc9a4: The server-backed list reorder that CRM and Tasks each kept a copy of now lives in the admin kit
+  (issue #1633): `useServerReorder` and `ReorderControls` from `@endora-commerce/admin-kit/components`,
+  with the types `ReorderableRow`, `ReorderNotice`, `UseServerReorderOptions`, `UseServerReorderResult`
+  and `ReorderControlsProps`. The hook moves the row at once, sends the whole list in one save, rolls back
+  and reports a refusal, and on a 409 `ORDER_STALE` reloads the list and says so; the screen still passes
+  its own `staleMessage` and `failedMessage`. The CRM workflow statuses and the Tasks statuses and
+  priorities use the kit copies and behave as before.
+
+  The controls' accessible names are now `core` copy: `reorder.moveRowUp` and `reorder.moveRowDown`
+  ("Move {name} up" / "Move {name} down", same wording in Polish as before). The `crm` and `tasks` keys
+  `reorder.moveUp` and `reorder.moveDown` are removed.
+
+- bfab5bd: **Breaking:** `GET /api/v1/admin/quote-requests` now answers one page instead of every quote request. The server applies `assignmentScope`, `organizationId`, `status`, `q` (a fragment of the business id, the organization name or the customer's name, or a whole id), `sort` (`updatedAt:desc` by default, `updatedAt:asc`, `total:desc`, `total:asc`) and the page (`page`, default 1; `pageSize`, default 25, at most 200). The `pagination` block is now true for the response: it adds `page`, `pageSize` and `total`, and `limit` and `hasMore` describe the page returned (`nextCursor` stays `null`; ask for the next `page`). An invalid `pageSize`, `page`, `sort`, `assignmentScope` or `organizationId` is refused with 400.
+
+  To migrate, a client that read the whole list from one call must page through it with `page` and `pageSize`, or read `pagination.total` when it only needs the count. The contracts publish the query and the envelope as `adminQuoteRequestListQuerySchema` and `adminQuoteRequestListResponseSchema`.
+
+  `SalesRepAssignmentPort` gains `listOrganizationIdsWithAssignments()`; an implementation of the port outside this repository must add it. The admin Quote Requests list now asks the server for each page, filter and sort, and offers a lowest-total sort. The home page's pending-quotes tile and the project link picker read the paged list.
+
+### Patch Changes
+
+- f5b8275: The admin carts list now shows translated labels (EN and PL) for the cart status and the approval status, in both filter selects and in the status badges. Before, it showed the raw codes, such as `rejected_by_org_admin`. The screen's title, description, column headings and empty and loading text were missing from the `carts` catalogue, so they appeared as raw keys. They are now in the catalogue too, with the new `carts.status.<code>` and `carts.approvalStatus.<code>` keys.
+
+  `OrganizationStatusBadge` now reads its labels from the `core` catalogue (`organizationStatusBadge.<status>`, EN and PL) instead of hard-coded English. The badge is used in the organizations list, the moderation panel and the organization pickers. The English labels are unchanged.
+
+- e5b17ae: The admin kit's primitives draw their own words from the `core` bundle instead of English literals (issue #1433), so a Polish operator no longer reads English where a caller passed no copy: `RuleBuilder`, `MultiSelect`, `FileDropzone`, `AssetFieldPicker`, `CmsBlockPicker`, `CmsPagePicker`, `OrganizationPicker`, `OrganizationPickerMulti` and `CustomFieldValuesPanel`'s fallback errors. Every prop that overrode a default still does.
+
+  `RuleBuilderLabels` gains optional entries for each word the builder draws (`addCondition`, `addGroup`, `combineWith`, `groupOperatorLabel`, `groupAll`, `groupAny`, `groupSuffix`, `addChildCondition`, `addChildGroup`, `removeCondition`, `removeChild`, `valuesInputPlaceholder`, `fieldLabel`, `operatorLabel`). Its icon-only remove buttons and its field, operator and AND / OR selects now have accessible names. The default `matchAll` sentence is "No conditions: everything matches." rather than "Matches all carts.", which was wrong on every rule editor that does not filter carts; pass `labels.matchAll` to keep a domain-specific sentence.
+
+  `@endora-commerce/mod-i18n` ships the new `core` keys in English and Polish.
+
+- e78d27d: Admin screens show translated labels (EN and PL) where they used to show raw codes:
+
+  - Quote requests: the status badge in the list and the detail, the status filter and its chips. The status keys are now `rfq.status.<value>` in the `core` catalogue, which replace the unused `rfq.list.statusFilter.<value>` keys. `rfq.list.statusFilter.all` stays.
+  - Cart detail: the actor, the action and both states in the history feed (`carts.audit.actor.*`, `carts.audit.actionLabel.*`).
+  - Customer detail: the status of each order, quote request and cart in the history panels, and the address kind.
+  - Availability notifications: the status badge. Asset detail: the kind of each record that references the asset.
+
+  Technical values are gone from the order, quote request and cart screens. The order and quote request detail headers no longer repeat the UUID next to the copyable business ID. The order detail names the delivery and payment methods instead of showing their codes. When the Organization or customer details are missing, it says so instead of printing a UUID (`orderDetail.org.unavailable`, `orderDetail.customer.unavailable`). The carts list starts each row with the cart's owner, linked to the cart, instead of the first eight characters of its UUID. The cart detail header names the owner and the Organization, and an anonymous owner is now labelled "Guest" (`carts.owner.anonymous`). The `carts.column.id` key is removed.
+
+- 596ce81: A status is no longer changed by a select that writes as soon as an option is picked (issue #1435).
+
+  - `@endora-commerce/admin-kit/components` exports `StatusChangeControl` and the types `StatusChangeControlProps` and `StatusChangeOption`. It shows the current value as a badge with a "Change…" button. The button opens a dialog that lists only the allowed targets as radio options. The write runs only after a confirmation step that names the change from one value to the other. `onConfirm(to)` does the write. If it rejects, the dialog stays open and shows `errorMessage(error)`. While the write runs, the dialog is busy. With no targets, or with a `disabledReason`, the button is disabled and the reason is shown as its description.
+  - `@endora-commerce/mod-i18n` ships the control's strings under `common.statusChange.*` (en, pl), and the order detail screen's under `orderDetail.statusChange.*`.
+  - `@endora-commerce/mod-orders`: the order detail screen changes the order status and the payment status through this control (issue #1470). The order status dialog offers the configured transition graph's outgoing transitions. The payment status dialog offers the values `POST /api/v1/admin/orders/:id/payment-status` accepts, except the current one. The payment status stays editable by hand when the `payments` module is on, for bank transfers. Both changes are disabled, with the reason shown, for an administrator without `orders:write`. The routes, their permissions and their audit entries are unchanged. Status names follow the admin language. The helper `paymentStatusOptions` in the module's admin layer is replaced by `paymentStatusTargets`; it was not exported from the package.
+
+- fd27113: Content and system admin screens drop the page descriptions that repeated their title or spoke the implementation (issue #1436, UX audit 2026-11-17, DS-02). No description any more on: the CMS page, block and template editors, Brand, the blog post editor (once saved) and category editor (non-system), the Forms list, New form and Entries, the megamenu editor, the Comparisons list and detail, Settings, Settings groups, Cache, Modules, Command hooks, API description, Users, Roles, API keys, Webhooks, Taxes, Audit log, Credentials, the global-search configuration and results. The Brand cards for colour schemes, spacing and preview drop their intro line, and the Home stock-alert card its subtitle.
+
+  Moved behind a ⓘ beside the title (`help`): the Modules screen's note on installation versus activation, the document-template default rule, and the Meta Ads note that standard events are always reported.
+
+  Shortened to one line: the document templates, Meta Ads and LinkedIn Ads descriptions, the blog addresses description, the new post and new category notes, the CMS page editor's field notes (page fields, language version, breadcrumb parent and overlay, parent path, share image), the Brand scope and type-scale notes, the forms share-answer note, the megamenu click-navigates note, the Cache screen's two action notes, the API reference note, the reset-password note and the global-search settings note.
+
+  Translation keys removed from both `en` and `pl`: `core` `platform.modules.description`, `platform.modules.cliHint` (now `platform.modules.help`), `platform.commandHooks.description`, `platform.apiDescription.description`, `home.stockAlerts.subtitle`, `adminUsers.page.descriptionPrefix`, `adminUsers.rolesLink`, `adminRoles.page.descriptionPrefix`, `adminRoles.usersLink`, `apiKeys.page.description`, `webhooks.page.description`, `taxes.page.description`, `auditLog.page.description`; cms `pageEditor.description`, `blockEditor.description`, `templateEditor.description`, `brand.description`, `brand.schemes.hint`, `brand.spacing.hint`, `brand.preview.hint`, `brand.layout.tierHint`; blog `postEditor.description.edit`, `categoryEditor.description.default`; forms `list.description`, `create.description`, `entries.description`; megamenu `editor.description`; comparisons `list.page.description`, `detail.page.description`; settings `page.description`, `groups.page.description`, `cache.page.description`; credentials `page.subtitle`; admin_search `page.configuration.description`, `page.results.description`. New keys: `core` `platform.modules.help`, document_templates `page.help`, meta_ads `customEvents.help`. A deployment that overrides a removed key can drop the override.
+
+- b2b41eb: Page headers are shorter and every page has a heading (issue #1436). Home, Profile, the products list, product create and edit, the inventory and warehouse screens and Pricing settings now draw their title as a real page heading. Page descriptions that repeated the title or described the implementation are removed (categories, bulk operations, new price book, SEO, assets library, dictionary, products list, inventory, warehouses, home, profile); the rest are one short line, in English and Polish. Longer explanations — warehouses, Pricing settings, import/export and category taxonomy revisions — moved behind an ⓘ beside the title.
+- 988436f: Sales admin screens drop the page descriptions that repeated their title or addressed developers (issue #1436, UX audit 2026-11-17, DS-02). The Orders, Customers, Returns, Quote requests, Carts and Organizations lists, the order and quote-request create screens, Order statuses, Return statuses, Payment methods, Credit limits, the promotion editor, Promotion statistics, Order on behalf, New organization, Change tax ID and Convert to company no longer show a description. The payment and delivery method Integrations cards drop their one-line intro.
+
+  Kept descriptions are now one line: Return delivery methods ("A return cost of 0 means the shop pays for the return."), Delivery methods ("Price changes don't affect orders already placed."), Promotion rules, Online customers and Customer groups ("A customer's own group overrides their organization's."). New organization says that members are invited from the organization's page beside its Save, as `create.hint.inviteMembers`.
+
+  Translation keys removed from both `en` and `pl`: `core` `orders.page.description`, `orderCreate.description`, `orderStatusConfig.description`, `rfq.list.description`, `rfqCreate.description`, `organizations.page.description`, `returns.description`, `returns.statuses.description`, `legacyMethods.payment.description`, `legacyMethods.integrations.description`, `legacyMethods.integrations.shippingDescription`, `creditLimits.page.description`, `promotions.edit.description`, `promotionStats.description`, and the unused `rfq.detail.convert.description` and `rfq.detail.approveDescription`; customers `list.description`; carts `carts.page.description`; quick_order `onBehalf.page.description`; organizations `create.description`, `changeTaxId.page.description` and `convertToCompany.page.description`. A deployment that overrides one of these keys can drop the override.
+
+- cec9beb: `@endora-commerce/admin-kit/components` publishes `ListToolbar`, `ListToolbarSearch` and `FilterChip` (issue #1440, UX audit DS-06), with the `AppliedFilter`, `ListToolbarProps`, `ListToolbarSearchProps` and `FilterChipProps` types.
+
+  `ListToolbar` is a list page's filter row, extracted from the Orders list's toolbar and the Tasks list's "More filters (n)" disclosure. It renders a `search` landmark named by `label`, holding `search`, the three or four primary `filters` and the list's own `actions` (saved views, the column picker) pushed to the right. `moreFilters` folds the rest behind a **More filters** button that shows `moreFiltersActiveCount` as **More filters (n)** while it is closed. The panel is always mounted, so `aria-controls` names an element, and its controls render only while it is open. `appliedFilters` lists each applied filter as a removable chip named "Remove filter: …", and `onClearFilters` adds **Clear all filters**. The toolbar draws no frame of its own, so the page decides the card and border around it.
+
+  `ListToolbarSearch` is the toolbar's search box. It is `type="search"`, named by `label` rather than by its placeholder, and its icon is decorative.
+
+  `FilterChip` is a one-press filter toggle: a `<button type="button" aria-pressed>` in the theme's `b2b-filterchip` style, controlled through `pressed` and `onPressedChange(next)`. On a coarse pointer it has a 44 px hit area. A filter with several values belongs in a labelled `Select` or `MultiSelect`, not in a chip.
+
+  ```tsx
+  <ListToolbar
+    label={t('orders.toolbar.label')}
+    search={<ListToolbarSearch label={t('orders.field.search')} value={q} onValueChange={setQ} />}
+    filters={<MultiSelect ariaLabel={t('orders.field.status')} … />}
+    actions={<SavedViewsControl … />}
+    moreFilters={<>…</>}
+    moreFiltersActiveCount={hiddenInUse}
+    appliedFilters={chips}
+    onClearFilters={clearAll}
+  />
+  ```
+
+  The shared bundle gains the toolbar's copy in English and Polish (`common.listToolbar.*`).
+
+- cec9beb: The orders list (`/orders`) uses the kit's list toolbar (issue #1440). The **Filters** button is now **More filters**. It shows how many hidden filters are in use, as **More filters (2)**, and no longer turns into a filled primary button when filters are applied. **Clear all** is now **Clear all filters**, and each applied-filter chip is named "Remove filter: …". Every hidden filter is now named by its own label, where before several labels pointed at controls that did not exist.
+- 8e7684c: One primary action per view (issue #1441, UX audit DS-07), and the product editor's Inventory tab brought to it (issue #1454, CAT-01).
+
+  - `@endora-commerce/admin-kit/components` publishes `DetailHeaderActions({ primary?, secondary?, children?, moreLabel?, moreDisabled?, moreTitle?, className? })`, the actions of a record's detail header: the one primary action drawn last, one or two `outline` secondary actions before it, and a labelled "More" menu drawn first whose entries are `RowActionMenuItem` / `RowActionMenuSeparator`. The menu trigger is not rendered when it would be empty, and the group renders nothing without an action. The kit README documents the rule: one filled button per view, "Add …" as `outline`, row actions as `ghost` icon buttons or a `RowActionMenu`, destructive actions in a menu and confirmed.
+  - `@endora-commerce/mod-i18n`: `core`'s `common.action.more` ("More" / "Więcej").
+  - `@endora-commerce/mod-catalog`: on the Inventory tab, each warehouse row's filled **Save** and **Save threshold** become an `outline` **Apply** (translated; named after the warehouse; busy while the write is in flight; available once the value differs from the stored one), so the editor's one Save is the only primary. The per-warehouse inputs are named after their warehouse, a result is announced through an always-mounted status region and a failure is an alert. "Disable stock management" becomes a positive **Track stock** switch, and backorders are a switch too. The per-warehouse writes still apply immediately. Catalog keys removed: `inventoryTab.stockMgmt.disableManageStock`, `inventoryTab.stockMgmt.disableManageStockHelp`, `inventoryTab.lowStock.save`, `inventoryTab.lowStock.saving`.
+
+- 39e7301: The promotion screens keep one filled button per view (issues #1436 and #1441). The promotions list no longer shows the "Cart-level discounts. Percentage values are 0..100; amount-off requires a currency." description: the title says the first half, and the editor's fields already enforce the second. In the promotion rule library, each saved rule's red Delete button is now a quiet bin icon named after the rule, and it asks before deleting. In the promotion editor, the coupons' Add and Generate buttons are outline, so the sticky Save is the only filled button. The `promotions.page.description` translation key is removed; `promotionRules.action.deleteNamed` and `promotionRules.deleteConfirm` are added in English and Polish.
+- 35e0829: `ContentLanguageTabs` (`@endora-commerce/admin-kit/components`) is now drawn by the kit's `Tabs` (issue #1445): one tab in the tab order (roving `tabindex`), ←/→ select and wrap, Home/End jump to the ends, and the `.b2b-tabs` look of every other strip instead of filled and outline buttons.
+
+  It gains an optional `idBase` prop. Pass it and wrap the per-language content in `TabPanel`, and every tab names that panel through `aria-controls`; leave it out for a strip that switches page state spread over the screen, which then names no panel:
+
+  ```tsx
+  <ContentLanguageTabs languages={languages} activeLanguage={language} onChange={setLanguage} idBase="product-content-language" />
+  <TabPanel idBase="product-content-language" value={language} tabIndex={-1}>{fields}</TabPanel>
+  ```
+
+  `Tabs` gains the matching optional `controlsPanel` prop (default `true`); `false` omits `aria-controls`.
+
+  With no language to offer the strip draws the kit's `EmptyState` (issue #1448) instead of a grey sentence, with the new `core` key `contentLanguageTabs.emptyHint` (EN and PL) as its line. The catalog's product and category content screens, the CMS block and template editors (their canvas) and the returns clause dialog name their language panel; the CMS page editor and the blog editors, whose language also switches settings fields, keep a strip with no panel.
+
+- 3f66b6f: `@endora-commerce/admin-kit/ui` publishes `Tabs`, `TabPanel` and `RecordTabs` (issue #1445), with the helpers `tabId`, `tabPanelId` and `nextTabValue`.
+
+  `Tabs` is the kit's in-page tab strip: the WAI-ARIA tabs pattern with automatic activation — one tab in the tab order, ←/→ select and wrap, Home/End jump to the ends, disabled tabs are skipped — drawn with `.b2b-tabs` / `.b2b-tab` like `RouteTabs`. It is controlled through `value` and `onValueChange(next)`; every tab's `aria-controls` names the strip's one `TabPanel`, which is labelled by the selected tab. `RecordTabs` frames a record's sections in one card, strip on top and panel as its body; an item's `count` is drawn as a badge and spoken as "{label}, items: {count}" (the new `core` key `common.tabs.counted`, EN and PL), or as the item's own `countLabel`.
+
+  ```tsx
+  <Tabs items={items} value={tab} onValueChange={setTab} idBase="dictionary" aria-label={t('tabs.label')} />
+  <TabPanel idBase="dictionary" value={tab}>{panel}</TabPanel>
+  ```
+
+  Tabs inside tabs are not allowed: a second level inside a panel becomes `Section`s, and in development a `Tabs` rendered inside a `TabPanel` logs a warning. `.b2b-tab` now draws a visible focus ring and a disabled state. The product editor's tabs are `RecordTabs`; their ids, keys and behaviour are unchanged.
+
+- 61bdc2a: The order and quote-request detail screens draw their sections with the kit's `RecordTabs` instead of hand-written tab strips (issue #1445, UX audit DS-12). The strip is named ("Order sections", "Quote request sections"). Only the selected tab is in the tab order. ←/→ move between tabs and select them, Home/End jump to the first or last tab, and every tab is linked to its panel. The ids are `order-detail-tab-*` / `order-detail-tabpanel` and `rfq-detail-tab-*` / `rfq-detail-tabpanel`. The quote request's Modify draft still stays mounted across tab switches.
+
+  `TabItem` gains `unsaved?: string`. It draws a dot after the label and adds the words to the tab's accessible name, so the colour is never the only signal. The Modify tab now uses it.
+
+  The status-graph toolbar's Connect toggle and its layout buttons, and the order-create address source buttons (saved or new), now report their state with `aria-pressed`. The layout buttons are a group named "Layout". New copy: `core` `orderStatusConfig.graph.layout`, `orders` `detail.tabs.label`, `quote_requests` `detail.tabs.label`, in English and Polish.
+
+- 38adf84: The admin's one unsaved-changes guard (issue #1446, UX audit DS-13).
+
+  - `@endora-commerce/admin-kit/components` publishes `useUnsavedChangesGuard({ dirty, onSave?, onDiscard?, guardTabsOutside?, title?, message? })`, which returns `{ confirm(action), asking, dialog }`. While `dirty` it asks **Save and continue / Discard changes / Stay here** in the admin's own dialog before a same-origin link (the sidebar, a Back link), an opted-in host tab or a `confirm(action)` call drops the changes, and arms the browser's `beforeunload` prompt; the blocked link or tab is replayed after the answer. Render `dialog` once. Also published: `UnsavedChangesDialog` (the question on its own) and `UnsavedChangesHint` (the "Unsaved changes" status beside a Save button, a polite live region).
+  - `@endora-commerce/admin-kit/lib` publishes `isDraftEqual(a, b)`, the structural comparison a screen computes its `dirty` with (key order and `undefined`-valued keys ignored, as JSON does). `useUnsavedChangesPrompt` is unchanged for its callers and now shares its interception with the guard.
+  - `@endora-commerce/page-builder-admin`: `PageBuilderEditorLayout` takes `dirty`, `onSave` and `onDiscard` and arms the guard over the whole editor; `hasUnsavedCanvas` compares a Page Builder editor's active and stashed canvases with what was saved.
+  - `@endora-commerce/mod-i18n`: the `core` copy for the guard (`form.unsavedChanges.title|body|save|saving|discard|stay|hint`), in English and Polish.
+
+- d7de1ac: More admin lists tell "nothing here yet" apart from "your filters match nothing" (issue #1448). They used one grey sentence for both, so an operator who had never filtered read "No entries match the current filter.", and an operator whose filters hid every row had no way back but to undo each filter by hand. They now show the kit `EmptyState`: the `no-data` variant, with an icon, a title and one line, when there is nothing to list, and the `no-results` variant, whose _Clear filters_ button resets the filters and returns focus to the first filter field, when the filters hide everything.
+
+  - **Audit log**: "Nothing recorded yet" on an unfiltered empty log. _Clear filters_ also clears the filters held in the URL.
+  - **Invoices**: "No invoices yet" until an order is invoiced.
+  - **Languages, Countries and Currencies** (dictionaries): Countries and Currencies used to draw an empty table when the search matched nothing, and Languages printed its "no match" sentence even when nothing was filtered. _Clear filters_ on Languages also resets the status filter.
+  - **Transactional e-mails**: "No transactional e-mails" when no module declares one, and a no-match state for the search. The list no longer shows an empty state before it has loaded. The `transactional_emails` key `list.empty` is replaced by `list.emptyFiltered`.
+  - **Newsletter subscribers**: "No subscribers yet", and a no-match state for the search and tag filters. A server scope notice still takes precedence. The list no longer shows an empty state before it has loaded. `subscribers.empty` now reads "No subscriber matches these filters."
+  - **Comparisons**: "No comparisons yet", and a no-match state with the list's first _Clear filters_. A server scope notice still takes precedence.
+  - **Product-feed template builder**: a field search that matches nothing shows the `no-results` state rather than a bare sentence. The search box gains an accessible name.
+
+  New keys, in English and Polish: `core` `auditLog.emptyState.*` and `invoices.emptyState.*`; `dictionaries` `languages.emptyState.*`, `countries.empty`, `countries.emptyState.*`, `currencies.empty` and `currencies.emptyState.*`; `transactional_emails` `list.emptyFiltered` and `list.emptyState.*`; `newsletter` `subscribers.emptyState.*`; `comparisons` `list.emptyState.*`.
+
+- 84ed7b6: Empty lists now tell "nothing here yet" apart from "your filters match nothing" (issue #1448). The products, inventory, warehouses, back-in-stock and pricing-override lists used to show one sentence for both. Now a list that its filters emptied offers _Clear filters_, and a list with no records offers its create action, if the operator may use it. The sales channels, credentials, online customers, invoice ledger deliveries, dictionary audit and command hooks screens show the kit's empty state instead of a plain grey sentence.
+
+  - **`EmptyState`'s documentation** says where the block belongs. Use it for the page's or the tab's primary region. Keep a one-line sentence for pickers, inline sub-lists and side widgets.
+  - **Header create buttons.** While a list is empty, its header no longer repeats the create button that the empty state carries: products, warehouses, inventory import, sales channels and credentials.
+  - **Removed keys.** `catalog` drops `productsList.empty.prefix`, `.button`, `.suffix` and `.readOnly`. The empty catalog now uses `productsList.empty.noData.*`.
+  - **Peer dependencies.** `mod-sales-channels`, `mod-credentials` and `mod-invoice-ledger` gain an optional peer dependency on `lucide-react` `^1`, which their admin screens now import.
+
+- 1064839: `@endora-commerce/admin-kit/ui` publishes `EmptyState` (issue #1448): the block a list, a tab or a panel shows when it has nothing to show — a decorative icon, a title, at most one line and at most one action, drawn with the design system's `.b2b-empty` classes.
+
+  It has two variants. `no-data` (the default) takes `icon`, `title`, an optional `description` and an optional `action`. `no-results` takes `onClearFilters` and renders the kit's own title, line and _Clear filters_ button (new `core` keys `common.emptyState.clearFilters`, `common.emptyState.noResults.title` and `common.emptyState.noResults.body`, in English and Polish); `icon`, `title` and `description` override them.
+
+  After _Clear filters_ the kit moves focus to `focusAfterClear` (a ref, normally the list's search box) on the next frame, so focus never drops to `<body>` when the button unmounts (WCAG 2.2 SC 2.4.3). Without one, and only if focus was lost, it focuses the page's `<h1>`, else the closest container of the block still in the document. Every list that uses the `no-results` variant here passes its search box; `EntryFilters`, `OpportunityFilterFields` and `TaskFilters` gain an optional `searchRef` for that.
+
+  ```tsx
+  <EmptyState variant="no-results" title={t('list.emptyFiltered')} onClearFilters={clearFilters} />
+  <EmptyState icon={<ClipboardList size={20} />} title={t('list.empty.title')} action={createButton} />
+  ```
+
+  The forms and form-entries lists, the CRM opportunities list, the task and _My tasks_ lists, the task settings lists, the project and project-template lists, the custom-fields table, the price-book list, and the product-feed list, runs, delivery and templates screens now use it. The forms list now says "No forms yet" with a line of its own (a reader is told who can create one), and it hides the header's _New form_ while the empty state carries it. The form-entries list's empty state gains a title.
+
+- 7624db6: Adds `InlineEdit` and `InlineEditTitle` to the admin kit's `./components`: the admin's one model for editing a record's facts where they are shown (issue #1453). Each fact has its own pencil, _Save_ and _Cancel_, and sends only itself. `InlineEdit` takes a `group` option for an editor of several controls, which names itself through the new `labelId`. `MultiSelect` and `TagMultiSelect` take an optional `id` for the trigger. The copy is in `core`: `common.inlineEdit.edit`, `common.inlineEdit.saved` and `common.inlineEdit.error`.
+
+  CRM now uses the kit's component (its own copy is removed), and the Opportunity's assignee is edited the same way as the facts beside it, instead of through an always-open lookup. On a Task, the page-wide _Edit_ form is replaced: the title, description, due date, start date, priority, tags and assignees are each edited in place. On a Project's _Overview_, the description, the start date and who sees the Project are edited in place. The start date could not be changed there before (issue #1525).
+
+- 7be07f6: Shorter copy on the catalog screens (issues #1458 and #1459, UX audit CAT-13 and CAT-14), in English and Polish.
+
+  - **Product editor:** the sentences under Gallery, Attachments, Attributes, Categories and SEO that repeated the _Applies immediately_, _Unsaved_ and _Global only_ badges are gone, and so are the notes under _Minimum order quantity_ and the packaging units' minimum. Field notes are one clause; the longer explanation of _Status_, _Publication window_ and _Returnable_ moved behind an ⓘ beside the label. The confirmations for duplicate, archive and restore, the unsaved-changes question and the inventory and order-rules notes are shorter. The SKU field is labelled _SKU_; the create form says once, under it, that it cannot be changed later. The base-price panel explains what a base price is only while the product has none.
+  - **Products list:** shorter bulk-edit hints and archive / restore confirmations.
+  - **Attributes, price lists, warehouses, custom fields, product feeds, import/export, assets:** shorter help texts and notices; the product feed FTP passive mode, the only supported one, is shown as text instead of a disabled one-option select.
+  - **Settings and SEO:** the descriptions of _Completeness check when switching a product on_ and of the LLM search toggle are one or two short sentences, the same English text in the manifest (what the API serves) and in the admin bundle, and so are the two notices above the robots.txt preview.
+
+- c2bd458: The inventory list (`/inventory`) now shows each product's stock band as a translated label ("Out of stock", "Low stock", …) instead of the raw value such as `out_of_stock`, and `low` no longer shares `medium`'s colour (issue #1460). A row's **Edit stock** opens the product editor on its Inventory tab rather than Details. The search input has an accessible name, and the Low stock / Out of stock filter chips report their state with `aria-pressed`.
+- cec9beb: The inventory list (`/inventory`) uses the kit's list toolbar and `FilterChip` (issue #1460). The toolbar is a named search landmark. The Low stock and Out of stock chips report their state with `aria-pressed` and stay exclusive, so pressing one releases the other. A load error is shown as an alert.
+- 58ae62f: The quote-request detail keeps the Modify (negotiation) draft across tab switches (issue #1469, UX audit SALES-03). The Modify card stays mounted while the other tabs are shown, its tab carries an "unsaved changes" mark, and while the draft differs from the stored request Approve, Prepare the customer's basket and the PDF export and send wait — they act on the stored revision — with a note that says so and leads back to the tab. A link away asks Save / Discard / Stay through the kit's unsaved-changes guard, and a reload after a save no longer blanks the screen. New `core` copy: `rfq.detail.modify.unsaved.body|blocked|open`, `rfq.detail.tabs.modifyUnsaved`, in English and Polish.
+- b8d1fab: The returns admin screens are translated in full and show names instead of codes (issue #1472). On the case detail, the authorize action, the status transition buttons (now named after the target status, "Move to Received" rather than "→ received"), the items table, the return shipments card (direction and status translated) and the load and action errors have English and Polish text; the order is a link to the order, named by its order number; amounts are formatted in the case currency.
+
+  The return reasons, return statuses and return delivery methods screens use the admin kit's labelled form fields, switches and empty states. A reason's label and what it applies to, a status's name and a return delivery method's name are shown in the operator's language, and a return delivery method is chosen by name instead of by pasting its ID (the ID field stays as a fallback when the delivery methods cannot be read). A return cost of 0 is shown as free. Deleting a reason, a status or a return delivery method now asks for confirmation; the delete runs inside the dialog, which shows a refusal, and focus moves to the next row's Delete or to the form's first field.
+
+  On the case detail, an action's result (authorized, moved, rejected, settled, a shipment recorded or received, a comment added, the consent recorded or revoked) is said beside the control that produced it instead of in a banner at the top of the page; errors are still a banner.
+
+  The `returns.methods.description` key is removed from the shared bundle: the "0 = free" note is now the return cost field's hint, `methods.field.costHint` in the `returns` bundle. A deployment that overrides the old key must move its text there.
+
+- cb75825: The inventory module's remaining screens and the PWA push audience rule builder draw one visual system: the admin kit's `ui/*` primitives and Tailwind utilities, instead of the legacy `b2b-*` classes and inline styles (issue #1492, UX audit CAT-17).
+
+  `@endora-commerce/admin-kit` theme. **Breaking for a module that renders these classes (0.x, so released as a minor).** Nothing in the platform renders them any more, so they are removed from `theme.css`:
+
+  - `.b2b-btn--danger`: use `Button` from `./ui` with `variant="outline"` for a destructive action that a confirm dialog follows, or `variant="destructive"`.
+  - `.b2b-btn--icon` (and `.b2b-btn--sm.b2b-btn--icon`): use `<Button variant="ghost" size="icon" aria-label="…">`.
+  - `.b2b-field--mono`: use `Input` from `./ui` with `className="font-mono"`.
+  - The `.b2b-tbl` cell modifiers `td.num`, `th.num` and `td.actions`. `.b2b-tbl` itself stays. With the kit `Table`, a numeric column is `<TableHead className="text-right">` and `<TableCell className="text-right tabular-nums">`; an actions column is `<TableCell className="w-[1%] whitespace-nowrap">`.
+  - `.b2b-grow` and `.b2b-tabular`: use the Tailwind utilities `flex-1` and `tabular-nums`.
+
+  `@endora-commerce/mod-inventory`: the low-stock list, the warehouses list and editor, the back-in-stock queue and the stock import use kit cards, tables, buttons and fields. Their failures are kit alerts announced as alerts, their loading messages are announced politely, and a cancelled back-in-stock subscription is a kit `InlineStatus`. The warehouses list and the back-in-stock queue use the kit list toolbar: a search box with an accessible name, and filter chips that announce whether they are on. In the warehouse editor, the address and contact fields are tied to their labels, which they were not, the two-column grid that never rendered is a real grid, and _Delete_ is an outline button so _Save_ is the page's one filled button. The stock import's warehouse picker, file input and paste box have names, each skipped row's reason is in words instead of the raw code, and a low-stock row's _Edit stock_ opens the product's Inventory tab.
+
+  `@endora-commerce/mod-pwa`: the push audience rule builder's frames, AND / OR switch and buttons are kit primitives, and its value picker lists each option as a labelled checkbox that a keyboard can reach, where it used to be clickable by mouse only.
+
+  `@endora-commerce/mod-i18n`: new `core` strings for the screens above, in English and Polish. The back-in-stock statuses are capitalised (_Queued_, _W kolejce_), and `inventory.import.pasteDirectly` is replaced by `inventory.import.field.paste`.
+
+- f093a02: Every dialog the Page Builder, the e-mail builder and the CMS editor open over the canvas is now the kit's `ModalDialog` on the `overlay` layer (issue #1493, UX audit CONTENT-03). Save as template, apply template, copy from language, clear canvas, Translate, the column-layout pickers, the colour palette, the asset library, the product and category searches, the variable picker and the e-mail preview all trap focus, close on Escape, return focus to the button that opened them, and are named by their title. Before, each drew its own scrim, and none of them trapped focus. The result of saving or applying a template, or of copying from a language, now appears next to its button. Before, it was announced only to screen readers. A failure stays inside the dialog. Clear canvas opens with focus on Cancel. The column-layout pickers, the variable picker and the catalogue searches read their copy from `core` in English and Polish, and their search fields are labelled. `MODAL_OVERLAY_Z_INDEX` rises from 10000 to 2147483646, so an `overlay` dialog also opens above the rich-text editor's own dialogs, from which the asset library is opened.
+- d5a077f: The Page Builder has one canvas toolbar (issue #1494, UX audit CONTENT-11). `PageBuilderHeaderActions` now draws the module's own actions (`extraActions`, such as Translate or Preview email), a labelled **More** menu and Fullscreen. Save as template, Apply template, Copy from language and Clear canvas are entries of that menu. Clear canvas is the last entry, after a separator, in the destructive colour, and still asks before it clears. An entry that cannot run says why under its label.
+
+  **Breaking for consumers of `@endora-commerce/page-builder-admin`:** `PageBuilderTemplateActions` and `PageBuilderHeaderShell` are removed. Pass their props to `PageBuilderHeaderActions` instead and drop the Puck `header` override:
+
+  ```tsx
+  // before
+  header: ({ children }) => (
+    <PageBuilderHeaderShell leading={<PageBuilderTemplateActions currentData={data} onSaveAsTemplate={save} onListTemplatesForApply={list} onApplyTemplate={apply} t={t} />}>
+      {children}
+    </PageBuilderHeaderShell>
+  ),
+  headerActions: () => <PageBuilderHeaderActions fullscreen={fs} onToggleFullscreen={toggle} currentData={data} t={t} />,
+
+  // after
+  headerActions: () => (
+    <PageBuilderHeaderActions
+      fullscreen={fs}
+      onToggleFullscreen={toggle}
+      currentData={data}
+      onSaveAsTemplate={save}
+      onListTemplatesForApply={list}
+      onApplyTemplate={apply}
+      t={t}
+    />
+  ),
+  ```
+
+  The `.cms-pb-header-shell`, `.cms-pb-header-left` and `.cms-pb-header-leading` rules are removed from the admin kit's `theme.css`. The CMS, blog, megamenu and document-template editors show Back as the page header's back link above the title instead of a button beside Save. The `core` bundle gains `pageBuilder.clearCanvas.alreadyEmpty` in English and Polish.
+
+- 7329865: The order, invoice, quote request, organization and customer detail screens and the promotion editor no longer replace the whole page with "Loading…" when they re-read their record after an action (issue #1496, UX audit SALES-06). The first load shows a skeleton of the page; a status change, a payment change, a custom-field save, an approve or cancel, a regenerated PDF or a member change keeps the page, its open tab, the scroll position and the focus on screen and marks the content `aria-busy` while it re-reads. A first load that fails now shows its error and a Retry button instead of "not found", and the promotion editor no longer shows an empty form over a promotion it could not read. On the organization screen a member change refused as stale now keeps its explanation on screen after the re-read. New string: `orderDetail.errors.load` (en, pl).
+- 447e829: The order and quote-request headers have one primary action (issue #1497, UX audit SALES-12).
+
+  - `@endora-commerce/admin-kit/components`: `DetailHeaderActions` takes `moreBusy`, which disables the "More" trigger, marks it `aria-busy` and shows a spinner while an entry of the menu runs. An entry that opens a dialog (a `useConfirmDialog` question, a `ModalDialog`) now runs only after the menu has given focus back to its trigger, as `RowActionMenu` already did, so the dialog keeps focus and returns it to "More" when it closes. Before, focus went back to the trigger behind the dialog.
+  - `@endora-commerce/mod-orders`: on the order detail, **Issue invoice** is the one filled button while the order has no invoice, and the header has no primary once it has one. **Reorder**, **Clone to quote**, the **Invoice PDF** download and a repeat **Issue invoice** are in the "More" menu. While one of these requests runs, every header action is disabled and the control that started it shows a spinner, so a double press no longer sends the request twice.
+  - `@endora-commerce/mod-quote-requests`: on the quote-request detail, the next step of the status is the one filled button: **Approve** on a Pending request, **Prepare the customer's basket** on an Approved one, none otherwise. **Export PDF**, **Send PDF** and **Cancel RFQ** are in the "More" menu, with Cancel last, after a separator. **Approve** now asks for confirmation first, because it locks the agreed prices and notifies the customer.
+  - `@endora-commerce/mod-i18n`: `core`'s `rfq.detail.approveConfirm.title` and `rfq.detail.approveConfirm.message`, in English and Polish.
+
+- 2040ae9: Action results beside the control that caused them, and at most one banner above a detail screen (issue #1499, UX audit SALES-17; owner decision DEC-12 a).
+
+  - `@endora-commerce/admin-kit/components`: `DetailHeaderActions` takes `status` — normally `useInlineStatus().props` — and mounts an always-present polite `InlineStatus` before the header's buttons, so the last header action's result is said there. Given `status`, the group renders even when the record has no action left. `@endora-commerce/admin-kit/ui`: `InlineStatus` gains a `warning` tone (icon and warning colour) for a result that went through only in part.
+  - `@endora-commerce/mod-quote-requests`: the quote-request detail no longer stacks up to six banners. Approve, Cancel, the customer's basket, the PDF outcome and a copied number are said beside the header's buttons; a stored revision in the Modify save bar. The cancellation reason leads the header's meta line. Above the tabs there is at most one banner: an error, else the lapsed deadline with its remedy, else the unsaved draft — the last only away from the Modify tab, where the save bar already says "Unsaved changes".
+  - `@endora-commerce/mod-orders`: Issue invoice (a warning when the e-mail was not sent), Reorder, Clone to quote and a copied order number are said beside the header's buttons. A status or payment-status change adds no banner: the control announces it and its badge shows it.
+  - `@endora-commerce/mod-organizations`: "Saved" and the results of the header's dialogs are said beside the header's buttons, a member write right above the Members section.
+  - `@endora-commerce/mod-i18n`: `core`'s `rfq.detail.validity.lapsed.remedyEditable` and `remedyLocked` shortened to one sentence; `orderDetail.messages.orderMoved` and `orderDetail.messages.paymentMoved` removed.
+
+- fc7f669: The six sales lists now have one shape (issue #1500, UX audit SALES-24). Each is the kit `ListPage` with the kit `ListToolbar`, so the toolbar is a named `search` landmark in a plain row, not a card. Below it is one results card that holds the bulk bar, the table and the pager. The kit `EmptyState` tells "nothing here yet" apart from "nothing matches these filters", and the second one offers _Clear filters_.
+
+  - **Orders**: _New order_ is in the header for an operator holding `orders:write`. The toolbar, bulk-bar and results cards are now one card. While rows are selected, the bulk _Change status_ button is outline, so _New order_ stays the one filled primary. Each row has a menu with _Change status…_ and _Print invoice_ for that one order, plus _Open organization_. The pager offers only the page sizes the endpoint serves.
+  - **Quote requests**: the hand-built toolbar, filter toggle and chips are replaced by the kit toolbar, so the advanced filters sit behind _More filters (n)_. Each row's menu has _Open organization_.
+  - **Returns**: the four configuration links (workflow, reasons, return methods, clauses) are one _Settings_ menu next to _Export CSV_. The search is no longer listed as a chip. _Clear all filters_ empties the search too. When a case has an order, its row menu has _Open order_.
+  - **Customers**, **Organizations**, **Carts**: these use the kit toolbar and the kit empty state. Each filter is named by its label, and its first option says what it is ("All statuses"). Customers and Carts rows have _Open organization_.
+
+  Removed unused translation keys: `orders.open`, `orders.loading`, `orders.empty`, `rfq.list.open`, `rfq.list.loading`, `rfq.list.filter.toggle`, `rfq.list.filter.clearAll`, `returns.loading`, `returns.empty`, `returns.action.open`, `returns.filter.clearAll`, `organizations.filter.all` (core); `list.search.chip` (returns); `list.clearFilters` and `list.filter.all` (customers); `list.clearFilters` (organizations); `carts.clearFilters` and `carts.filter.all` (carts). The admin-kit README documents how the two compose.
+
+- 40b76aa: Five admin lists no longer draw a create form open above their rows, nor a red button in every row (issue #1501, UX audit SHELL-14). Each is the kit `ListPage`: one _New …_ in the header, row actions in a `RowActionMenu` with the destructive one last and confirmed through `useConfirmDialog`, and an `EmptyState` offering the first record.
+
+  - **Users** (`/admin-users`): _New user_ opens the create form in a dialog; _Reset password_ opens a dialog instead of a form expanded under the row; _Deactivate_ / _Reactivate_ and _Remove_ are in the row menu. The role is shown as a value with a _Change…_ dialog (`StatusChangeControl`) instead of an unlabelled select that saved as soon as an option was picked.
+  - **API keys**: the create form is a route of its own, `/api-keys/new` (`contributions.routes[1]`, gated on `integrations:manage` like the list); it ends on the one-time bearer token, shown in place of the form. _Revoke_ is in the row menu.
+  - **Webhooks**: the subscribe form is a route of its own, `/webhooks/new` (`contributions.routes[1]`, same gate); it ends on the one-time signing secret. _Pause_ / _Resume_ and _Delete_ are in the row menu.
+  - **Taxes**: _New tax rule_ opens the upsert form in a dialog, and the new _Edit_ row action opens it prefilled, the code read-only.
+  - **Setting groups** (`/settings/groups`): _New group_ opens a dialog with labelled _Code_ and _Display name_ fields; _Rename_ and _Delete_ are in the row menu, which is disabled, with the reason, on the system-protected group. Its load, create and delete errors are translated.
+
+- a02b5e6: The Organization detail screen's members are one _Members_ section (issue #1516).
+
+  - `@endora-commerce/mod-organizations`: the _Invite member_ and _Direct add member_ cards are gone. The _Members_ section lists each member as a row with the member's role as a badge, and offers one **Add member** button. It opens a dialog that asks whether to send an invitation or create the account now. Only the second asks for the names, a temporary password and the member's `customer` custom fields. The form is checked when it is submitted, and each problem is shown at its field.
+  - The bordered edit box above the members table is replaced by an **Edit** dialog. It holds the e-mail, the names and the role, and saves them together. The row no longer holds a role select that saved as soon as an option was picked. If the member was changed elsewhere, the dialog reloads the current values and says so.
+  - **Remove** asks for confirmation first, and a refused removal is shown in that dialog. The last administrator can be neither removed nor demoted, and the reason is shown. Without `customers:manage` the list is read-only. A personal Organization offers no **Add member**.
+  - The routes, their bodies, their permissions and their audit entries are unchanged. The new strings ship in the module's bundle under `members.*` (en, pl).
+  - `@endora-commerce/mod-i18n` drops ten `organizations.detail.*` strings that nothing reads any more: `inviteCard`, `directAddCard`, `nameCol`, `actions`, `roleForLabel`, `twoFactor`, `twoFactorOn`, `verified`, `lastLogin` and `error.versionConflictMember`.
+
+- 98c0411: The Admin UI sidebar's _System_ section, which had 18 entries, is now two sections (issue #1519, UX audit SHELL-11, owner decision DEC-02):
+
+  - **Access**: Users, Roles, API keys, Credentials, Audit log.
+  - **Platform**: Modules, Settings, Custom fields, Import/export, Bulk operations, Webhooks, Global search, PWA, Command hooks, API description.
+
+  Host rows are now sorted by weight together with the contributed rows. Before, they always came first, so the API description sat above Settings.
+
+  An administrator's own two-step verification is no longer in the sidebar. It is the **Security** tab of **My profile** (`/profile/security`), opened from the avatar or from the palette's _Account security_ action, which now targets that tab. `/security` redirects there, so old bookmarks still work. With `mfa` off, the profile has no tab strip and `/profile/security` opens the profile.
+
+  **For module authors.** `AdminNavSectionNameSchema` gains `'access'` and `'platform'`, and `AdminZoneNameSchema` gains `'profile.security'`, the body of the Profile's Security tab, with empty props. `'system'` is deprecated but still accepted: the shell puts such an entry under _Platform_, so a module that ships separately keeps its row. It will be removed in a major release.
+
+  **Upgrade notes.**
+
+  - An administrator who had collapsed _System_ sees both _Access_ and _Platform_ collapsed. The preference is rewritten the next time they toggle a group.
+  - A pin of `/security` in the sidebar's Pinned section no longer shows, because that destination is no longer a sidebar entry. The stored pin is kept but not displayed.
+
+- 9f4eae3: The Modules screen (`/platform/modules`) is easier to scan (UX audit SHELL-12, issue #1520). It has a search box that matches the module's name, id or description and ignores case and diacritics. Filter chips (On · Off · Not offered · Locked) show how many modules each one holds, and the modules are grouped under the sidebar section their screens are in. Modules without a screen are listed last, under "Other modules".
+
+  Switching a module on or off is now a switch in the _Your business_ column. Before, every module that was off showed a filled "Switch on" button. Turning a module off still asks for confirmation. A module that cannot be switched off shows a locked switch with its reason as the tooltip and the description, instead of printing the reason twice. The Recent Activity choice is a switch in a new _Dashboard_ column, which is shown only to an admin who may change it. A module's description, dependencies and lock reason are behind a disclosure on its row. What either switch does is unchanged.
+
+  `ListPage` takes an optional `help`, passed to `PageHeader`'s ⓘ.
+
+  Removed `core` keys: `platform.modules.column.actions`, `platform.modules.action.enable` and `platform.modules.recentActivity.{shown,hidden,hint}`. An overlay that overrides them should override the new `platform.modules.*` keys instead.
+
+- 983e270: The Roles editor (`/admin-roles`) is one card of sections instead of a warning banner and a bordered box per module (issue #1521, UX audit 2026-11-17, SHELL-13; DS-03). The card's header names the role and carries an outlined _Delete role_; _Details_ holds the code, the display name and the two-step verification switch; _Permissions_ holds a _Full access_ switch, whose warning shows only while it is on, then a filter and one collapsible section per module. Each module section is named by the module's own name (`module.name` in its bundle, words from the id otherwise), shows how many of its permissions are selected and has a checkbox that selects or clears them all. A permission reads by its label, with its code, what it needs and which modules keep it available as one muted second line. The role list marks the open role with a muted fill instead of a filled primary block, Save is disabled while a save is in flight, and opening another role, or leaving the screen, with unsaved changes asks first. What a role grants is unchanged.
+
+  Translation keys removed from both `en` and `pl`: `core` `adminRoles.dependencies.description` (now `adminRoles.dependencies.hint`, shortened), `adminRoles.wildcardPrefix`, `adminRoles.wildcardSuffix`, `adminRoles.wildcardTitle`. New `core` keys: `adminRoles.dependencies.hint`, `adminRoles.discardChanges.confirm`, `adminRoles.filter.label`, `adminRoles.filter.placeholder`, `adminRoles.group.count`, `adminRoles.group.selectAll`, `adminRoles.permissions.count`, `adminRoles.section.details`, `adminRoles.wildcard.hint`, `adminRoles.wildcard.onWarning`. Changed parameters: `adminRoles.dependencies.add` takes `{label}` (was `{code}`), `adminRoles.requires` takes `{permissions}` (was `{codes}`), both now given permission labels. Shortened: `adminRoles.owners`, `adminRoles.wildcardLocked`, `adminRoles.dependencies.title`. A deployment that overrides a removed or changed key should update its override.
+
+- 229856d: The Modify tab of the admin quote request is easier to scan (issue #1542). Its title, which repeated the tab name, is gone: the tab now holds two sections, _Terms_ (header note and validity) and _Lines_. The first line column reads "Product" and names each line's product picker, and the reference price and the typed price's difference from it share one cell ("120.00 PLN · −16.67 %"), so a line has seven columns instead of eight. The price-negotiation panels on the organization and customer screens have shorter descriptions and read-only hint.
+
+  In the `core` bundle, `rfq.detail.modify.productId` is renamed `rfq.detail.modify.product`, `rfq.detail.modify.title` is removed, and `rfq.detail.modify.referenceDifference`, `rfq.detail.modify.section.terms` and `rfq.detail.modify.section.lines` are new. A deployment that overrides the old keys must rename or drop them.
+
+- cdee4e1: The payment-methods and delivery-methods admin screens put the list first (issue #1543, UX audit 2026-11-17, SALES-18).
+
+  - Each screen is the kit's `ListPage`. The "New / update method" form that was drawn open above the list is gone. _New method_ in the header and _Edit_ in a row's menu (or a click on the method's code) open the same form in a dialog. The dialog stays open on a refused save and shows the server's reason. While there is no method, the empty state carries the one _New method_.
+  - _Delete_ is the last entry of the row menu, after a separator. It is confirmed, and a refusal (a method still referenced) is shown inside the confirmation. Focus moves to the next row afterwards.
+  - A save's result ("Saved {code}.") sits beside _New method_, where the dialog returns focus.
+  - The _Integrations_ card sits under the list.
+  - An operator with only the `:read` permission is offered no create, edit, delete or status change. The payment-method status column shows a badge for them instead of a select.
+  - Delivery methods: the two shipment-status fields, the list column and the empty options are translated (EN + PL). The empty option now names the status the server actually uses for a new method (_Default (Shipment sent)_ / _Default (Processing)_). The old hard-coded "(default: shipped)" / "(default: in_fulfilment)" named neither. The list shows the mapping by status name, not by code.
+  - `core` bundle: `legacyMethods.formTitle` removed; `legacyMethods.action.new` reads "New method"; new keys `legacyMethods.payment.newTitle`, `legacyMethods.delivery.newTitle`, `legacyMethods.rowActions`, `legacyMethods.fields.adapterDefault`, `legacyMethods.payment.statusGroup`.
+
+- 5f55850: The order detail's Overview tab leads with the items (issue #1545, UX audit 2026-11-17 SALES-21).
+
+  - **Items** and the totals are the first section, followed by the buyer's note, then one **Customer and addresses** section, then **Status**, the external references and the custom fields. Before, the items came last.
+  - Organization, customer, delivery address and billing address are one section with a two-column list. They used to be four separate cards.
+  - The **Payment** tab is now **Payment & invoices** (_Płatności i faktury_), because the order's invoices are listed there.
+  - The **Comments** tab shows how many comments the order has, and nothing while it has none.
+
+  New translation key (orders): `detail.sections.parties`.
+
+- c1a8885: The admin promotion editor is one card with four sections (General, Action, Rule, Usage limits), saved by the one Save in the sticky bar at the end of the form, which now says "Unsaved changes" while the form differs from the stored promotion; Cancel and leaving the screen ask before dropping those changes. Copying a saved rule over a rule that already has conditions asks first, and Cancel keeps the current rule. Every field of the action has a translated label linked to its control, and the action type's label names its select. The Coupons section is marked "Applies immediately", because it writes outside the form's Save; for a promotion that is not saved yet it is a heading and one line, with no controls. The coupon generator's format and limit-scope options, and the scope column of the coupon table, are translated.
+- 9b1157f: The admin invoice detail draws the invoice as one card instead of six (issue #1547, UX audit SALES-25): Details, Seller and Buyer sit side by side under section headings, the details as a description list and each party as an address, followed by the lines, whose table footer carries the VAT summary per rate and the document totals, as the order detail does. Contributions to the `invoice.detail.after` zone render below the card. The header has one primary action (DS-07): _Download PDF_ on a ready invoice, _Regenerate PDF_ on a pending one, with the remaining actions in the "More" menu, which is disabled while one of them runs. New `core` copy `invoiceDetail.vatRow`, in English and Polish; the unused `invoiceDetail.section.vatSummary` and `invoiceDetail.section.totals` are removed.
+- 306a659: The back link above an admin page title now names the screen it leads to, in the words that screen uses for its own title — _Organizations_, _Price books_, _CMS pages_ — instead of _Back to organizations_, _All warehouses_, _Back to list_ or a bare _Back_ (follow-up of issue #1549). A generic _Back_ remains only where a screen was opened from somewhere else and leads back there. The rule is described under `PageHeader` in the admin-kit README.
+
+  The back-only translation keys these screens no longer read are removed: `categoryEditor.backToTree` and `postEditor.backToList` (blog), `bulkOperations.detail.back` and `categoryContent.action.back` (catalog), `common.back` (cms, megamenu), `detail.backToList` (comparisons), `entry.back` (forms), `priceBooks.common.backToList` (price lists), `detail.back` (returns), and `inventory.import.back`, `warehouses.editor.backToList`, `organizations.detail.back` and `rfqCreate.back` (core bundle). A deployment that overrides one of them overrides the destination screen's title key instead. `taxIdScope.back` (organizations) and `productContent.action.back` (catalog, now the fallback while the product name loads) keep their keys with new text; `runs.detail.feedFallback` (product feeds) is new.
+
+- 59228fc: The API-key and webhook create forms offer their binding as a choice instead of explaining it
+  (issue #1551, UX audit SHELL-15). _New API key_ opens on **Platform key** or **Organization
+  key**: the organization, sales channel and service account appear only for the second, and each
+  type offers only the scopes it may hold — no order scopes on a platform key, no `catalog:write`
+  on an organization key — so the three validation messages that restated the binding rule and the
+  two paragraphs explaining it are gone. _New webhook_ asks **All organizations** or **One
+  organization**, with the organization picker only for the second. The remaining field help is
+  one line each, and the signing-secret screen has a one-line title with the receiver note beneath.
+  What a key or a subscription can do, and the API, are unchanged.
+
+  Removed translation keys (`mod-i18n`): `apiKeys.create.bindingHelp`, `bindingTitle`,
+  `modesHelp`, `scopesHelp`, `serviceAccountHelp`, `expiresHelp`;
+  `apiKeys.validation.bindingIncomplete`, `bindingRequiredForOrders`, `catalogWriteBound`;
+  `webhooks.create.organizationHelp`. A deployment overriding them should move the override to the
+  new `apiKeys.create.kind.*`, `apiKeys.create.{scopes,serviceAccount,expires}.hint`,
+  `webhooks.create.scope.*` and `webhooks.revealed.body` keys.
+
+- 389caa3: The **My profile** screen no longer has its own **Language** card (issue #1553, UX audit SHELL-17). The card had a second filled Save that competed with the form's, and it repeated the language menu in the top bar, which already saves the choice at once. The UI language is now changed only from the top bar; one muted line in the profile's **Identity** section says so. The Admin UI languages documentation page describes the top-bar menu instead of the removed card.
+
+  `core` bundle keys removed: `profilePage.language.action.save`, `profilePage.language.failed`, `profilePage.language.saved`, `profilePage.section.language` and `profilePage.section.language.help`. A deployment that overrides them can drop the overrides. `profilePage.language.option.en` and `profilePage.language.option.pl` stay: the top-bar menu uses them. New key: `profile.languageHelp`, in English and Polish.
+
+- 053a022: The execution plan on `/platform/command-hooks` explains each phase once, in a legend above the actions, instead of repeating both hints in every action (issue #1554). The actions are now sections of one card, with the owning module as each section's one-line description.
+
+  The English and Polish text of `platform.commandHooks.plan.afterCommit.hint` is shorter. A deployment that overrides that key keeps its own text.
+
+- f6dda10: The audit log screen (issue #1555): the _Action_ and _Object type_ filters offer what the log holds, actions under the labels the table uses, instead of asking for a code; the filters are a toolbar above one results card and apply as they change; the list pages through the whole log; and a row's detail shows the change field by field, with the stored JSON one disclosure away. `GET /api/v1/admin/audit-log` now answers `pagination.cursor` while more entries exist and reads `?cursor=`; its page is capped at 200 (it was 500, and paged nowhere). New `GET /api/v1/admin/audit-log/facets` under `audit_log:read`.
+- bfc21d3: Shorter admin copy on the order, quote-request, organization, promotion, invoice and return screens (UX audit text-to-cut pass, issue #1567):
+
+  - Removed lines that repeated what the screen already shows: the description on the invoices list, the line under the customer's price-negotiation override, the line above the default payment / delivery / address fields, and the description of the organization's Roles section.
+  - Shortened to one line: the read-only note on price negotiation, the warehouse-precedence hint, the order-confirmation e-mails hint, the parent-organization hint, the empty sales-reps note, the sales-channel hints on order and quote-request creation, the saved-rule copy hint on promotions, and the pending-effects notice on an order.
+  - Shortened notices: the "carrier not contacted" shipment notice and the "different refund method" warning on a return.
+
+  Removed translation keys (EN and PL): `invoices.description`, `defaultPreferences.description` (core bundle), `negotiation.customer.description` (quote requests), `roles.tab.description` (organizations). A theme or overlay that overrode them can drop the override.
+
+- 3f34877: Shorter admin copy on the system screens (UX audit text-to-cut, part of issue #1567). The English and Polish text of these keys is shorter: `core` `platform.commandHooks.outbox.hint`, `platform.apiDescription.reference.body`, `adminUsers.resetPassword.hint`, `profile.authorHelp` and `appShell.noRole.description` (the command-line remedy is now in the getting-started guide); `settings` `activation.managedOnPlatformScreen`; `admin_users` `roles.twoFactor.help` and `roles.twoFactor.mfaOff`; `sales_channels` `identity.code.lockedHelp` and `identity.theme.help`; and the setting descriptions `analytics.reporting_time_zone`, `admin_notifications.enabled` and `admin_feedback.module_enabled`.
+
+  On the Global search screen the sentence before the Settings link is gone, and the link reads "Search limits". The key `admin_search` `page.configuration.settingsNote` is removed from both `en` and `pl`, and `page.configuration.settingsLink` has new text. A deployment that overrides any of these keys keeps its own text.
+
+- 4e668b5: The admin order page's payment-status "Change…" dialog offers exactly the statuses the server accepts (issue #1574): `paid` for an unpaid order, `refunded` for a paid one, and nothing for a refunded one. Choosing `refunded` shows a warning that this only records the refund, moves no money and cannot be changed afterwards (new key `orderDetail.statusChange.paymentConsequenceRefunded`, English and Polish).
+- 0d4c134: Accessibility follow-ups from the UX audit (issues #1599, #1600, #1607).
+
+  - **Scope picker** (CMS pages, blocks and templates; blog posts and categories): the _Languages_ heading now names the group of language checkboxes, so a screen reader announces "Languages, group" when focus enters it. It used to be a label attached to nothing.
+  - **New order — delivery and billing address**: the _Pick existing_ / _Enter new_ buttons are a group named _Address source_, and pressing the option already chosen no longer clears a typed address or a picked one.
+  - **Pricing settings — Show the list price beside the buyer's price**, and the **Private** setting on a new task and on a task's page, are now the standard on/off switch rather than a checkbox announced as a switch. A task's _Private_ switch that cannot be turned on (other people are assigned) stays focusable and says why.
+  - The unused, never-displayed _Quote requests_ settings tab component in the Settings module, and its strings, are removed. The quote-request settings are unchanged.
+
+- 7b8006e: The rich-text editors' dialogs are now accessible modal dialogs (issue #1652). The link, heading anchor and image dialogs of `RichContentEditorField`, the link, icon and highlight-colour dialogs of `InlineRichTextEditor`, and `RichContentEditorField`'s full-screen mode are named by their title (`role="dialog"`, `aria-modal`, `aria-labelledby`), hold focus while open, close on Escape (only the topmost of stacked dialogs answers it, so the asset library opened from the image dialog closes alone), and return focus to the toolbar button that opened them. They are drawn by a new internal `CmsModalDialog`, which keeps the admin kit `ModalDialog`'s contract without depending on the kit, so the package stays storefront-safe. The dialog headings are now `<h2>` (were `<h3>`), and the link dialog is named "Link" (was "Edit link").
+
+  `PAGE_BUILDER_FIELD_TEXT` gains `richText.fullscreen`, the full-screen editor's accessible name; the `core` bundle carries it in English and Polish as `pageBuilder.fieldText.richText.fullscreen`.
+
+- 5850aac: `GET /api/v1/admin/credit-limits` pages (issue #1664). `adminCreditLimitListQuerySchema` takes `page` (default 1) and `pageSize` (1–200), and `creditLimitListResponseSchema` now carries `meta: { page, pageSize, total }`, newest grant first with the limit's id as the tie-break. A caller that names no `pageSize` still gets the whole list on one page, with `meta.pageSize` equal to its length (at least 1). `CreditLimitService.listAll()` is replaced by `listPage({ offset, limit? })`, which answers the rows and the total.
+
+  - **Credit limits (admin)**: the list is the kit `ListPage` with the kit pager, like the sales lists unified under issue #1500 (UX audit SALES-24). _Grant credit limit_ is in the header and in the empty state. It opens a dialog that asks for the organization: one that holds no limit gets the grant form, and one that already holds a limit gets the adjust form. Each row's menu holds _Adjust limit_, which opens the same dialog for that organization with its reservations, and _Open organization_. The look-up card under the list and the _Open_ button on each row are gone (UX audit SALES-19, issue #1544). A refused grant or adjustment keeps the dialog open and shows the server's message. A successful one closes the dialog and reports the result next to the list, not in a success banner (issue #1499).
+
+  Removed unused translation keys (core): `creditLimits.action.lookup`, `creditLimits.action.open`, `creditLimits.editor.title`, `creditLimits.empty`, `creditLimits.error.load`, `creditLimits.field.orgId`, `creditLimits.loading`.
+
+- c042024: The kit pager has a cursor mode (issue #1664). `useCursorPagination` is the counterpart of `useListPagination` for an endpoint that pages by cursor and answers no total. `ListPage` draws the same `PaginationFooter` for it, with _Previous_ / _Next_, _Page N_ and "Showing 21–40 of more than 40" while a next page exists. `PaginationFooter` takes the new `CursorPaginationFooterProps` (`mode: 'cursor'`), and `ListPage` has a `tabs` slot for section tabs between the header and the toolbar.
+
+  - **Invoices**: the list is the kit `ListPage`, like the other sales lists (issue #1500, UX audit SALES-24). _Load more_ is replaced by the cursor pager. The filters are the kit toolbar: the order-number search, kind and status, with the issue dates and totals behind _More filters_. The empty state tells "no invoices yet" apart from "nothing matches these filters". _Download PDF_ and _Resend email_ are in each row's menu. The error messages are translated.
+
+  Removed unused translation keys (core): `invoices.loadMore`, `invoices.filters.clear`, `invoices.pdfNotReady`, `invoices.resendEmail`, `invoices.kind.all`, `invoices.status.all`.
+
+- 8a5725e: `GET /api/v1/admin/promotions` pages (issue #1664). `adminPromotionListQuerySchema` takes `page` (default 1) and `pageSize` (1–200), and `promotionListResponseSchema` now carries `meta: { page, pageSize, total }`, ordered by name. A caller that names no `pageSize` still gets the whole list on one page, with `meta.pageSize` equal to its length (at least 1).
+
+  - **Promotions (admin)**: the list is the kit `ListPage` with the kit pager, like the sales lists unified under issue #1500 (UX audit SALES-24). _New promotion_ is in the header for an operator holding `promotions:write`, and the name is the link to the editor. _Statistics_ and _Delete_ are in each row's menu; _Delete_ is last and confirmed, and the request runs inside the dialog. The kind and value columns are translated ("X% off the whole cart", "10%") instead of action codes and English built in code. Attribute criteria name their operator, and category, product, customer-group and organization criteria are counted; the old list could not draw them.
+
+  Removed an unused translation key (core): `promotions.empty`.
+
+- ed3feda: The rich-text editors' toolbars and dialogs now speak the operator's language (issue #1680). Every word of `RichContentEditorField`'s toolbar and of its link, heading anchor and image dialogs, the empty read-only view, the "Loading editor…" placeholder of the rich-text and inline rich-text fields, and `InlineRichTextEditor`'s bold, italic, link and emphasis buttons is read through `useFieldText`, the mechanism `richText.fullscreen` uses since #1652. The English is unchanged. The `Read more` summary the toolbar seeds into a new read-more passage is page content and stays a fixed default.
+
+  `PAGE_BUILDER_FIELD_TEXT` gains 76 keys under `richText.*`, `emphasis.*`, `richLink.*`, `richAnchor.*` and `richImage.*`; the `core` bundle carries each in English and Polish as `pageBuilder.fieldText.<key>`.
+
+  `components/RichContentEditorField` exports `LINK_DISPLAY_VARIANTS`, the link button styles (`primary-solid` … `light-solid`). Two exports of that subpath are deprecated and hold the English names only:
+
+  - `EMPHASIS_LABELS` — use `useFieldText()` with the key `` `emphasis.${variant}` `` instead.
+  - `LINK_DISPLAY_OPTIONS` — build the options from `LINK_DISPLAY_VARIANTS`, labelling each with `useFieldText()` and `` `richLink.display.${variant}` ``, and the plain link with `richLink.display.link`.
+
+- cf7c013: The _Command hooks_ outbox tab is now the admin's standard list page (issue #1749). It pages with the same _Previous_ / _Next_ footer and rows-per-page choice as every cursor-paged list, which replaces _Load more_. A status change goes back to the first page. Retrying the last row of a page asks for that page again rather than showing an empty one, and focus moves to the results. Retry stays a visible button in each row, and a failed load still offers _Try again_. `listCommandOutbox` now sends an optional `limit`. Removed bundle keys: `platform.commandHooks.outbox.loadMore`, `.loadingMore`, `.end`, `.loading` and `.column.actions`.
+- 8688a1f: Nine more admin list screens now use the kit `ListPage` (issue #1749): Inventory, Low stock, Warehouses, Availability notifications, Product feeds, Price books, Return reasons, Return delivery methods and Return clauses. Each one has the kit's loading skeleton, a load error with **Retry**, and the result count at the end of the toolbar row. The inventory lists' toolbar is a row above the results, not a strip inside their card. A filter or page change on Inventory, Warehouses, Availability notifications and Price books keeps the rows on screen while it reloads. Return clauses show the kit empty state instead of a bare sentence. Product feeds no longer show _New feed_ twice while there is no feed.
+
+  - `@endora-commerce/admin-kit`: the `ListPage` `tabs` slot is documented as the band between the header and the toolbar, which can also hold a KPI strip.
+  - New `en` / `pl` keys: core `warehouses.count`, `inventory.count`, `inventory.lowStock.count`, `inventory.availability.count`; `product_feeds` `feeds.count`; `returns` `reasons.count`, `methods.count`, `clauses.count`.
+
+- 5fb3cd3: Six small Admin defects from the demo click-through are fixed (issue #1808).
+
+  - The Inventory stock overview shows each product's name in the Product column, not its SKU.
+  - Custom-field labels are shown in the admin's language. A host that does not set the language (order, customer and organization detail, among others) used to show a Polish operator the field's default label, which may be its code.
+  - The "New channel" button no longer reads "+ + New channel". The blog category tree's "Add subcategory" button and the quote's "Add line" button show a plus icon instead of a typed "+".
+  - On the opportunities list the two filters say what they filter: "Open and closed" (the outcome) and "All workflow statuses" (the stage in the workflow). The Number and Organization columns stay on one line; a long organization name is cut with an ellipsis.
+  - The product editor's low-stock threshold placeholder reads "Inherited" and fits its input. The help text under it still explains the inheritance.
+  - The newsletter subscriber search shows "Search by e-mail" in the box.
+
+- 9eee781: The Admin UI in Polish no longer shows four kinds of text in English (issue #1809).
+
+  - **Order statuses** are named in the admin's language on the Orders list, the order detail, the bulk status dialog and the Order statuses screen. The names were always stored per language; the screens read the English one.
+  - **CMS hooks**: the 23 seeded hooks, such as "Search Page Bottom", are named and described in the admin's language until an operator renames them. A renamed or custom hook keeps the operator's text.
+  - **Transactional e-mails**: each e-mail's name, description and the reason it cannot be switched off come from the sending module's bundle (`transactionalEmails.<code>.name`, `.description`, `.reason`), in the language the response is read in.
+  - **Platform → Modules**: each module's name, description and the reason it cannot be switched off come from the module's own bundle (`module.name`, `module.description`, `module.nonDeactivatableReason`). `GET /api/v1/admin/modules` gains an optional `nonDeactivatableReason` field on each row. `auth`, `currencies`, `email` and `languages` now ship translation bundles.
+
+  Each of these falls back to the English declared in code when a bundle has no entry. `endora new module` now writes `module.description` into the scaffolded bundles.
+
+- bd47236: Removes two shared admin strings nothing reads any more: `returns.filter.rmaNumber` and `returns.search.placeholder` (en, pl). The returns list's search box now searches by RMA number, case reference or full contact e-mail, and its label, placeholder and chip are the `returns` module's own `list.search.*` keys (`specs/181-guest-complaints/` design review A-2). An overlay that translated either removed key can drop its entry.
+- 8b29aae: An invoice for an order paid by a related payer is recorded under the payer: the invoice ledger, the admin invoice list's reach and its new _Billed organization_ filter all use `payerOrganizationId ?? organizationId`. The admin invoice list gains that Organization filter (`filter[organizationId]=`) for every invoice.
+- fbc6c7c: The command palette (⌘K / CTRL+K) now tells a screen reader which result is highlighted (issue #481). The search input is a `combobox` that controls a `listbox`, every result is an `option` with a stable id, and the input's `aria-activedescendant` follows the highlight as the arrow keys move. Group headings label `role="group"` containers, and a record type that could not be searched is a disabled option. Keyboard behaviour is unchanged: focus stays in the input, `Enter` opens the highlighted result and `Alt+Enter` pins or unpins it.
+
+  A pinnable result now says "Pinned" or "Not pinned" in its accessible name and carries `aria-keyshortcuts="Alt+Enter"`. The pin icon beside it is no longer a `<button>`: a result's children are presentational, so the icon is a pointer shortcut hidden from assistive technology, marked `data-palette-pin` and `data-pinned`. The theme's `.b2b-palette__pin[aria-pressed="true"]` selector is now `.b2b-palette__pin[data-pinned="true"]`; a deployment stylesheet that targets the old selector must follow.
+
+  New `core` bundle keys: `appShell.palette.pin.statePinned`, `appShell.palette.pin.stateUnpinned`, `appShell.palette.results` and `appShell.palette.title` (the palette dialog's name), in English and Polish.
+
+- ed28329: Show an accessible, localized EN/PL error beside the top-bar language picker when saving the preferred language fails: the previous language is restored and another attempt is possible. Escape, an outside click or reopening the menu dismisses the error. A failed session refresh after a successful save keeps the new language (#1769).
+- 3d723ff: The newsletter screens, the PWA screen with its push audience builder, the transactional e-mail, e-mail block and e-mail template lists, and the e-mail builder's preview are now shown in the operator's language, English or Polish. They used to be in English whatever language was chosen.
+
+  Statuses, audiences, trigger types, field types, display modes and scopes are shown by name rather than by code (`draft`, `tag_list`, `minimal-ui`, `channel`). Every input has a label tied to it instead of a placeholder that disappears on typing. A campaign's language is chosen from the languages the active sales channels offer instead of typed as a code.
+
+  The page descriptions of these screens were removed, and the PWA push hint was shortened. Keys that nothing read were deleted: `newsletter.nav.*` and `newsletter.editor.*` from `newsletter`, `page.description`, `list.title`, `editor.preview`, `editor.viewport.*`, `editor.variables.*` and `editor.livePreview` from `transactional_emails`, and `settings.description` from `pwa`.
+
+- 8922585: The admin shell draws its frame, top bar, notification bell, language picker, sign-in screen and boot skeleton with the kit's primitives and Tailwind tokens instead of inline styles (UX audit, issue #1492):
+
+  - The notification bell and the language menu use the theme's surface, border and accent tokens, so they follow dark mode and a client's palette. The unread pill and the unread-row bar were fixed red and blue; they are now the destructive and primary colours.
+  - The bell's name includes the unread count ("Notifications, 3 unread"), and an unread entry says so to a screen reader instead of relying on its colour bar and weight. _Mark all read_ is a kit ghost button, and entries highlight on hover and keyboard focus.
+  - An entry's age is written in the reader's language ("5 min temu" in Polish) instead of always in English.
+  - Breadcrumb links in the top bar take the theme's hover colour and underline, which the inline style suppressed. The wordmark in the sidebar is drawn in the theme's white.
+  - Command-palette notes ("Searching…", an unavailable record group) no longer show a pointer cursor.
+
+- Updated dependencies [c878440]
+- Updated dependencies [65f9a7b]
+- Updated dependencies [3fdbe86]
+- Updated dependencies [bfc68c7]
+- Updated dependencies [9eaa409]
+- Updated dependencies [1042e2a]
+- Updated dependencies [3872f3d]
+- Updated dependencies [bbfcd80]
+- Updated dependencies [41b598c]
+- Updated dependencies [467b075]
+- Updated dependencies [a56109e]
+- Updated dependencies [c15eb60]
+- Updated dependencies [33db45a]
+- Updated dependencies [074f500]
+- Updated dependencies [cec9beb]
+- Updated dependencies [90320fd]
+- Updated dependencies [42febee]
+- Updated dependencies [98c0411]
+- Updated dependencies [a8261aa]
+- Updated dependencies [f64646d]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [ee6062c]
+- Updated dependencies [4e668b5]
+- Updated dependencies [843ed42]
+- Updated dependencies [6155f4b]
+- Updated dependencies [5850aac]
+- Updated dependencies [8a5725e]
+- Updated dependencies [f915a24]
+- Updated dependencies [8a06dc5]
+- Updated dependencies [9eee781]
+- Updated dependencies [bd47236]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [398e6d2]
+- Updated dependencies [51c5072]
+- Updated dependencies [2e287a5]
+- Updated dependencies [9d6f006]
+- Updated dependencies [49328cf]
+- Updated dependencies [b3d4843]
+- Updated dependencies [f74fe34]
+- Updated dependencies [19eb7c0]
+- Updated dependencies [0fbf186]
+- Updated dependencies [27b977d]
+- Updated dependencies [5e2a12a]
+- Updated dependencies [5518a09]
+- Updated dependencies [5e380e3]
+- Updated dependencies [bfab5bd]
+  - @endora-commerce/platform@0.112.0
+  - @endora-commerce/contracts@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- ac56d6d: The admin _History_ of a quote request lists the notifications each entry sent (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-06).
+
+  - **API.** `GET /api/v1/admin/quote-requests/:id/history` now returns a `deliveries` array on
+    every entry that has notification records. It still requires `rfqs:handle`. Each delivery has
+    the recipient (kind, id, and a display name read when the History is loaded, or `''` once the
+    person is gone), the channel, the status, the number of attempts, the last error and when it
+    closed. An entry with no records has no `deliveries` key. The buyer's
+    `GET /api/v1/quote-requests/:id` never returns any of this.
+  - **Admin screen.** Under such an entry, the History tab shows who was told, through which
+    channel, and the outcome: sent, pending, failed, or skipped with the reason. A failed delivery
+    shows its last error behind _Show error_.
+  - **Labels.** `rfq.detail.history.delivery.*` keys are added to the `core` bundle in English and
+    Polish.
+
+  Until the delivery worker ships in a later release, every new record shows as _Pending_.
+
+- 8ae3f58: **Behaviour change: a line quantity has an upper bound, refused with a new error code, `LINE_QUANTITY_EXCEEDED`; and the quote request and return line arrays have a line-count bound** (issue #351). A quantity past the integer column it is stored in used to pass validation and answer `500`; it is now refused, in the reader's language.
+
+  New in `@endora-commerce/contracts`: `LINE_QUANTITY_MAX` (`1 000 000`, the same value as `ORDER_MINIMUM_MAX`, so the largest minimum stays orderable), `lineQuantitySchema` (a whole number in 1…`LINE_QUANTITY_MAX`), `boundedLineQuantity(schema)`, `isLineQuantityExceededIssue(issue)`, `LINE_QUANTITY_EXCEEDED` (also in `ERROR_CODES`) and `REQUEST_LINE_ITEMS_MAX` (`200`). `ADMIN_ORDER_MAX_ITEMS` and `QUICK_ORDER_BUILD_MAX_ITEMS` are now that constant under their own names; their value does not change.
+
+  **The new code.** Every request schema carrying a line quantity uses `lineQuantitySchema`: `addCartItemRequestSchema`, `updateCartItemRequestStrictSchema`, `createQuoteRequestSchema` / `patchQuoteRequestSchema` lines, `adminCreateQuoteRequestSchema` / `adminPatchQuoteRequestSchema` lines, `adminCreateOrderRequestSchema` / `adminOrderPreviewRequestSchema` items, `apiPlaceOrderRequestSchema` lines, `quickOrderBuildRequestSchema` items, `quickOrderOneClickRequestSchema`, `addShoppingListItemRequestSchema`, `updateShoppingListItemRequestSchema`, `createReturnCaseRequestSchema` lines, `catalogBulkPriceRequestSchema` lines, `cartSnapshotSchema` lines, and the packaging unit's `baseQuantity` in `createPackagingUnitRequestSchema` / `updatePackagingUnitRequestSchema`. A quantity past the bound is a Zod issue tagged `LINE_QUANTITY_EXCEEDED`. The error envelope in `@endora-commerce/platform` answers a request whose only failures are that issue with `400 LINE_QUANTITY_EXCEEDED` and a translated sentence (`@endora-commerce/mod-i18n` ships it in English and Polish), with `details` naming the field. A request that fails anything else as well stays `400 VALIDATION_FAILED`, with the issue among its details. `POST /api/v1/external/orders` and `POST /api/v1/external/catalog/prices` parse their bodies themselves and keep answering `422 VALIDATION_FAILED`; the detail's `issue` there is `LINE_QUANTITY_EXCEEDED`.
+
+  `@endora-commerce/mod-carts`: two cases are refused with `422 LINE_QUANTITY_EXCEEDED`, `details: { quantity, maximum }`, and write nothing: an add onto an existing basket line whose sum would pass the bound, and a packaging-unit add whose pieces (`baseQuantity × units`) would pass it. This covers the single and batch add, reorder and shopping list to cart. Signing in sums the anonymous basket into the customer's and keeps a summed line at the bound instead of failing the sign-in. `updateCartItemRequestSchema` (the line edit) now accepts any quantity from `0` (remove) to the bound; it stopped at `999`.
+
+  **Line counts.** The line arrays of `adminCreateQuoteRequestSchema`, `adminPatchQuoteRequestSchema` and `createReturnCaseRequestSchema` are bounded at `REQUEST_LINE_ITEMS_MAX`, as the customer's quote request create and edit already were: one line more is `400 VALIDATION_FAILED`. The value is shared but the refusal is not. The order intakes (admin create and preview, `POST /api/v1/external/orders`) and the quick-order build keep refusing more than 200 items with `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`, and the basket's own cap stays `422 CART_LINE_CAP_EXCEEDED`.
+
+  `@endora-commerce/admin-kit`: `parsePositiveInt` returns `null` past `LINE_QUANTITY_MAX`, so the admin order and quote request create screens mark such a line invalid before sending it. `@endora-commerce/mod-quick-order`: an imported row past the bound, and every row of a duplicate whose sum passes it, is rejected as `quantity_invalid` instead of being recognised into a build that would be refused. `@endora-commerce/mod-quote-requests`: the Modify tab's quantity input carries the bound as its `max`.
+
+### Patch Changes
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- f8b29e1: **The admin invoice list pages by cursor, and an ERP WZ document has a label.**
+
+  - **Admin API** `GET /api/v1/admin/invoices` now answers what `adminInvoiceListResponseSchema`'s `pagination` block has always declared: `hasMore: true` and an opaque `cursor` while rows remain beyond the page, `cursor: null` and `hasMore: false` on the last one. Pass the cursor back as `?cursor=` with the same filters to read the next page. Rows are ordered newest `issuedAt` first, ties broken by id, so a page boundary never skips or repeats an invoice. A page is filled from the rows the caller's tenant scope lets it see, so a sales representative's page is never shortened by another organization's invoices. A cursor the route did not issue is refused `400 VALIDATION_FAILED`. It always answered `hasMore: false` before, so an instance with more invoices than one page could not reach the rest.
+  - **Admin UI** — the _Invoices_ list has a _Load more_ button while more rows exist, and the kind filter offers every kind, `wz` included.
+  - **i18n** — `invoices.kind.wz` ("goods dispatch note" / "dokument WZ") and `invoices.loadMore` in the `core` namespace, English and Polish. ERP-imported WZ rows showed the raw key `invoices.kind.wz` in the list, on the detail page and in the kind filter.
+
+- 3f95d1c: Declares and translates (en, pl) the three platform command-hook codes: `COMMAND_EXTENSION_UNCLAIMED`, `COMMAND_HOOK_CYCLE` and `COMMAND_HOOK_DATA_MISSING` (`specs/176-command-hooks-outbox/` P2).
+- 190986e: Declares and translates (en, pl) `COMMAND_OUTBOX_NOT_DEAD`, translates the command outbox's own failure codes (`commandOutbox.failure.hook-unregistered`, `.permanent-failure`, `.handler-failed`), and ships the _Command hooks_ screen's strings and its navigation label (`specs/176-command-hooks-outbox/` P4).
+- 2e603f7: Admin screens confirm destructive and consequential actions in the kit's `ConfirmDialog` rather
+  than the browser's `window.confirm()` (issue #313). This covers deleting, revoking, removing and
+  resetting across these modules, switching a module off on the Modules screen, undoing a bulk
+  edit, making a sales channel the default, and preparing a customer's basket from a quote. The
+  dialog names the action on its confirm button (for example _Delete_, _Revoke_, _Unassign_), and a
+  destructive question opens with focus on Cancel.
+
+  The three native `alert()` calls are now notices on the page: deleting an attachment type that is
+  still in use (`catalog`), unassigning a channel's default warehouse (`inventory`), and activating a
+  megamenu binding that replaces another (`megamenu`, announced through a live region). Renaming a
+  setting group (`settings`) uses a one-field dialog instead of `prompt()`. Removing a colour from
+  the page builder's palette (`page-builder-admin`) is confirmed inline in its row, because the
+  palette is already a modal.
+
+  Several of these questions were untranslated English literals. They are now bundle keys in
+  English and Polish: the country, currency and language deletes (`dictionaries`), the e-mail block
+  and template deletes (`transactional_emails`), the setting-group delete and rename and the setting
+  reset (`settings`), and the sales-channel delete and rebind questions (`sales_channels`). The
+  assets-library folder delete no longer says "OK = … / Cancel = …". `mod-i18n` adds
+  `common.confirm.title` and the subscription-cancel button labels.
+
+  Two native dialogs stay on purpose: the unsaved-changes navigation guard
+  (`use-unsaved-changes-prompt`), which has to answer synchronously inside the click it intercepts,
+  and the settings screen's discard-on-channel-switch guard, which is the same kind of guard. They
+  will be replaced together in a later change.
+
+- 577e94c: **`@endora-commerce/admin-kit/components`** adds `ImmediateBadge`, the one "Applies immediately" badge for the heading of a section whose controls write at once, outside the page's one Save (issue #407, `specs/180-one-save-zone-editors/` FR-061). Text with a decorative icon, drawn with the info tokens the product editor used. An optional `className` places it and is merged last, so a caller's spacing class replaces the badge's own. Its string is `saveSession.immediateBadge` in the `core` catalogue (English and Polish), which `@endora-commerce/mod-i18n` now ships.
+- 7bdf512: The `core` catalogue adds English and Polish strings for the save-session controls (issue #407): `saveSession.action.*` (the Save label, its plural count, "Saving…" and "No unsaved changes") and `saveSession.summary.*` (refused, partial and failed outcomes, per-part problem counts, "Saved:", "Not saved:" and "Show").
+- 5c148de: The product editor, the category editor, the sales-channel editor and the organization and customer detail screens now pass `saveSession: INERT_SAVE_SESSION` to their zones (issue #407). None of these editors runs a save session yet, so nothing changes for operators. The `core` catalogue adds the save-session notices and the "switched off" message in English and Polish (`saveSession.notice.moduleOff`, `saveSession.notice.crashed`, `saveSession.error.moduleOff`).
+- 1acf873: `admin_users` now creates `admin_users.preferred_language` itself, in the new
+  `Migration20261114T002913AdminUsersPreferredLanguage` (issue #611). Until now only `_i18n`'s
+  `Migration20260507T091405I18nAdminI18nInit` created it, although the column belongs to
+  `admin_users`' `AdminUser` entity. That migration keeps its class name and no longer names
+  `admin_users` in `up()` or `down()`. The new migration uses `add column if not exists` with the
+  same type, so a database that has already applied the old migration does not change.
+  `FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS` no longer lists `_i18n` writing `admin_users`.
+- d68aa70: The business refusals of invoice issuance and of corrective invoices have error codes of their
+  own instead of `VALIDATION_FAILED`, and a sentence in English and Polish (issue #633, part of #86).
+  **A caller that matches on `VALIDATION_FAILED`, or on the `details.code` tokens listed below, now
+  sees the specific code.** The HTTP status of each is unchanged. Until now each was answered with an
+  English sentence in every language, because the error envelope never replaces the message of
+  `VALIDATION_FAILED`.
+
+  | Was                                                                                                      | Is                                                | `details`                                                                                                                                    |
+  | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `422 VALIDATION_FAILED`, _"Seller VAT/NIP and company data must be configured before issuing invoices."_ | `422 INVOICE_SELLER_DATA_MISSING`                 | `setting` (unchanged)                                                                                                                        |
+  | `422 VALIDATION_FAILED`, `details.code = "correction_currency_mismatch"`                                 | `422 INVOICE_CORRECTION_CURRENCY_MISMATCH`        | `requestedCurrency`, `invoiceCurrency` (was `originalCurrency`), `originalInvoiceId`; `details.code` is gone                                 |
+  | `400 VALIDATION_FAILED`, `details.code = "correction_total_exceeds_lines"`                               | `400 INVOICE_CORRECTION_TOTAL_EXCEEDS_LINES`      | `total`, `linesTotal`, and `currency` (new); `details.code` is gone, except `"below_charges"` when the total is below the charges it credits |
+  | `422 VALIDATION_FAILED`, `details.code = "correction_exceeds_rate_remaining"`                            | `422 INVOICE_CORRECTION_EXCEEDS_RATE_REMAINING`   | `taxRate`, `vatRatePercent`, `remaining`, and `currency` (new); `details.code` is gone                                                       |
+  | `422 VALIDATION_FAILED`, `details.code = "correction_exceeds_charge_remaining"`                          | `422 INVOICE_CORRECTION_EXCEEDS_CHARGE_REMAINING` | `details.code` is now the charge (`"delivery"` or `"payment_surcharge"`), `chargeKind`, `remaining`, and `currency` (new)                    |
+
+  The seller refusal is answered by `POST /api/v1/admin/orders/:orderId/invoices` and by automatic
+  issuance; the four correction refusals by every caller of the corrective-invoice port, which is a
+  return settlement in this repository. The five codes are members of `ERROR_CODES` in
+  `@endora-commerce/contracts`, declared by the `invoices` manifest, and the module's documentation
+  page names them. `@endora-commerce/mod-i18n` loses the sentence
+  `errors.VALIDATION_FAILED.correction_exceeds_rate_remaining`, which nothing could render: the
+  envelope never translates `VALIDATION_FAILED`. The sentence lives on, under the new code, in the
+  `invoices` bundle. No setting, permission or migration changes.
+
+- 51b4e5c: Documentation only: the page points at the admin runtime in `@endora-commerce/admin-kit/i18n`, the language enum in `platform-language.ts`, and says that `admin_users` creates `preferred_language`, in English and Polish.
+- Updated dependencies [ee0698d]
+- Updated dependencies [9c8efbe]
+- Updated dependencies [3de70b4]
+- Updated dependencies [2ee4923]
+- Updated dependencies [e9df6b5]
+- Updated dependencies [1937bed]
+- Updated dependencies [3254098]
+- Updated dependencies [7616ef1]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [644739b]
+- Updated dependencies [c58acd1]
+- Updated dependencies [fc91398]
+- Updated dependencies [feaa40b]
+- Updated dependencies [d2f179f]
+- Updated dependencies [d16b343]
+- Updated dependencies [34b3387]
+- Updated dependencies [e283396]
+- Updated dependencies [4ecb155]
+- Updated dependencies [ff7bd10]
+- Updated dependencies [761d9c4]
+- Updated dependencies [8e7f794]
+- Updated dependencies [8e7f794]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [695636f]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [d14a4fd]
+- Updated dependencies [86a92af]
+- Updated dependencies [ee2a111]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [bfa1ac4]
+- Updated dependencies [8a4ca9c]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [a2d306f]
+- Updated dependencies [aaa50ff]
+- Updated dependencies [6e528ad]
+- Updated dependencies [eedda68]
+- Updated dependencies [73e8e8c]
+- Updated dependencies [bf257b8]
+- Updated dependencies [e435bad]
+- Updated dependencies [5c148de]
+- Updated dependencies [036865c]
+- Updated dependencies [37532da]
+- Updated dependencies [bfdbeaf]
+- Updated dependencies [65f7abc]
+- Updated dependencies [a998fee]
+- Updated dependencies [20cda0c]
+- Updated dependencies [48b2505]
+- Updated dependencies [c24bd3c]
+- Updated dependencies [6b664cd]
+- Updated dependencies [cd05402]
+- Updated dependencies [91272e6]
+- Updated dependencies [eb4dbc6]
+- Updated dependencies [e2669cd]
+- Updated dependencies [aec841a]
+- Updated dependencies [da2b459]
+- Updated dependencies [77904b3]
+- Updated dependencies [4ab926c]
+- Updated dependencies [a3b1da5]
+- Updated dependencies [28fc1c7]
+- Updated dependencies [2b12d58]
+- Updated dependencies [9110863]
+- Updated dependencies [2905024]
+- Updated dependencies [ae1cedf]
+- Updated dependencies [6f0debc]
+- Updated dependencies [d6e7a55]
+- Updated dependencies [62d3e2d]
+- Updated dependencies [0b2f558]
+- Updated dependencies [dc9bbea]
+- Updated dependencies [1acf873]
+- Updated dependencies [edf46c9]
+- Updated dependencies [ef656f9]
+- Updated dependencies [71ec1f8]
+- Updated dependencies [7a3673f]
+- Updated dependencies [1c3366d]
+- Updated dependencies [ea965bb]
+- Updated dependencies [fc08f90]
+- Updated dependencies [d34fe02]
+- Updated dependencies [59b5246]
+- Updated dependencies [c55dcf5]
+- Updated dependencies [3e7b0b6]
+- Updated dependencies [d68aa70]
+- Updated dependencies [0b991d6]
+- Updated dependencies [9af7a64]
+- Updated dependencies [ecbebe2]
+- Updated dependencies [e61a12b]
+- Updated dependencies [d362c3c]
+- Updated dependencies [ef9630f]
+- Updated dependencies [b7a9c8e]
+- Updated dependencies [75f89d2]
+- Updated dependencies [ca66684]
+- Updated dependencies [b6fd6df]
+- Updated dependencies [6658f0f]
+- Updated dependencies [877477b]
+- Updated dependencies [767d5de]
+- Updated dependencies [d0c5dc8]
+- Updated dependencies [ac094f5]
+- Updated dependencies [61a6edf]
+- Updated dependencies [dd869ee]
+- Updated dependencies [ff6b599]
+- Updated dependencies [ac65359]
+- Updated dependencies [49b43de]
+- Updated dependencies [5f8eede]
+- Updated dependencies [de28088]
+- Updated dependencies [44529a4]
+- Updated dependencies [af88938]
+- Updated dependencies [9aff446]
+- Updated dependencies [42a9a4b]
+- Updated dependencies [8ae3f58]
+- Updated dependencies [65cdd0e]
+  - @endora-commerce/contracts@0.111.0
+  - @endora-commerce/platform@0.111.0
+
+## 0.110.0
+
+### Minor Changes
+
+- 2da23d2: A form picker for the `forms.Form` block (`specs/170-forms-module/` FR-004).
+
+  - `@endora-commerce/page-builder-admin`: `FormPickerControl` and `createFormPickerField` — a Puck field choosing one of the forms the editor may see, with its status, a link creating a new form in a new tab, and the not-found, forbidden and load-failed states (the block keeps its form when the list cannot be read).
+  - `@endora-commerce/mod-i18n`: the picker's words, `pageBuilder.formPicker.*`, in English and Polish.
+
+- 6f19230: **BREAKING — `POST /api/v1/admin/orders` and `POST /api/v1/admin/orders/preview` for a sales channel that is not one of the customer's Organization's active assigned channels now answer `422 ORDER_SALES_CHANNEL_NOT_ALLOWED`: a channel the Organization is not assigned to, or an inactive one, where they answered `201` / `200`, and a channel id that does not exist, where they answered `404 NOT_FOUND`. `GET` and `PUT /api/v1/admin/organizations/:id/sales-channels` for an Organization outside a sales representative's reach now answer `404 NOT_FOUND` where they answered `200`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range (issue #515).
+
+  An order an operator creates on a customer's behalf is placed only on one of the customer's Organization's active assigned channels — the rule a quote request created on a customer's behalf has followed since the product data scopes release. The refusal comes before anything is written: no working basket, no inline address, no order. The order's `salesChannelId` stays required, so there is no defaulted channel to check; a request without it is still `400 VALIDATION_FAILED`.
+
+  - `@endora-commerce/contracts`: `ERROR_CODES.ORDER_SALES_CHANNEL_NOT_ALLOWED`, declared by `orders` with an English and a Polish sentence.
+  - `@endora-commerce/mod-orders`: `OrderCreationAdminService` takes the Organization channel read (`SalesChannelMembershipPort.listChannelsForEntity`) as a new sixth constructor argument, before `mailer`; composed without it, `create` fails closed with `500 INTERNAL`, as the preview already did. The _Create order_ screen offers the customer's Organization's active channels, read from `GET /api/v1/admin/organizations/:id/sales-channels` — the only one preselected, else a choice; a `salesChannelId` in the link kept only when it is one of them; a notice and a retry when the Organization has none or they cannot be read — instead of every active channel.
+  - `@endora-commerce/mod-organizations`: the Organization sales-channel read and replace apply the request's tenant scope. A platform administrator reaches every Organization, as before; a sales representative only the ones assigned to them. The response shape is unchanged.
+  - `@endora-commerce/mod-i18n`: the _Create order_ screen's channel notices (`orderCreate.channelsLoadError`, `orderCreate.noChannelWarning`, `orderCreate.hint.salesChannel`), in English and Polish.
+
+  An instance whose operators create orders on channels their customers' Organizations are not assigned to will see those requests refused once it upgrades: assign the Organization to the channel first (the Organization's _Sales channels_ panel), or create the order on one of its channels.
+
+- 248bf1b: The audit log names a customer who acted for themselves (issue #741; `specs/170-organization-roles/` FR-065). Before this change, a role, invitation or member change made by an Organization administrator on the storefront was shown as _system_.
+
+  - `@endora-commerce/contracts`: `auditLogEntrySchema` gains `actorCustomerAccountId`, nullable and optional. A payload without it still parses.
+  - `@endora-commerce/mod-audit-logs`: each row from `GET /api/v1/admin/audit-log` carries `actorCustomerAccountId` and `actorCustomerLabel`. The label comes from the `customer_account` audit reference, the same lookup already used for impersonated customers. The audit log viewer renders such a row as _Customer: <label>_. The audit log viewer falls back to the short account id when there is no label.
+  - **Breaking:** in `GET /api/v1/admin/audit-log/recent-activity`, `actorKind` gains the value `'customer'` beside `'admin'` and `'system'`. For those rows `actorDisplayName` is the customer's label. A consumer that switches exhaustively on `actorKind` must handle the new value.
+  - `@endora-commerce/admin-shell`: the Recent activity card prefixes a customer actor with _Customer:_.
+  - `@endora-commerce/mod-customer-accounts`: the `customer_account` audit reference now names the person as `<first> <last> (<e-mail>)`, or the e-mail alone when the account has no name. Before, it was the Organization's name. Impersonation rows (`… (as <customer>)` on Recent activity) now name the person too. `registerCustomerAccountAuditReferences` no longer takes an `OrganizationDetailsPort`.
+  - `@endora-commerce/mod-i18n`: adds `auditLog.actor.customer` and `home.activity.actor.customer` in English and Polish.
+
+### Patch Changes
+
+- ff60e93: New keys for the quote desk list's markers (issue #456):
+  - `rfq.list.badge.partiallyAgreed`: EN "Partially agreed", PL "Częściowo uzgodnione";
+  - `rfq.list.badge.notYetAgreed`: EN "Not yet agreed", PL "Jeszcze nieuzgodnione".
+- d591bbe: A personal (B2C) Organization is labelled for what it is rather than by its placeholder tax id (issue #767, owner ruling of 2026-11-05). The admin Organizations list and the Organization detail header show "Personal account" ("Konto osobiste") in place of the tax id. The admin order and quote request screens' _Organization_ panel show "Individual customer" ("Klient indywidualny") where the tax-id line was. The three strings are new core keys: `organizations.personalAccount`, `orderDetail.org.individualCustomer` and `rfq.detail.org.individualCustomer`.
+- 0b64c13: English page titles, dialog titles, command-palette action labels, settings group names and
+  documentation page titles now use sentence case, like the module names and sidebar labels
+  before them. For example, "Quote Requests" becomes "Quote requests", "CMS Pages" becomes
+  "CMS pages" and the "Quick Order" settings group becomes "Quick order". Polish strings are
+  unchanged. Product names keep their capitals: Page Builder, Google Analytics, LinkedIn and
+  Meta among them.
+
+  The admin search group labels change the same way: "Quote Requests" becomes "Quote requests"
+  and "Sales Opportunities" becomes "Sales opportunities". The demo megamenu's English button
+  label becomes "Quick order". The demo seed does not rewrite a menu it has already created, so an
+  existing demo database keeps "Quick Order" until it is seeded afresh or the label is edited on
+  the megamenu screen.
+
+  The settings group names are updated in the database the next time the settings manifest
+  reconciler runs at boot. Nothing has to be migrated.
+
+- d24be0e: The module documentation pages have readable titles instead of the module id (for example _Carts_ instead of `carts`), in the docs sidebar, the module map and the browser tab, in English and Polish. Page headings and screen names in the page text are sentence case, as in the Admin UI (#795). File names and URLs are unchanged.
+- 29d7e90: Adds `orderCreate.line.archived` ("Archived product" / "Produkt zarchiwizowany"). The order create screen uses it for a preview line reported as `PRODUCT_ARCHIVED`.
+- 6bd2ab7: Issue #876 — a consumer's withdrawal from the whole order refunds the delivery cost and the payment surcharge (Directive 2011/83/EU art. 13(1), Polish Consumer Rights Act art. 32 ust. 1; owner rulings E1–E3 of 2026-11-07). The case that brings back the last unit of a B2C order (its organization `isPersonal`, read through `organizationDetailsPort`) refunds both, besides the goods, when it is a `return` settled with a refund or a credit. A partial case, a complaint, a replacement or repair, and a business customer's return refund neither, and an order with a line not returnable at purchase is never withdrawn in full.
+
+  - Each charge is capped at what was paid for it less what earlier cases refunded. The default is the cap when the case was opened within 14 days of the order's completion or within the channel's longer `returns.free_return_days`, and 0 outside it. A channel set to `0` keeps the 14 days.
+  - The settlement takes `deliveryRefundAmount` / `surchargeRefundAmount`. An omitted one settles at the default recomputed under the order's lock. A present one settles exactly as sent, `0` included, when it is within the cap (art. 13(2), a premium delivery). One above the cap is refused `422 refund_exceeds_paid` with nothing written. This deliberately differs from the line amounts, where an amount equal to a default means the default approved. A replacement or a repair has a cap of 0. The admin form sends only an amount the operator edited. The prefill reports `charges` (on a settled case `cap` equals `approved`), the case detail `chargeRefunds`, and the `return.settled` audit entry `charges: { delivery: { cap, approved }, surcharge: { cap, approved } }`.
+  - `totalRefundAmount`, the gateway refund, the credit top-up and the corrective invoice's `total` include the charges, and the correction names them (`CorrectiveInvoiceInput.charges`).
+  - `returnRefundReadPort.listRefundedCharges` reports what settled returns refunded of each charge.
+  - The admin settlement form shows a _Delivery cost_ and a _Payment surcharge_ row when there is something to refund (strings in `mod-i18n`, EN and PL).
+  - `Migration20261108T125405ReturnsCaseChargeRefunds` adds `default_delivery_refund`, `approved_delivery_refund`, `default_surcharge_refund` and `approved_surcharge_refund` to `return_cases`, `0.00` by default, with no backfill.
+
+  **Behaviour change on upgrade.** A B2C return that completes a withdrawal now refunds more than the sum of its lines: the settlement form prefills the delivery and the surcharge, and an API client that settles without the two new fields refunds them. Cases settled before the upgrade are not changed and nothing is refunded retroactively (owner ruling E4). To list B2C orders already returned in full whose delivery or surcharge was not refunded, use the query in _A consumer's withdrawal refunds the delivery and the surcharge_ in the upgrade guide. The window that decides the default is counted as the withdrawal period is (#905): from the order's completion, in calendar days of `returns.time_zone`, with a last day on a weekend moved to the Monday.
+
+- a3502c0: A complaint refunded or credited after the order was invoiced is now documented as a price
+  reduction, not as goods coming back (issue #885, product-owner ruling of 2026-11-07). The
+  settlement sends its lines with `basis: 'price_reduction'`, no discount and the case's RMA number.
+  The correction credits the approved amount at the line's VAT rate on a line stored with quantity 0
+  and named in the document's language, _Obniżka ceny (reklamacja RMA-…): product_
+  (`invoices.lines.priceReduction`, or `lines.priceReductionUnreferenced` without an RMA number). It
+  credits no discount, and it does not lower the quantity a later return of the line is credited
+  from. A complaint resolved by replacement or repair still issues no correction.
+
+  The provider refuses, before any money moves, a price-reduction line that carries a discount
+  (`422 VALIDATION_FAILED`, `price_reduction_carries_discount`) and a correction that credits more
+  goods at one VAT rate than the invoice still charges there (`422 VALIDATION_FAILED`,
+  `correction_exceeds_rate_remaining`, with `taxRate`, `remaining` and `vatRatePercent`; the operator
+  sentence is in `@endora-commerce/mod-i18n`). The `invoice.corrected` audit entry records
+  `priceReductionLines`.
+
+  Wire `CorrectiveInvoiceProvider`'s new last constructor argument, `{ translate, language }`, to name
+  the line; without it the line is named in English.
+
+  A complaint refunded before the order was invoiced is unchanged: the invoice still lists the goods
+  in full and shows the complaint refund as amount due.
+
+- 5ff8302: Adds the sentences, in English and Polish, for the two refusals a return's consent earns when an operator tries to record or revoke it on a settled case (`errors.INVALID_TRANSITION.consent_frozen`) or on a case in a terminal status (`errors.INVALID_TRANSITION.case_closed`, #905). The settlement form's refund-method label now reads "Refund payment method" ("Metoda zwrotu pieniędzy"), since the field offers methods by name.
+- 32b4d0c: **The content of an invoice issued after a return changes** (issue #435). An invoice or proforma issued once a return has been settled, while the order has no invoice yet, now lists only what the buyer kept: each order line is invoiced at its ordered quantity less the quantity of the order's settled `return`-kind cases resolved with a refund or a credit — whether or not the money has been paid out — and a line returned in full is left off. The discount line carries only the kept goods' share: the order's `discountTotal` less the discount those cases carried back with their refunds (as recorded at settlement), left off when nothing remains. Before, every order line and the whole discount were invoiced, so the amount due included goods the buyer had returned. Replacement, repair and complaint cases change no line; the delivery and payment-surcharge lines, the per-rate VAT on the sum of the nets and `paidTotal` (captured − refunded) are unchanged; an invoice for an order refunded in full is still refused with `422 INVOICE_ORDER_REFUNDED` (a proforma is not). With `returns` switched off, every line is invoiced as before. Invoices already issued are not touched.
+
+  **A default return refund can differ by one cent from before.** For an order placed under the per-rate VAT method, the default refund of a case is now the drop in the value of the goods kept — what was left paid less VAT per rate on the nets kept after the case, net of the discount the kept part carries — instead of the value of the returned units on their own, so the kept-lines invoice equals what is left paid to the cent. Example: 3 × 10.01 at 23 % (36.94) refunds 12.32 for one unit, not 12.31. All of an order's returns together still refund exactly what was paid, and a cent an earlier case refunded under the previous rule is absorbed by the next case on the same order. Orders placed before 0.108.0 keep their rule. This is not a breaking change.
+
+  `ReturnRefundReadPort` (`returnRefundReadPort`, owned by `@endora-commerce/mod-returns`) gains `listReturnedQuantities(orderId)`, returning the new `OrderReturnedQuantity` (`{ orderItemId, quantity, discount }`) from `@endora-commerce/contracts`. The change is additive for a consumer of the port; an implementation of `ReturnRefundReadPort` outside `@endora-commerce/mod-returns` adds the method.
+
+  An invoice for an order **returned in full** before it was invoiced — every product line back through settled returns and no delivery or payment surcharge kept — is refused with the existing `422 INVOICE_ORDER_REFUNDED`, whatever the state of the refund (issued, waiting for a person, or waiting for the gateway's webhook); a proforma is not refused. The error carries `details.reason` (`refunded_in_full` or `returned_in_full`), its message (`errors.INVOICE_ORDER_REFUNDED`) now covers both causes, and automatic issuance skips such an order and logs the cause. When the delivery or the surcharge is kept, the invoice lists only that line.
+
+  Issuing an invoice now holds the order's returns lock, the one `@endora-commerce/mod-returns` takes to create and to settle a case, so an invoice is never drawn from a return being settled; it waits, and answers `409 VERSION_CONFLICT` (`details.code: settlement_in_progress`), retryable, after 15 s. The key is the new `returnCaseOrderLockKey(orderId)` in `@endora-commerce/contracts`. A return line whose default refund is 0.00 because its discount share takes its whole value now carries that discount back, so the invoice's discount line no longer keeps it. None of this is breaking. `@endora-commerce/mod-i18n` adds the sentence for `errors.VERSION_CONFLICT.settlement_in_progress` in English and Polish.
+
+- Updated dependencies [18cce2e]
+- Updated dependencies [18cce2e]
+- Updated dependencies [9cfb28b]
+- Updated dependencies [a206da9]
+- Updated dependencies [34485ae]
+- Updated dependencies [34485ae]
+- Updated dependencies [0f1717c]
+- Updated dependencies [86e8761]
+- Updated dependencies [9bfb0b8]
+- Updated dependencies [ed5cf6a]
+- Updated dependencies [2da23d2]
+- Updated dependencies [2da23d2]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [5303aab]
+- Updated dependencies [16f85f4]
+- Updated dependencies [270aa2b]
+- Updated dependencies [3f020ba]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [bf1cc2d]
+- Updated dependencies [ff60e93]
+- Updated dependencies [6f19230]
+- Updated dependencies [77b8c37]
+- Updated dependencies [65104b8]
+- Updated dependencies [7acaa33]
+- Updated dependencies [7019c71]
+- Updated dependencies [4eee98b]
+- Updated dependencies [14ac256]
+- Updated dependencies [248bf1b]
+- Updated dependencies [b2db8c3]
+- Updated dependencies [4cf529d]
+- Updated dependencies [5e4dd48]
+- Updated dependencies [75b053f]
+- Updated dependencies [54fc8f1]
+- Updated dependencies [dac5795]
+- Updated dependencies [5bbb389]
+- Updated dependencies [d69e765]
+- Updated dependencies [dbc1cef]
+- Updated dependencies [d69e765]
+- Updated dependencies [a6bc891]
+- Updated dependencies [8ad737c]
+- Updated dependencies [a9398c8]
+- Updated dependencies [0b56038]
+- Updated dependencies [717e4c6]
+- Updated dependencies [cea1470]
+- Updated dependencies [d46d414]
+- Updated dependencies [73e2eec]
+- Updated dependencies [29d7e90]
+- Updated dependencies [57145f7]
+- Updated dependencies [58a1632]
+- Updated dependencies [e46d233]
+- Updated dependencies [e46d233]
+- Updated dependencies [58a1632]
+- Updated dependencies [14fe4fb]
+- Updated dependencies [76d89ab]
+- Updated dependencies [6bd2ab7]
+- Updated dependencies [a3502c0]
+- Updated dependencies [7a73cc8]
+- Updated dependencies [5ff8302]
+- Updated dependencies [c34b405]
+- Updated dependencies [5af8c25]
+- Updated dependencies [48f055e]
+- Updated dependencies [bf50b85]
+- Updated dependencies [2c6fba0]
+- Updated dependencies [0801f69]
+- Updated dependencies [d1c0d13]
+- Updated dependencies [6d1d284]
+- Updated dependencies [99c075e]
+- Updated dependencies [32b4d0c]
+- Updated dependencies [3355e60]
+- Updated dependencies [7ce9b8a]
+  - @endora-commerce/contracts@0.110.0
+  - @endora-commerce/platform@0.110.0
+
+## 0.109.0
+
+### Minor Changes
+
+- e64ed74: **BREAKING — a `POST /api/v1/admin/quote-requests` that omits `salesChannelId`, for an Organization not assigned to the channel the admin request resolves to (the system default, or `X-Sales-Channel`), now answers `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` where it answered `201`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. The server is the sole enforcer of the channel (owner decision 2026-10-29 "A"): the channel the request lands on, named or not, must be one of the Organization's active channels. A caller with no request scope — a worker, a CLI script, an in-process call to `RfqAdminService.createOnBehalf` — has no resolved channel and must name `salesChannelId`; without it the call is refused with the same code (`details.code: 'no_channel'`).
+
+  An operator names the sales channel a quote request is created on for a customer. `adminCreateQuoteRequestSchema` gains an optional `salesChannelId`; `POST /api/v1/admin/quote-requests` stores the request on that channel, snapshots its line names in the channel's default language, and reports `PRODUCT_UNAVAILABLE_IN_SCOPE` warnings for that channel, refusing — before anything is written — a channel that is not one of the Organization's active channels (read through the kernel's `SalesChannelMembershipPort.listChannelsForEntity`; `RfqAdminServiceDeps` gains `channelMembership`) with the new `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`. Absent, the request is raised where the admin request resolves (the system default, or `X-Sales-Channel`) — and that channel is checked the same way, as above. The _Create quote request_ screen offers the customer's organization's active channels — preselecting the only one, else requiring a choice —, prefills agreed prices on the chosen channel (`PricePrefillRequest.salesChannelId`), and, when the answer warns, lists the unavailable products before leaving the screen. Until a channel is settled it neither prefills prices nor sends anything: a failed or refused read says so (`rfqCreate.channelsLoadError`) with a retry, inactive while it runs.
+
+- e03e6a9: **BREAKING — the admin screens follow the `active` | `inactive` status model, with Archive / Restore and an Archived filter.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range.
+
+  - **admin-kit product browser.** `ProductBrowserStatusFilter` is `'all' | 'active' | 'inactive' | 'archived'` (was `'all' | 'active' | 'draft' | 'inactive'`) and `ProductBrowserCounts` is `{ all, active, inactive, archived }` (was `{ all, active, draft, inactive }`). The browser no longer sends `includeArchived=1`: its first three tabs list products that are not archived, and the new Archived tab sends `archived=only`.
+  - **admin-kit `ProductBrowserItem`** gains an optional `archivedAt` (absent reads as not archived), and **`ProductBrowserRules`** gains `blockArchived`: an archived product is then shown but not selectable, with the reason `archived` (`productBrowser.reason.archived`), whatever its status, and the browser offers no Archived tab. `ProductSelectabilityReason` gains `'archived'`; the new `isProductArchived(row)` reads `archivedAt`. With `rules`, `ProductPicker` names an archived product beside its status.
+  - **`@endora-commerce/mod-i18n` (`core`)**: `productBrowser.tab.draft` and `productBrowser.status.draft` are removed; `productBrowser.tab.archived`, `productBrowser.status.archived` and `productBrowser.reason.archived` are added, in English and Polish.
+  - **page-builder-admin** `CatalogPickers`' product status filter offers All, Active and Inactive; `Draft` is gone.
+  - **catalog admin.** The product editor's status selector and the scope controls offer Active and Inactive; a new product starts Inactive and the create request carries the selected status. The editor offers **Archive** or **Restore** (with `catalog:write`) behind a confirmation, shows an archived product's state beside its status, and says that setting Active does not restore it. The product list has _All · Active · Inactive · Archived_ with the counts above, hides archived products unless the Archived tab is chosen, shows an Archived badge beside the status, and asks `resolve-ids` for the same population; a saved view stores the Archived tab as `archived: 'only'`, and a view saved with `status: 'draft'` opens as All. The bulk dialog's _Set status_ offers Active and Inactive, and the dialog offers bulk **Archive** (or **Restore** on the Archived tab) as its own confirmed action, with a per-product result and a link to the operation, where it can be undone.
+  - **orders** — creating an order refuses archived products in the browser and the quick search. **blog** — the related-products picker names inactive and archived products separately. **product feeds** — the criteria's status rule no longer offers `draft`.
+
+- 0e33ca9: The rich text's image dialog picks an image from the asset library where the host provides a picker, and its width row lays out properly.
+
+  - `@endora-commerce/page-builder-core` exports `PageBuilderImagePickerProvider`, `useImagePicker()` and the types `PageBuilderImagePicker`, `PageBuilderImagePickerProps` and `PickedImage` (`{ url, alt? }`): a host's image picker for controls that cannot import the admin. Without a provider `useImagePicker()` answers `null`.
+  - The image dialog of `RichContentEditorField` (`@endora-commerce/cms-components`), used by every rich text in the page and e-mail builders, offers **Image source: Asset library / URL** when a picker is provided: the library first for a new image, the URL for an existing one. The chosen image's address is inserted, and its alternative text when the field is empty. Without a picker only the URL, as before. The stored image node does not change.
+  - The **Width** number takes the row and its unit select a fixed 76 px; they no longer fight over one width.
+  - `@endora-commerce/page-builder-admin` provides the asset library as that picker inside `PageBuilderColorPaletteProvider`, and exports `AdminImagePicker` and `pickedImageFromAsset(asset, language)`: the asset's stable `fileUrl`, made absolute, and its alternative text in the admin's language first.
+  - `@endora-commerce/mod-i18n` carries the dialog's new copy (`pageBuilder.fieldText.richImage.*`) in English and Polish.
+
+- 0e33ca9: The page builder's settings panel speaks one language: one switch for every on/off setting, and every label translated — the settings every block shares translated once.
+
+  Nothing stored changes: a switch stores the same `true` / `false` the Yes/No choices stored.
+
+  - `@endora-commerce/page-builder-core` exports `createToggleField({ label, defaultValue?, metadata? })` — a `role="switch"` button inside its label, operable by pointer and keyboard, showing the block's default while the prop is unset; with the responsive metadata it edits the breakpoint the Responsive tab selects — and `ToggleSwitch` for a custom control's own on/off setting. Every Yes/No radio of the bundled blocks, the row's "Clip content", a video's autoplay, muted, loop and controls, a carousel's loop, autoplay and equal heights, its arrows and dots (now **Show arrows** / **Show dots**), the border's **Show border**, the section reveal's desktop-only, a media-and-text video's autoplay and a link's **Open in new tab** are switches.
+  - Shared fields carry their key: `withSharedFieldLabel(key, field)`, `sharedFieldLabel(field)` and `PAGE_BUILDER_SHARED_FIELD_KEYS` (editor name, Hide on, order in the column, box spacing, border, background, rounded corners, shadow, colour, typography, minimum height). The admin translates such a field from the `core` bundle's `pageBuilder.sharedFields.<key>` after the block's own key and before the English; a block that relabels a shared field keeps its own key. `applyPageBuilderTranslations` takes the shared resolver as a fifth argument, and translates the options a custom field carries.
+  - The words inside the page builder's controls — spacing, border (a border side now labels its **Width (px)**, **Style** and **Color**), the per-breakpoint hints, the editor's name, the background control and the asset picker — come from the `core` bundle in English and Polish.
+  - `withHideOn` puts **Hide on** back when a block's own `resolveFields` returns a field set without it (the heading, row, table and map had lost it).
+  - Every bundled block's field and option labels resolve in Polish; the block keys are in the declaring module's bundle (`cms`, `catalog`, `blog`, `newsletter`), the shared ones in `core`. Labels use US spelling (**Color scheme**, **Center**), one wording (**Email**, **Alt text**, **Minimum height**, "Custom … (px)", **Rounded corners**), and side choices read **Left / Right**.
+
+- 3ccf23b: An art-directed image, or a section background, can keep its mobile art up to the desktop breakpoint.
+
+  - `@endora-commerce/contracts`: `responsiveImageSchema` and `sectionBackgroundSchema` gain an optional `desktopFrom: 'tablet' | 'desktop'` (`DESKTOP_FROM_TIERS`, `DesktopFromTier` in `page-builder-values`). Unset means `tablet`, the 768 px switch, as before.
+  - `@endora-commerce/page-builder-core` re-exports `DESKTOP_FROM_TIERS` and `DesktopFromTier`. The section background field offers **Mobile image or video shown on** once a mobile image or video is set; the default stores nothing.
+  - `@endora-commerce/page-builder-admin`: the responsive image field offers **Mobile image shown on** once a mobile image is set.
+  - `@endora-commerce/cms-components`: `Picture` writes `(max-width: 1023.98px)` on the mobile `<source>` for `desktopFrom: 'desktop'` (new export `pictureMobileMedia`). A section background's tiled image and video pair carry `data-desktop-from="desktop"` on `.cmsc-section__media`, and `useBreakpointVideo` takes an optional third argument, `{ mobileMedia }`, the query under which the mobile video plays.
+  - `@endora-commerce/mod-i18n` carries the English and Polish copy.
+
+- 476c5aa: The signed-in administrator's Admin UI preferences, kept on the server, and a Pinned section in the sidebar (feature 164).
+
+  - **`useAdminPreference(key)` and `useAdminPreferencesStatus()`** (`@endora-commerce/admin-kit/lib`). `AuthProvider` now provides the signed-in administrator's preferences itself — no extra provider to mount. `useAdminPreference('sidebarPins' | 'sidebarCollapsedGroups' | 'sidebarRailMode')` returns the value and a setter that applies at once and saves in the background, newest value last, retried on reconnect and when the page returns to the foreground. `useAdminPreferencesStatus()` reports whether the preferences loaded and whether a save failed. A session seeded through `AuthProvider`'s `initial` without `preferences` reads the defaults; a fetched one without them opens with the defaults and saves nothing until a later load succeeds. `AdminMe` gains `preferences?: AdminPreferences | null`.
+  - **Pinned sidebar section** (`@endora-commerce/admin-shell`). Every sidebar entry has a pin button after its link (a Tab stop of its own; always visible with a 44 px target on touch). Pinned entries appear first, in a section of their own, in the expanded sidebar, the mobile drawer and — as the first icon — the collapsed rail, where its fly-out lists the pins with an unpin button. A pin whose entry the administrator cannot see is not shown. Pinning and unpinning are announced.
+  - **Reordering pins** in the expanded sidebar and the drawer, with the kit's `useReorderList`: drag a row, or focus its handle and use Space and the arrow keys (Escape cancels), or the up/down buttons on touch screens; every move is announced. A pin that is hidden at the moment keeps its place.
+  - **Pinning from the command palette.** A result whose destination is a sidebar entry has a pin button beside it, and `Alt+Enter` (`⌥↵`) pins or unpins the highlighted result; `Enter` still opens it. No palette entry or group is added.
+  - **`usePageSizePreference(scope)` is server-backed**, same signature: each list's page size is the signed-in administrator's, kept on the server per list (default 20); it is read when the list opens, so a change made on another device applies the next time the list opens. Folded sidebar groups (the Pinned section folds as `pinned`) and rail mode are server-held too, and present in the first render. Nothing is kept in `localStorage` any more.
+  - **One-time carry-over on upgrade.** On first load the browser's remembered page sizes **for the signed-in administrator** are sent to the server — a value already there wins — and removed once it confirmed; another administrator's are left alone. The two old sidebar values (`b2b-admin.nav.collapsed-groups`, `b2b-admin.nav.rail-mode`) were not tied to an administrator, so they are removed without being imported: everyone opens in the default sidebar layout once.
+  - **A failed save** keeps the change on screen and shows one dismissible notice below the top bar.
+  - **New `core` strings** (`@endora-commerce/mod-i18n`, English and Polish): `appShell.pinned.*` (including `appShell.pinned.reorder.*`), `appShell.palette.pin.*`, `adminPreferences.saveFailed`, `adminPreferences.dismiss`.
+  - **Theme** (`@endora-commerce/admin-kit/theme.css`): `.b2b-nav-row`, `.b2b-nav-pin`, `.b2b-nav-reorder-handle`, `.b2b-palette__pin` and the notice's classes.
+
+- 42189ce: CRM's collaboration components are in the kit, so any module's screen can have notes, messages,
+  references, attachments and a change history without copying them.
+
+  **`@endora-commerce/admin-kit/components`** gains:
+
+  - `ReferenceField` — the formatted text field in which `@` mentions a person, `@@` refers to a
+    document and `@@@` to a Product. What may be referred to is the `kinds` prop (the standard is
+    `REFERENCE_TRIGGER_KINDS`, `['admin_user', 'document', 'product']`), and where the suggestions
+    come from is a `ReferenceLookups` adapter (`searchPeople`, `searchDocuments`, `searchProducts`)
+    the screen fills from its own lookups, behind its own permissions. `@@` with `kind: 'document'`
+    shows one list grouped Orders · Quote requests · Tasks, from a `RecordDocumentLookupResponse`.
+  - `ReferenceText` — a stored text drawn with its formatting, and every reference — person, Order,
+    Product, Quote Request, Task — as a chip that links to its screen, or says it is unavailable.
+    An Order's chip carries `data-order-reference="<id>"`, and a chip inside the field carries its
+    token in `data-reference-token`; a chip copied from CRM's earlier editor, whose attribute was
+    `data-crm-token`, still pastes back as a chip.
+  - `CommentThread` and `CommentComposer` — a record's notes or messages, over a `CommentThreadApi`
+    adapter (`list`, `add`, `update`, `remove`); `RecordComment`, `CommentThreadCopy`.
+  - `AttachmentUploader` and `uploadAttachment(path, file)` — a file chosen or dropped, posted
+    multipart to the record's own upload endpoint.
+  - `useRecordHistory` and `RecordHistory` — a cursor-paginated change history whose headings,
+    field labels and values the record injects; `recordHistoryChanges` lists what an entry changed.
+  - `CursorPagination` — rows per page and Previous / Next for a list that knows no total, with a
+    `maxPageSize`.
+  - the reference grammar's editor halves: `findMentionTrigger`, `clipReferenceText`,
+    `editorDocOf`, `textOfEditorDoc`, `REFERENCE_NODE`, `MENTION_QUERY_LIMIT`.
+
+  The kit now declares `@tiptap/react` and `@tiptap/starter-kit` (`^3.22.5`) as peer dependencies.
+
+  **`@endora-commerce/mod-i18n`**: the components' English and Polish sentences are in the shared
+  `core` bundle (`references.*`, `editor.*`, `comments.*`, `history.*`, `cursorPagination.*`).
+
+  CRM is the components' first user; what that changes for `@endora-commerce/mod-crm` is in its own
+  entry.
+
+- 11b0eb8: The contract surface of the new `tasks` and `projects` modules, one shared reference grammar,
+  and a new sidebar section.
+
+  **`@endora-commerce/contracts`** gains, exported from the package root:
+
+  - `tasks.ts` — the Tasks admin API schemas (`TaskListQuerySchema`, `CreateTaskBodySchema`,
+    `UpdateTaskBodySchema`, `TaskSummarySchema`, `TaskDetailSchema`, `TaskContextSchema` and their
+    siblings, with inferred types), `TASKS_EVENTS` and the event payload types, `TASKS_ERROR_CODES`,
+    and the interfaces another module uses: `TaskReadPort`, `TaskWritePort`,
+    `TaskContextRegistryPort` with `TaskContextDescriptor`;
+  - `projects.ts` — the Projects admin API schemas (`ProjectListQuerySchema`,
+    `CreateProjectBodySchema`, `CloseProjectBodySchema`, `ProjectTemplateBodySchema`,
+    `ProjectAnalyticsQuerySchema`, `ProjectDetailSchema` and their siblings), `PROJECTS_EVENTS` and
+    the event payload types, `PROJECTS_ERROR_CODES`, and `ProjectReadPort`,
+    `ProjectStageGuardRegistryPort` with `ProjectStageGuard`;
+  - `record-references.ts` — the `[[<type>:<uuid>]]` reference grammar under neutral names
+    (`recordReferenceTypeSchema`, `formatRecordReferenceToken`, `extractRecordReferenceTokens`,
+    `splitRecordReferenceText`, `mentionedAdminUserIds`, `RecordReferenceSchema`), the `@@` lookup
+    answer `RecordDocumentLookupResponseSchema`, and the shared `RecordHistoryPageSchema`;
+  - `record-rich-text.ts` — the formatted-text grammar (`parseRecordRichText`,
+    `formatRecordRichText`, `recordRichTextToPlain`, `isSafeRecordRichHref`).
+
+  `ERROR_CODES` gains the codes the two modules raise — `TASK_NOT_FOUND`, `TASK_CONTEXT_INVALID`,
+  `TASK_ASSIGNEE_INVALID` and the `PROJECT_*` codes of `PROJECTS_ERROR_CODES`.
+
+  **`AdminZoneNameSchema` has a new member, `'task.detail.after'`**, with its props
+  `TaskDetailZoneProps { taskId }` in `AdminZonePropsMap` — the zone a Task's screen mounts after its
+  content. A consumer that switches exhaustively over `AdminZoneName` gets a compile error until it
+  handles the new member.
+
+  **The reference grammar reads five types where it read three**: `quote_request` and `task` join
+  `product`, `order` and `admin_user`. Every CRM name — `opportunityReferenceTypeSchema`,
+  `formatOpportunityReferenceToken`, `extractOpportunityReferenceTokens`,
+  `splitOpportunityReferenceText`, `OpportunityReferenceSchema`, `parseOpportunityRichText` and the
+  rest of `crm.ts` §9 and `crm-rich-text.ts` — is still exported, now as an alias of the shared
+  one. A text stored before reads as it did. A consumer that switches exhaustively over
+  `OpportunityReferenceType`, or indexes a `Record` by it, gets a compile error until it handles
+  the two new members.
+
+  **`assetReferenceKindSchema` has a new member, `'project_attachment'`** — a file a Project
+  uses, which the media library then refuses to delete. A consumer that switches exhaustively over
+  `AssetReferenceKind` gets a compile error until it handles the new member.
+
+  **`AdminNavSectionNameSchema` has a new member, `'work'`**, and `@endora-commerce/admin-shell`
+  declares the section after _CRM_, labelled "Projects & tasks" / "Projekty i zadania"
+  (`appShell.section.work` in `@endora-commerce/mod-i18n`). It renders only while a module
+  contributes a visible entry to it. A consumer that switches exhaustively over
+  `AdminNavSectionName` gets a compile error until it handles the new member.
+
+### Patch Changes
+
+- 0e33ca9: Brand tokens for page-builder content: one set of colours, colour schemes, fonts, a type scale, button sizes, spacing and layout widths that every block reads, set globally and optionally overridden per sales channel.
+
+  - `@endora-commerce/contracts` exports the token shape and its rules: `cmsBrandTokensSchema` / `CmsBrandTokens`, `DEFAULT_BRAND_TOKENS`, `BRAND_TYPE_TOKENS`, `BRAND_SPACE_TOKENS`, `BRAND_SCHEMES`, `brandFontSourceSchema` (system, library asset or `https:` stylesheet), the contrast helpers `assessBrandContrast`, `contrastRatio`, `relativeLuminance`, `CONTRAST_REQUIRED_BODY` / `CONTRAST_REQUIRED_LARGE`, and the HTTP shapes `putCmsBrandTokensRequestSchema`, `putCmsBrandTokensResponseSchema`, `cmsBrandTokensAdminReadSchema`, `cmsBrandTokensStorefrontResponseSchema`. `CMS_STOREFRONT_CACHE_TAGS.brand` (`cms:brand`) is the storefront cache tag a save revalidates.
+  - `@endora-commerce/mod-cms` stores the tokens in a new `cms_brand_tokens` table (migration `20261022T163218_cms_brand_tokens`), serves `GET`/`PUT /api/v1/admin/cms/brand-tokens` (read with `cms.read`, write with the new permission `cms.brand`; optimistic version check, audited, a stale write is `409`) and `GET /api/v1/storefront/cms/brand-tokens` (answers on a closed sales channel too). The page-builder descriptor carries the effective `brandTokens` and accepts `?salesChannelId=`. The Admin UI adds a _Brand_ screen at `/cms/brand` with live preview and contrast warnings (saving is never blocked by them), reachable from the content navigation and the command palette (`open-cms-brand`); the page editor's preview applies the page's channel tokens.
+  - `@endora-commerce/cms-components` exports `brandTokensToCss` (also at `@endora-commerce/cms-components/brand/brand-css`), which renders the tokens as `--cmsb-*` custom properties plus font links. Every block style that reads a `--cmsb-*` variable keeps the previous literal as its fallback, so a storefront that never emits the variables renders exactly as before.
+  - `@endora-commerce/page-builder-core` re-exports the token types from its barrel and the values from the new `@endora-commerce/page-builder-core/brand-tokens` subpath. Colour fields may store a brand role as `token:<role>`: `BRAND_COLOR_ROLES`, `brandColorRole`, `brandColorFallback` and `resolveColorValue` (`token:primary` → `var(--cmsb-color-primary, <default>)`); the palette context gains an opt-in `brandRoles` flag, and `backgroundToStyle` resolves tokens.
+  - `@endora-commerce/page-builder-admin`: `PageBuilderColorPaletteProvider` takes an optional `brandColors`; when set, the palette lists the brand colours first and a pick stores the role token. Leave it unset where content is rendered without the brand stylesheet, such as e-mail.
+  - `@endora-commerce/mod-settings` lists the `cms-brand` cache namespace on the cache screen; `@endora-commerce/mod-i18n` adds the `pageBuilder.colorPalette.*` labels (English and Polish).
+
+- 0e33ca9: A colour that inherits the surrounding text colour shows as **Inherited (text color)** in the colour field instead of the raw `currentColor`.
+
+  - `createColorField({ label, inherit: true })`: the field's empty state is `currentColor`. It shows an empty box with the **Inherited (text color)** placeholder and a swatch marked as inherited; picking a colour sets it, and **Inherit** (or emptying the box) returns to `currentColor`. Stored values are unchanged.
+  - `cms.Icons` **Color** and `cms.Social` **Icon color** use it; a new icon or social list still stores `currentColor`.
+  - Any colour field shows a stored `currentColor` or `inherit` as inherited, and the empty box's `transparent` placeholder is translated. New `core` keys `pageBuilder.fieldText.color.inherited`, `.inherit`, `.inheritFor` and `.transparent` (English and Polish).
+
+- 0e33ca9: An inline icon can have its own size and vertical offset, and a Section's or a Section group's image background and decorative backdrop can have a size, a repeat and a position.
+
+  Nothing changes for content that does not use them: an icon with no size or offset is drawn at 1 em on the line as before, and a background with none of the new values renders the same markup and look.
+
+  - **Inline icon size and offset.** The `inlineIcon` node of `InlineRichText` accepts optional `size` (`'0.5em'`–`'3em'` or `'8px'`–`'200px'`, `isInlineIconSize`) and `offset` (em of the text, −1 to 1, `isInlineIconOffset`), each also as `null`. `InlineRich` draws the icon at that size and moves it with `vertical-align`; `inlineIconPresentation` is exported for editors that draw it. `inlineIconNode` writes them as `data-cms-icon-size` / `data-cms-icon-offset`, the same through the DOM-free serializer and TipTap's, and reads them back. The icon dialog of the inline rich-text field sets both, edits a selected icon (**Edit icon**), and is translated through the page builder's field text.
+  - **Background size, repeat and position.** `sectionBackgroundSchema` gains `size` and `repeat` for an image (`'cover' | 'contain' | 'auto' | {px} | {percent}` and `'no-repeat' | 'repeat' | 'repeat-x' | 'repeat-y'`), and `decorativeSize`, `decorativeRepeat` and `decorativePosition` for the decorative backdrop; `BACKGROUND_SIZE_KEYWORDS`, `BACKGROUND_REPEATS` and `backgroundSizeToCss` are exported. An image with a natural or fixed size or a repeat is painted as a CSS background (`.cmsc-section__tile`, with the mobile image below 768 px); `contain` keeps the picture. The backdrop's values are written on the section or the group's paint layer. The Section background field offers them, with `cover`, no repeat and the top position as the defaults.
+
+  `@endora-commerce/mod-i18n` adds the English and Polish `pageBuilder.fieldText.section.*` and `pageBuilder.fieldText.inlineIcon.*` labels; the `cms` module's documentation describes both.
+
+- 0e33ca9: The page builder's component options panel is easier to read and no longer scrolls sideways at its usual width (about 20rem).
+
+  - `@endora-commerce/page-builder-core`: every custom field control renders with `PB_FIELD_INPUT_CLASS`, which keeps it inside its column. The controls had named a Puck CSS-module class that Puck 0.23 renamed, so they rendered unstyled, as wide as their content, and the panel scrolled sideways wherever a colour field or a long select appeared. The colour field's swatch, text box and Palette button stay on one row that fits the panel, and each control has its own accessible name. A value per breakpoint nested inside an object or array item (an image's aspect ratio) shows one label and a Mobile / Tablet / Desktop switch instead of three columns of controls, and a breakpoint with its own value is marked; a top-level value per breakpoint stays a field of the Responsive tab. Top-level fields are separated by a rule again. New exports: `PB_FIELD_INPUT_CLASS`, `PB_FIELD_LABEL_CLASS`, `PB_FIELD_HINT_CLASS`, `FieldControlLabel`, `ResponsiveTiers`, `FIELD_TIERS`, and `PAGE_BUILDER_FIELD_TEXT`, `PageBuilderFieldTextProvider` and `useFieldText`, through which a host translates the package's own field controls. `PuckFieldLabel` takes Puck's `el`.
+  - `@endora-commerce/page-builder-admin`: `PageBuilderFieldText` translates those controls from the `core` bundle and is mounted by `PageBuilderColorPaletteProvider`, so the page and e-mail editors both get it. The image field's aspect ratio uses the same breakpoint switch. The link and image fields use the shared input and label classes.
+  - `@endora-commerce/cms-components`: the table and catalog fallback controls use the shared input class.
+  - `@endora-commerce/mod-i18n`: `pageBuilder.fieldText.*` in English and Polish.
+
+- 0e33ca9: A rich-text "read more" can place its summary and open upwards, an accordion gains look options, both open and close with an animation, and a highlighted phrase can take any brand colour or hex.
+
+  Nothing changes for content that does not use them: the default markup and look are the ones the blocks had.
+
+  - **Read more position and reveal above.** The rich-text `readMore` node gains `chevronPosition` (`'start' | 'center' | 'end'`, `'start'` by default) and `revealAbove` (`false` by default). They add `cmsc-read-more--center` / `--end` and `cmsc-read-more--reveal-above` to the `<details>`, the same through the DOM-free serializer and TipTap's, and are parsed back from them. The sanitiser is unchanged. Reveal above shows the open passage's content above its summary through CSS order only: the summary stays the first child and the one control. The rich-text toolbar gains **Read more position** and **Show the revealed text above the summary**.
+  - **Animated open and close.** A read-more passage animates its `::details-content` height and an accordion panel its height and opacity, only without reduced motion and only where the browser supports `interpolate-size` (instant elsewhere). An accordion animates only after hydration (`data-animate`), so a panel open by default does not animate on page load. Every accordion panel stays in the server HTML, `hidden` while closed.
+  - **Accordion look.** `cms.Accordion` gains `icon` (`'plus' | 'chevron'`), `itemStyle` (`'plain' | 'boxed'`), `dividers` (`'none' | 'between' | 'all'`, for plain items) and `titlePadding` / `titlePaddingPx` (a spacing token or Custom px per breakpoint, on the Responsive tab). Each is unset by default and writes nothing then.
+  - **Emphasis colour.** The inline rich-text `emphasis` mark accepts an optional `color` (`#rrggbb` or `token:<role>`, `null` as unset) in `inlineRichTextSchema`. It renders `data-cms-em-color` and an inline `color` on the variant's span, in `InlineRich` and through both TipTap serializers. A colour outside that grammar renders today's span. The rich-text sanitiser keeps `data-cms-em-color` on a `<span>` with a colour value only. The inline toolbar gains **Highlight colour** (brand colours, a hex, **Remove colour**). The translation codec carries the mark unchanged.
+  - **Labels.** The new toolbar and dialog labels are page-builder field text (`pageBuilder.fieldText.emphasisColor.*`, `pageBuilder.fieldText.readMore.*`), and the accordion fields are labelled in English and Polish.
+
+- 0e33ca9: Shared prop shapes for page-builder blocks, with one renderer and one editor field each, so every block links, shows buttons, images and short formatted text the same way.
+
+  - `@endora-commerce/contracts` exports the shapes as Zod schemas and types: `linkValueSchema` / `LinkValue` (URL, page, product, category, file or a section anchor on the same page; `javascript:` and protocol-relative URLs refused), `buttonSpecSchema` / `ButtonSpec` (label, link, style, fill, size, icon and per-breakpoint values), `responsiveImageSchema` / `ResponsiveImage` (desktop and mobile source, alt text, aspect ratio per breakpoint, fit, focal point), `inlineRichTextSchema` / `InlineRichText` (bold, italic, link, line break and the `gradient` / `accent` / `muted` emphasis), `colorValueSchema` (hex or `token:<role>`), `responsiveSchema(inner)` / `Responsive<T>`, and the space, scheme and width enums. The zod-free helpers (`normalizeAnchor`, `isSafeLinkUrl`, `isAspectToken`, `plainTextToInlineRichText`, `inlineRichTextToPlain`, the regular expressions and token lists) are also importable from `@endora-commerce/contracts/page-builder-values` without bundling Zod.
+  - `@endora-commerce/page-builder-core` re-exports these types and helpers from its barrel.
+  - `@endora-commerce/cms-components` exports the renderers: `ButtonView`, `Picture` (art-directed `<picture>`, lazy unless `priority`), `InlineRich` / `countInlineRichWords`, `resolveLinkHref`, `colorValueToCss` / `iconColorProps`, and the inline rich-text editor field `createInlineRichTextField` with `InlineRichTextEditor`, `inlineRichTextExtensions` and the `emphasisMark` TipTap mark. Button styles are the new `cmsc-btn` classes in the shipped stylesheet.
+  - `@endora-commerce/page-builder-admin` exports the editor fields: `createLinkField` / `LinkFieldControl` / `LINK_KINDS`, `createButtonListField` (up to six buttons, optionally per breakpoint), `createButtonSpecField`, `DEFAULT_BUTTON_SPEC`, `createResponsiveImageField` / `ResponsiveImageControl`, `createFileAssetField` and `listPageBuilderLinkPages`. `createButtonLinkSlugField`, the previous slug-only link picker, is exported from here as well and keeps the stored value it always wrote.
+  - `@endora-commerce/mod-i18n` adds the `pageBuilder.linkField.*` and `pageBuilder.imageField.*` labels (English and Polish).
+
+- 0e33ca9: `cms.Video` plays a self-hosted file, `cms.Image` gains art direction, an aspect ratio per breakpoint, an overlay and a caption, and images in rich text take a size, an alignment and an inline mode. Every existing option keeps its meaning, and content saved before renders as it did.
+
+  **`cms.Video`.** A new `source` (`embed`, today's, or `file`) adds a self-hosted video: `videoAssetId` (or a direct file URL in `url`), an optional `mobileVideoAssetId` shown below the tablet width, and a `posterAssetId`. A file loads nothing until it plays (`preload="none"`), plays inline, and never carries the `autoplay` attribute; with `autoplay` it is muted and started only while on screen, never for a visitor who prefers reduced motion. `aspectRatio` keeps `16:9`, `4:3` and `1:1` and now takes every aspect token and a custom `w:h`, per breakpoint, on the editor's Responsive tab. A stored video with no `source` is an embed.
+
+  **`cms.Image`.** New optional props: `mobileSrc` / `mobileAssetId` (a `<picture>` source below the tablet width), `ratio` (per breakpoint; the frame reserves the space), `overlay` (`none`, `solid` or `gradient`, with direction and strength), and `caption` with `captionPlacement` (`below` or `beside`). `caption` is translatable. The image is now lazy-loaded and decoded asynchronously; with none of the new props set its markup and look are otherwise unchanged.
+
+  **Video frames.** The hero's video above the content and the `cms.MediaText` video take `media.ratio` per breakpoint; unset is the 16:9 frame they had.
+
+  **Rich-text images.** The TipTap `image` node gains `size` (a width in px or %) and `align` (`left`, `center`, `right`), rendered as `class="cmsc-rich-img cmsc-rich-img--<align>"` and `style="width: …"`; a new inline node `inlineImage` sets an image in the line of text. The editor's image dialog inserts and edits both. The sanitiser keeps a `width` in px or % on an `<img>` only; its policy's `cleanStyle` receives the element name as an optional second argument. New exports from `@endora-commerce/cms-components`: `richImageNode`, `inlineImageNode`, `RICH_IMAGE_SIZE_RE`, `RICH_IMAGE_ALIGNS`, `ImageDialog`, `RichImageChoice`; `overlayStyle` is exported from the section frame.
+
+  **Fields.** `@endora-commerce/page-builder-core` exports `createAspectRatioField` (a responsive aspect-ratio field: a preset or a custom `w:h`, per breakpoint) and three field-text keys (`ratio.auto`, `ratio.custom`, `ratio.customValue`, translated in `mod-i18n`). `@endora-commerce/page-builder-admin` exports `ResponsiveRatioControl`, the image field's per-breakpoint ratio control, for ratios nested in a composite value. In the CMS editor the video's files and poster, and the image's mobile image, are picked from the asset library; every field of `cms.Video` and `cms.Image` is labelled in English and Polish.
+
+- 3ccf23b: Rich text gains a text size on selected words and more bullet-list markers.
+
+  Nothing changes for content that does not use them: a rich text saved before renders the same markup.
+
+  - **Text size.** The rich text toolbar's **Text size** sizes the selection with a type-scale step (`<span class="cmsc-fs cmsc-fs--<step>">`, sized per breakpoint by the stylesheet). It is stored as the `textSize` mark; the renderer and the sanitizer also accept a `font-size` in px from 8 to 200 on a `<span>` (`<span class="cmsc-fs" style="font-size: Npx">`), which the toolbar does not offer.
+  - **List marker.** A bulleted list's **List marker** is **Disc** (default), **Check mark** (as the check list before), **Chevron** or **None** (`cmsc-list--chevron`, `cmsc-list--none`).
+  - The server and the editor write the same markup. New `core` keys `pageBuilder.fieldText.textSize*` and `pageBuilder.fieldText.listMarker*` (English and Polish).
+
+- 3ccf23b: Buttons inside blocks take the Button block's look options, and an icon-only button can be a pill.
+
+  - `ButtonSpec` (`buttonSpecSchema`) gains optional `transparentOutline`, `borderColor` and `iconOnlyShape` (`'circle' | 'pill'`). A button saved before parses and renders as it did.
+  - A hero's, a card's, a panel's, a header's or a listing's button renders them through the same `ButtonView` path as `cms.Button`, whose own block-level look options are unchanged and win over the spec's. `cms.Button` gains `iconOnlyShape`.
+  - A pill is `cmsc-btn--icon-pill`, 1.15 times its height.
+  - `createButtonSpecField` takes `look: false` (used for `cms.Button`); `BUTTON_LOOK_FIELDS` is exported, its labels translated once in the `core` bundle (`pageBuilder.sharedFields.button*`).
+
+- bec2e83: Polish error messages are Polish sentences. 137 `errors.*` entries in these modules' `i18n/pl.json`
+  bundles were placeholders — the word "Błąd:" followed by the error code lowercased, for example
+  "Błąd: product not found." — and a request with `Accept-Language: pl` received them verbatim as
+  `error.message`. Each is now a sentence in Polish, for example "Nie znaleziono produktu."
+
+  Error codes, HTTP statuses and the English sentences are unchanged; a client matching on the code
+  sees no difference.
+
+- 1a88646: English error messages are English sentences. 137 `errors.*` entries in these modules'
+  `i18n/en.json` bundles were the error code in Title Case with a full stop, for example
+  "Product Not Found." or "Asset Legacy Locator Cannot Harden.", and a request in English received
+  them verbatim as `error.message`. Each is now a sentence in sentence case, for example
+  "Product not found." or "This file cannot be made private because it is stored at an address the
+  platform did not issue. Upload it again first."
+
+  Two Polish sentences were corrected to match what the code refuses: `CANNOT_MODIFY_SYSTEM_DEFAULT`
+  (`mod-sales-channels`) now says the default sales channel can be neither deactivated nor deleted,
+  and `MEGAMENU_TARGET_OUT_OF_SCOPE` (`mod-megamenu`) now names a page as well as a category.
+
+  Error codes and HTTP statuses are unchanged; a client matching on the code sees no difference. A
+  client that matched on the English message text must match the new sentences.
+
+- f261ed3: The sales channel's `isPublic` flag is retired in favour of the pricing display-mode chain
+  (issue #492; closes #467). The flag was documented as anonymous-price visibility, but every read of
+  it withheld prices from **everyone** on the channel, signed-in buyers included, beside a chain that
+  already says "prices after sign-in" per channel: `pricing.unauthenticated_display_mode = none`.
+
+  **Behaviour change.** Signed-in buyers on a channel that had `isPublic = false` now see prices
+  according to the display-mode chain (their organization's override, else the channel's
+  `pricing.default_display_mode`), where they used to see none — on the catalogue listing, the product
+  page, product links, search, comparisons, and the price sort and range, which are no longer refused
+  to them. Anonymous visitors on such a channel still see no prices: the migration below carries that
+  half of the flag over. A channel that had `isPublic = false` **and** its own value for
+  `pricing.unauthenticated_display_mode` keeps that value, so its anonymous visitors now see prices if
+  that value is a priced mode. A new channel, the boot-time default channel included, no longer starts
+  with prices hidden from everyone; it follows the chain like any other.
+
+  The display-mode chain itself is unchanged (owner ruling of 2026-10-28): a product or category
+  override takes precedence over the channel's `pricing.unauthenticated_display_mode`, also for
+  anonymous visitors, so a product overridden to `gross_only` shows its price to guests on a channel
+  whose guest mode is `none`. An organization override still applies to signed-in buyers only.
+
+  - **`@endora-commerce/platform`.** New migration `Migration20261028T173317CoreSalesChannelsRetireIsPublic`
+    (core): every channel with `is_public = false` and no value of its own for
+    `pricing.unauthenticated_display_mode` gets `"none"` as its per-channel value, then
+    `sales_channels.is_public` is dropped. It refuses — rather than migrating into showing prices — a
+    database that has a non-public channel but no registered `pricing.unauthenticated_display_mode`
+    setting; start the platform once on the previous release, so the settings reconciler registers
+    it, and migrate again. Because the column is dropped, stop processes running the previous release
+    before migrating. `SalesChannel.isPublic` and `CachedChannel.isPublic` are removed;
+    `SALES_CHANNELS_CACHE_KEY_PREFIX` moves from `sales-channels:v3:` to `sales-channels:v4:`, so no
+    process reads an entry cached in the other shape. The default-channel reconciler no longer sets
+    the flag.
+  - **`@endora-commerce/contracts`.** `ResolvedSearchChannel.isPublic` is removed — drop it from the
+    context you hand `SearchQueryPort`. No public HTTP shape carried the flag, so no response changes
+    shape. The `SALES_CHANNEL_AUDIT_ACTIONS` documentation now says who writes each row: the identity
+    Commands (with `stateBefore` / `stateAfter` snapshots) since #484.
+  - **`@endora-commerce/mod-catalog`.** `CatalogResolvedChannel.isPublic` and the `isPublic` field of
+    `ProductLinkService`'s storefront context are removed. The catalogue no longer skips pricing on
+    a channel: prices follow the viewer's display mode (a viewer whose mode is `none` gets the
+    withheld answer, `resolvedPrice.displayMode: 'none'`, where the channel used to answer
+    `resolvedPrice: null`). The price controls are refused only where the page's display mode is
+    `none`; the reason "This sales channel does not publish prices…" is gone.
+  - **`@endora-commerce/mod-search`.** The service's `ResolvedSearchChannel.isPublic` is removed, and
+    hits are always resolved for the viewer.
+  - **`@endora-commerce/mod-comparisons`.** A comparison is priced for the viewer on every channel.
+  - **`@endora-commerce/mod-sales-channels`.** The channel form's _Open to anonymous visitors_ hint
+    gains a second line pointing to the guest display mode, with a link to _Pricing settings_
+    (`identity.anonymousAccess.pricesHint`, `identity.anonymousAccess.pricesLink`, English and
+    Polish). New channels are no longer written with the flag.
+  - **`@endora-commerce/mod-price-lists`, `@endora-commerce/mod-i18n`.** _Pricing settings_ states,
+    under the two default modes, that a channel's own value wins over them and that a product or
+    category override takes precedence over both, for anonymous visitors too
+    (`priceLists.displayModes.settings.precedenceHint`).
+  - **`@endora-commerce/demo-composition`.** The `pl_b2b_vip` channel is created without the flag and
+    a new step, _the VIP channel hides prices until sign-in_, sets its
+    `pricing.unauthenticated_display_mode` to `none`; its signed-in buyers see prices. `pl_retail`
+    publishes prices to everyone, as before.
+  - **`@endora-commerce/mod-settings`, `@endora-commerce/cli`.** Comments only: the cache-clear
+    namespace names the new key prefix, and the channel-resolution rule no longer cites the flag.
+
+- ffb2aec: Every signed-in administrator can now read and acknowledge their own notifications on the Admin UI's bell, whatever their role. Before, the bell and its API needed `admin:read`, so a narrow role such as a sales representative had Task and CRM notifications recorded for them that they could never open.
+
+  - `@endora-commerce/mod-admin-notifications`: `GET /api/v1/admin/notifications`, `POST /api/v1/admin/notifications/:id/read` and `POST /api/v1/admin/notifications/mark-all-read` are gated on an administrator session with no permission code. `admin:read` now decides only whether the `all_admins` broadcasts are listed, counted and acknowledgeable; for an administrator without it, a broadcast's id answers `404` like any notification that is not theirs. `AdminNotificationService.listForAdmin`, `markRead`, `markAllRead` and `countUnreadForAdmin` take a required `includeBroadcasts` flag. The module now depends on `admin_roles`, whose permission service answers that question. The permission's label is now _View notifications sent to all admins_.
+  - `@endora-commerce/admin-shell`: the header shows the notification bell to every administrator while the Admin notifications module is on.
+  - `@endora-commerce/mod-i18n`: the English and Polish labels of `admin:read` follow the new meaning.
+  - `@endora-commerce/mod-tasks`: the module page says that every administrator reads their own notifications without a permission.
+
+- 5038a3a: Multi-factor sign-in is now called **two-step verification** (Polish: **weryfikacja dwuetapowa**) in every user-facing string, replacing "two-factor authentication", "uwierzytelnianie dwuskładnikowe" and bare "2FA". Identifiers, permission codes (`mfa:reset`, `mfa:manage`), setting keys (`mfa.admin.totp_enforced` and its siblings) and error codes are unchanged.
+
+  - `@endora-commerce/mod-mfa`: the four TOTP setting names (now "Admin UI — allow two-step verification", "Admin UI — enforce two-step verification", "Storefront — allow two-step verification", "Storefront — enforce two-step verification"; the `MFA_DEACTIVATION_BLOCKED` sentence quotes the new name), the English and Polish error sentences, permission labels, the Admin UI account-security screen, the manifest's module, setting and permission descriptions, and the federated sign-in refusal sentence. The `open-security` palette action also matches "two-step verification" / "weryfikacja dwuetapowa"; "two-factor", "2fa" and "dwuskładnikowe" still match.
+  - `@endora-commerce/mod-i18n`: `adminRoles.field.requires2fa`, `adminUsers.column.twoFactor` and `organizations.detail.twoFactor`.
+  - `@endora-commerce/mod-customers`: the reset actions on the customer list and detail screens.
+  - `@endora-commerce/admin-kit`: the sentence shown when an administrator's password sign-in needs a second-step setup.
+  - `@endora-commerce/contracts`: the validation message of the MFA disable request body.
+  - `@endora-commerce/mod-admin-users`, `mod-admin-roles`, `mod-auth`, `mod-customer-accounts`: module documentation pages.
+
+- 70092cf: Three refusal tokens now have a sentence in English and Polish: `errors.FORBIDDEN.reorder_disabled`, `errors.INTERNAL.customer_account_organization_missing` and `errors.VERSION_CONFLICT.organization_version_mismatch`. Those refusals used to answer with the raising code's English message in every language.
+- f40ce92: Kit pickers speak the admin's language and announce their state; no prop changes.
+
+  - `Combobox` keeps a polite live region (`role="status"`) mounted beside its input and writes the open list's status into it — the loading message, the empty message, or `Results: {count}` — so a screen reader hears a finished load, an empty result and a failed search (WCAG 2.2 SC 4.1.3). It is empty while the list is closed. Its default `loadingMessage` and `emptyMessage` now come from the `core` bundle (`common.combobox.loading`, `common.combobox.noResults`) instead of English literals. A test that finds the status text with `getByText` now matches two elements, the visible row and the live region; query the listbox (`getByRole('listbox')`) or the region (`getByRole('status')`) instead.
+  - `AdminUserPicker`, `CustomerPicker`, `CategorySelect`, `CustomerGroupPicker` and `SalesChannelPicker` take their default placeholder, accessible name, empty, prompt and error copy from the `core` bundle in English and Polish (`adminUserPicker.*`, `customerPicker.*`, `categorySelect.*`, `customerGroupPicker.*`, `salesChannelPicker.*`). Props that override them are unchanged.
+  - `AdminUserPicker` and `CustomerPicker` prompt for a name or e-mail address until their first search answers, instead of saying "No matching …" before anything has been searched.
+  - `SalesChannelPicker` labels channels by the admin language's locale (`pl` → `pl-PL`), so a Polish admin sees the Polish channel name; before, every label fell back to `en-US`. A failed load now shows its error even when the caller passes `emptyMessage`.
+
+  `@endora-commerce/mod-i18n` ships the new `core` keys in `en.json` and `pl.json`.
+
+- 5114576: An invoice's `paidTotal` deducts every refund made before it was issued, each once: what `payments` recorded, plus the issued refunds of the order's settled returns that never pass through `payments` — a credit-limit top-up, and a money refund of an order not paid through a gateway — and an order an operator marked `refunded` counts as refunded everything received — its total with nothing captured, what was captured otherwise — taken as the larger of the recorded refunds and what was received, never their sum. An order refunded in full that way is not invoiced (`422 INVOICE_ORDER_REFUNDED`). `@endora-commerce/mod-returns` publishes the new `returnRefundReadPort` (`ReturnRefundReadPort`, `OrderReturnRefund` in `@endora-commerce/contracts`), which `@endora-commerce/mod-invoices` reads as a `degrades-without` dependency.
+
+  `InvoiceDetail.amountDue` is now `max(0, grossTotal − paidTotal)` and never negative, and the new required `InvoiceDetail.overpayment` is `max(0, paidTotal − grossTotal)`. The invoice PDF's totals block prints it as _Nadpłata_ (`showOverpayment`, `labelOverpayment`), the admin invoice screen as _Overpayment_, and `{{var invoice.overpayment}}` is a new merge field. A consumer that built an `InvoiceDetail` by hand adds the field.
+
+- Updated dependencies [5d192d3]
+- Updated dependencies [d2acc82]
+- Updated dependencies [22604fa]
+- Updated dependencies [e64ed74]
+- Updated dependencies [50338a6]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [22604fa]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [9ff8307]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [07f3764]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [ea892d5]
+- Updated dependencies [678fed1]
+- Updated dependencies [dcbd154]
+- Updated dependencies [a76d6ee]
+- Updated dependencies [22604fa]
+- Updated dependencies [9a38360]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [bdef54c]
+- Updated dependencies [1b4f2b7]
+- Updated dependencies [d560d58]
+- Updated dependencies [dd6deb2]
+- Updated dependencies [3f697a3]
+- Updated dependencies [df0a90e]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [774d23e]
+- Updated dependencies [4cb0a7d]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [f148418]
+- Updated dependencies [3ea1249]
+- Updated dependencies [8ef189b]
+- Updated dependencies [4bc5c7f]
+- Updated dependencies [eba4fd8]
+- Updated dependencies [61fc321]
+- Updated dependencies [9b3e7f0]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [b7baf8a]
+- Updated dependencies [56e237d]
+- Updated dependencies [d50b874]
+- Updated dependencies [a166cfd]
+- Updated dependencies [0a816a0]
+- Updated dependencies [f261ed3]
+- Updated dependencies [302e5ce]
+- Updated dependencies [c73366c]
+- Updated dependencies [b0a1e48]
+- Updated dependencies [b25d8be]
+- Updated dependencies [5038a3a]
+- Updated dependencies [df95f59]
+- Updated dependencies [1fd4822]
+- Updated dependencies [9cb3c8d]
+- Updated dependencies [0f5bcde]
+- Updated dependencies [c72a83e]
+- Updated dependencies [ed85493]
+- Updated dependencies [3174251]
+- Updated dependencies [55864a1]
+- Updated dependencies [11b0eb8]
+- Updated dependencies [b8b6eed]
+- Updated dependencies [2aa2c9b]
+- Updated dependencies [883d192]
+- Updated dependencies [5114576]
+- Updated dependencies [8f7c38e]
+  - @endora-commerce/platform@0.109.0
+  - @endora-commerce/contracts@0.109.0
+
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Placement enforces minimum order quantities, records whether each line was returnable, and admin and API order intake are bounded to 200 lines.
+
+  - **Behaviour change for API clients — placement refuses a basket below a minimum.** Checkout, one-click buy, reorder, a basket filled from a quote request, admin Create order and the external order API answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, checked right after the basket is read and **before** the order value and credit checks, the order number and any stock or credit reservation — a refusal writes nothing. A line whose product record is gone answers `404 PRODUCT_NOT_FOUND` with `details.cartItemIds`.
+  - **Quote exemption only while the quote is valid.** Lines seeded from an accepted quote request are exempt only while that quote request still exists, belongs to the buyer's organization, is `Approved` and within its validity, is recorded by no order, and still has a line at the agreed price in the basket. With `mod-quote-requests` switched off no line is exempt.
+  - **Product names in the response language.** Every minimum refusal (placement, preview, admin create, the external API) names products in the language its sentence is written in — an admin's stored preference, otherwise the q-sorted `Accept-Language`. `OrderPlacementPort.placeOrder` takes an optional `{ language }`.
+  - **New port `orderQuoteSourcePort` (`OrderQuoteSourcePort`).** `quoteSourceHonoursExemptions({ organizationId, quoteRequestId, basketLines })` answers whether a basket's quote-seeded lines keep their exemption — the checkout preview's lock-free check, published so `mod-carts` judges submit for approval as placement does. Advisory: placement confirms the source again. `false` while `mod-quote-requests` is off.
+  - **Checkout preview:** `POST /api/v1/orders/preview-total` answers `belowMinimumLines[]` with the same exemptions (`kind: 'product_unavailable'` for a vanished product).
+  - **Admin order preview:** a line whose product total is below its minimum is unavailable at zero price with the message code `BELOW_MINIMUM_QUANTITY` and its `minimum`, judged after the four existing codes.
+  - **Behaviour change for API clients — 200-line bound.** `POST /api/v1/admin/orders`, `POST /api/v1/admin/orders/preview` and the external `POST /api/v1/external/orders` refuse more than 200 lines with `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`, before any line is evaluated. On the external API this is a public API change: it is checked before the `Idempotency-Key` header is required and leaves no idempotency record. Admin create and the external API also refuse a request whose product total is below the pieces minimum, `details.lines[]` keyed by `index`. Both refusals — below a minimum, or a product the customer may not see — are decided **before** the customer's basket is replaced, so a refused request leaves the basket exactly as it was (it used to be cleared, or partly re-seeded with the lines that passed).
+  - **Returnable at purchase.** Every placement path stamps `order_items.returnable_at_purchase` from the product's **Returnable** flag (fail-closed: a product that cannot be read is recorded not returnable). Older lines hold `null`. `OrderReturnContextPort` lines carry it as `returnableAtPurchase`.
+  - **Create order screen** shows a below-minimum line's reason; `mod-i18n`'s `core` bundle gains `orderCreate.line.belowMinimum` and `orderCreate.line.belowMinimumUnknown` in English and Polish.
+  - Migration `20261016T082022_orders_order_item_returnable_at_purchase.ts`.
+
+- 0bd5a2b: Quote requests validate packaging units by id and apply minimum order quantities — refused for buyers, flagged for sales reps.
+
+  - **Behaviour change for API clients — packaging validation.** A customer line (create, draft edit, cart → quote request) may carry `packagingUnitId`; it must be a current unit of the line's product, and the server stores that unit's catalogue name and base quantity. A line sending a packaging name and base quantity without an id is accepted only when both match one of the product's units. Anything else is refused whole with `422 PACKAGING_UNIT_MISMATCH`, `details.lines[]` with `index` and `reason`; every failure of an id has the single reason `unknown_unit` (a name gives `name_unknown` or `base_quantity_mismatch`). **A buyer request with a non-matching packaging label is now refused, including a draft edit of an existing request whose stored label no longer matches a catalogue unit.** `packagingUnitId` is returned on the admin and customer reads.
+  - **Behaviour change for API clients — buyer writes refused below a minimum.** Customer create (`POST /api/v1/quote-requests`, also from the cart, quick order, a shopping list or an order clone), draft edit (`PATCH /api/v1/quote-requests/:id`) and resubmit answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`. Order: hidden or unpublished products as unknown first, then packaging, then minimums. A draft edit does not refuse a line left unchanged; a line is matched to its stored row by the packaging unit's id first, so a unit renamed in the catalogue since does not make the line "changed" (it keeps its exemption and its stored reference price). Resubmit is judged as a new request; **a resubmit of a request whose product no longer exists now answers `404 PRODUCT_NOT_FOUND`**.
+  - **Product names in the response language.** The minimum and packaging refusals of a buyer's create (also from the cart, quick order and a shopping list), draft edit and resubmit name products in the language their sentence is written in (q-sorted `Accept-Language`, else the channel default); `createForCustomer` takes `options.language`.
+  - **Sales-rep writes warn.** Create on behalf, Modify, the admin's order clone and the admin quick-order build write below-minimum lines; `GET /api/v1/admin/quote-requests/:id` gives each such line `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), shown as a _Below minimum_ badge on the quote request screen. It never reaches the customer read.
+  - `RfqCustomerPort.createForCustomer` accepts `options.minimums` (`'enforce' | 'warn'`).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.minimum.pieces`, `rfq.detail.minimum.packagingUnit` and `rfq.detail.minimum.packagingUnitUnnamed` in English and Polish.
+  - Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.
+
+- 0bd5a2b: Returns honour the per-line returnable flag recorded at purchase; complaints stay unrestricted.
+
+  - **Behaviour change for API clients.** `GET /api/v1/orders/:orderId/returnable` gives each line `returnable` and, when it may not be returned, `notReturnableReason: 'product_not_returnable'`. **`eligible: false` with the new reason `no_returnable_lines` still allows a complaint** — `eligible` answers for `return`-kind cases only.
+  - `POST /api/v1/returns` with `kind: 'return'` naming a line recorded as not returnable is refused with `422 RETURN_LINE_NOT_RETURNABLE` (`details.productName`, `orderItemIds[]`, `lines[]`). Complaints are never restricted.
+  - **Behaviour change — a complaint on a non-returnable line refunds nothing by default.** A `complaint` line recorded as not returnable at purchase is stored with `approvedRefundAmount` `0`; its `defaultRefundAmount` stays the amount paid (the settlement cap). The admin settlement form now pre-fills each line from its stored approved amount rather than from the amount paid, and the case view marks such a line **Not returnable at purchase** (`mod-i18n` `core` key `returns.detail.notReturnableAtPurchase`, English and Polish). The case detail's items carry `returnableAtPurchase`, read through `OrderReturnContextPort`.
+  - **Duplicate order lines in one request are summed** per order line, for both kinds, and checked against the remaining quantity (`qty_exceeds_returnable`). An unknown line is reported before any quantity error.
+  - Lines of orders placed before this release carry no recorded value and count as returnable. **FR-034: products default to not returnable, so lines of orders placed after the upgrade are not returnable until their products are marked** in the catalogue (Bulk edit → Returnable); orders placed before the upgrade are unaffected.
+  - New bundle sentence `errors.RETURN_LINE_NOT_RETURNABLE` in English and Polish.
+
+- 291ec86: Custom-field filters for admin lists: one composite, its hook and the pure helpers the Orders, Quote Requests and Opportunities lists share.
+
+  **New in `@endora-commerce/admin-kit/components`.**
+
+  - `CustomFieldListFilters` — one filter control per custom field a list offers, rendered as grid
+    cells for the host's own advanced-filters grid. Props: `idPrefix`, `fields`
+    (`CustomFieldListFilterField[]`), `value` (`CustomFieldFilters`), `onChange(key, filter | null)`
+    (one key's filter, whole; `null` when nothing of it is left), `language`, and optionally
+    `status` (the hook's) with `onRetry`: a placeholder cell while the fields load, and on failure a
+    sentence with a _Try again_ button. A text field is a search box committed after a 300 ms pause;
+    a number is a minimum and a maximum, a decimal comma accepted, also paused; a date is a from and
+    a to. Both ranges stack below `sm` with a visible short label on each bound, explain a bound that
+    is not a number and an inverted range in a message linked to the input, and send nothing for
+    either. A yes/no field is _Any / Yes / No_; a select or multiselect field is a multi-select of its
+    options in their order, searchable above eight. Labels follow `label[language]`, then the base
+    language, then `labelDefault`. A pending text or number commit is dropped when the value changes
+    from outside.
+  - `useCustomFieldListFilterFields(endpoint)` — `{ fields, status: 'loading' | 'ready' | 'error',
+reload }` from one `GET` of a list's offered-fields endpoint; `reload()` reads it again.
+  - `readCustomFieldFilterParams(params)` / `writeCustomFieldFilterParams(params, filters)` — the
+    filters in an address's `cf.<key>.<op>` parameters (`in` repeated) and back, other parameters
+    untouched. A key failing the definition-key grammar and a malformed operator value are dropped;
+    an unknown well-formed key is kept for the server to refuse; at most 10 keys and 100 `in`
+    values.
+  - `sanitizeCustomFieldFilters(saved, fields)` — a saved view's filters against the offered fields:
+    `{ kept, dropped }`, removed options pruned. `pruneRemovedOptions(filters, fields)` — removes
+    options a known field no longer has from filters read from the address.
+  - `customFieldFilterChips(fields, filters, language, t)` — one `{ id, label, remove, removeLabel }`
+    chip per key, the label plain text and `removeLabel` the remove action's accessible name.
+  - `customFieldDisplayName(fields, key, language)` — how a field is named to the operator: its label
+    (language, base language, `labelDefault`), or for a key the list does not offer the key cut to
+    64 characters. `resolveCustomFieldLabel(label, labelDefault, language)` — the label rule alone.
+  - `emptyCustomFieldFilters()`, `withCustomFieldFilter(filters, key, filter | null)` and
+    `withoutCustomFieldFilter(filters, key)` — new prototype-free records with one key set or removed. `customFieldFilterRefusal(error)` — the key a
+    `CUSTOM_FIELD_FILTER_UNAVAILABLE` refusal names, else `null`. `toCustomFieldFiltersParam(filters)`
+    — the `customFieldFilters` request parameter, keys sorted, `null` when empty.
+  - Types: `CustomFieldListFiltersProps`, `CustomFieldFilterChip`, `CustomFieldFilterTranslator`,
+    `CustomFieldListFilterFieldsState`, `CustomFieldListFilterFieldsStatus`.
+
+  Every record the helpers return has a `null` prototype, so a key such as `constructor` is an
+  ordinary key and never an inherited member.
+
+  **`@endora-commerce/mod-i18n`** ships the `customFieldFilters.*` keys of the `core` namespace in
+  English and Polish, which the composite reads; a host needs that version alongside this one.
+
+  **`Input`** (`@endora-commerce/admin-kit/ui`) draws its border in the destructive colour while
+  `aria-invalid` is set.
+
+- c8aa175: Quote request lines can be arranged in named, ordered groups.
+
+  - **Admin API.** `PATCH /api/v1/admin/quote-requests/:id` and `POST /api/v1/admin/quote-requests` accept `groups` (`{ key, id?, name }`, in display order) and a per-line `groupKey`. A body with `groups` replaces the grouping (an `id` keeps a group across a rename; a stored group not named is deleted; its lines become ungrouped); a body with `items` and no `groups` keeps every paired line in its group; `groups` without `items` answers 400; a group id of another quote answers `422 VALIDATION_FAILED` at `groups.<i>.id`. The grouping is written under the existing row lock and recorded on the `quote_request.modify` / `quote_request.create_on_behalf` audit entry (`stateBefore.groups`, `stateAfter.groups` as `{ name, lineCount }`). A save that only regroups is an ordinary revision.
+  - **Replies.** Every quote reply answers `itemGroups` (admin: every group, empty ones included; customer: groups holding a line only) and each item's `groupId` and `position`, with `items` **in display order** — the reply read had no order before. The customer comparison may carry `{ kind: 'grouping' }`; the admin history lists the five new change kinds. Customer bodies accept no grouping (`PATCH` refuses `groups`; a create body's keys are stripped as before); a customer draft edit keeps every paired line's group; resubmission copies none.
+  - **One product on several lines.** A quote may hold one product and variant on several lines, in different groups or in one. Lines without an id pair with stored lines by group and quantity first (draft edits, API clients, revision comparisons); the customer comparison pairs revision lines one to one instead of by product, and an entry about a product on several lines names its group (`groupName`), as the admin history's line reference does. A `PATCH` line may carry `splitFromId`: a new line split off a stored line keeps its variant, packaging unit, proposal, note, currency and reference. The _Modify_ tab offers _Split line_; the create screen lets a product be added again and keys its price prefill by line.
+  - **Read port.** `quoteRequestReadPort.listItems` answers lines in display order with `position` and `group`.
+  - **PDF data.** The document data carries `groups` and each line's `groupId` / `position`, lines in display order; the quote PDF prints them as sections (see the document-sections changeset).
+  - **Admin screens.** The detail _Modify_ tab and the create screen group lines with the line groups editor, with a summary per group; _Overview_ shows the groups read-only.
+  - **Migration** `20261020T171341_quote_requests_quote_request_item_groups.ts` creates `quote_request_item_groups` and adds `quote_request_items.group_id` (on delete set null) and `position` (default 0, no backfill).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.history.change.{group_added,group_removed,group_renamed,line_group,line_order}`, `rfq.detail.history.ungrouped` and `rfq.detail.history.lineInGroup` in English and Polish.
+
+- e1b173f: The shared `core` bundle gains the editable grid's strings, in English and Polish (feature 161): `editableGrid.instructions`, `editableGrid.editorLabel` and the live-region sentences `editableGrid.announce.{pasted,pasteSkipped,filled,cleared,undone,redone,nothingToUndo,nothingToRedo,readOnly}`. Additive; no key changes or goes.
+- 53e88c7: _Send feedback_ beside the release in the Admin UI sidebar (an icon of its own when the sidebar is collapsed), shown while the `admin_feedback` module is present. It opens a dialog — the feedback (required), the sender's e-mail (the signed-in administrator's, editable) and an optional phone — that posts to `POST /api/v1/admin/feedback`, and says every outcome: thanks, sending switched off on the instance, too many messages, or not delivered, always with `support@endora.software` to write to by hand and with what was typed kept. New `appShell.feedback.*` keys in the core bundle (EN, PL); `theme.css` gains `.b2b-sidebar__feedback` and `.b2b-sidebar__feedback-rail-row`.
+- 8f0fd0e: A typed money amount with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED`, never rounded (issue #417, owner ruling of 2026-10-24).
+
+  - `@endora-commerce/contracts`: new `money-input` module — `twoDecimalAmount(schema)` for a number schema, `twoDecimalAmountString(schema)` for a decimal string, `addAmountPrecisionIssue(ctx, path)` for a `superRefine` that decides per field, `hasAtMostTwoDecimals(value)`, `isAmountPrecisionIssue(issue)` and the `AMOUNT_PRECISION_EXCEEDED` constant; new `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`.
+  - `@endora-commerce/platform`: the error envelope answers `400 AMOUNT_PRECISION_EXCEEDED` when every failed issue of a request is the precision issue, whether the route validated through the type provider or parsed the body itself; a request failing anything else as well stays `VALIDATION_FAILED`, the precision issue listed among its details.
+  - `@endora-commerce/mod-i18n`: declares the code in the platform block, with its sentence in English and Polish.
+
+- a8919dc: A unit price keeps up to four decimal places, unrounded, from the price book to the invoice line; only the line value is rounded (owner ruling of 2026-10-25).
+
+  - `@endora-commerce/contracts`: new `unitPriceHalfUp(value)` (a unit price at its four places, as `numeric(14,4)` stores it), `unitPriceFractionDigits(value)` and `unitPriceDisplayText(value)` (the one display rule: two places when places three and four are zero, otherwise the significant places, up to four), `grossUnitPriceHalfUp(net, rate, unit?)` (a displayed gross unit price: two places for a two-place net, four for a sub-cent one) and `UNIT_PRICE_PLACES`. In `money-input`: `fourDecimalUnitPrice(schema)`, `fourDecimalUnitPriceString(schema)`, `hasAtMostFourDecimals(value)`, `isUnitPricePrecisionIssue(issue)` and the `UNIT_PRICE_PRECISION_EXCEEDED` constant; new `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. A quote's `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) now accept four places; a fifth is refused with the new code. Typed money amounts keep `twoDecimalAmount`. A `money` document value (`documentValueSchema`, `DocumentValue`) takes an optional `unitPrice: true`, and `formatDocumentValue` shows such a value with its significant places, up to four, never fewer than the format's `decimals`.
+  - `@endora-commerce/platform`: the error envelope answers `400 UNIT_PRICE_PRECISION_EXCEEDED` when every failed issue of a request is the unit-price precision issue; a request refused for an amount and a unit price at once stays `VALIDATION_FAILED`.
+  - `@endora-commerce/mod-i18n`: declares `UNIT_PRICE_PRECISION_EXCEEDED` in the platform block, with its sentence in English and Polish.
+
+### Patch Changes
+
+- 815daa8: The shared admin bundle drops 161 `priceLists.*` strings, in English and Polish, that nothing reads since feature 160 replaced the price-list screens with the price-book editor: the old list, create and detail pages (tabs, products, bulk add, picker), the Application rule builder, the per-currency bracket editor and the linked-lists panel. The `priceLists.displayMode.*` and `priceLists.displayModes.*` strings the display-mode screens use, and `priceLists.loading` and `priceLists.dismiss`, stay.
+- 256e488: The `price_lists` manifest describes price books (feature 160): the module description reads _Price books — base, catalogue, buyer and sale prices per currency, sales channel and audience — and price display modes._, and the permissions _View price books and display modes_ (`price_lists:read`) and _Edit price books, base prices and display modes_ (`price_lists:write`), in English and Polish. They named brackets, pricing rules and a rule-based engine the module no longer has.
+- 4d07648: The price display-mode page is titled _Pricing settings_ (feature 161, FR-025). Old: `priceLists.displayModes.title` "Price display modes" / "Tryby prezentacji cen" and its settings card `priceLists.displayModes.settings.title` "Pricing settings" / "Ustawienia cenowe". New: the page title is "Pricing settings" / "Ustawienia cenowe" and the card "Default display modes" / "Domyślne tryby prezentacji cen". No key is added or removed.
+- 5669aee: The core bundle titles the quote request history's new `custom_field_carry_skipped` entry ("Custom field values not carried from a sales opportunity"), in English and Polish.
+- 56b075d: The _Place order_ action on an approved Quote Request in the Admin UI works. It posted to the storefront's `POST /api/v1/quote-requests/:id/convert-to-order`, which is customer-only: an administrator's session answered `401`, which the Admin UI reads as an expired session, so the operator was signed out — and an accepted call would have seeded the administrator's own basket.
+
+  `@endora-commerce/mod-quote-requests` adds `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`, behind the module's `rfqs:handle` permission and the sales-representative scope of the other admin actions. It puts the approved request's lines into the basket of the customer who owns the request, at the agreed unit prices — replacing what that basket held, exactly as the customer's own conversion does and under the same rules — and records `quote_request.prepare_customer_basket` in the audit log. The customer completes the order at checkout. `@endora-commerce/contracts` exports its response schema, `adminPrepareCustomerBasketResponseSchema` (`cartId`, `customerAccountId`, `itemCount`).
+
+  The Admin UI button calls it after a confirmation that names the replaced basket, and is labelled _Prepare the customer's basket_ (`@endora-commerce/mod-i18n`, English and Polish).
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: New `core` strings, in English and Polish, for the admin quote-request screen: `rfq.detail.reference.*` (reference price, proposal and difference columns; _price at request_ / _current price_ / _no price_; _per base unit_), `rfq.detail.history.*` (history entries, changes, actors, roles, loading, error and truncation notices; the truncation notice takes the event window as `{count}`) and `rfq.detail.modify.lineGroup` (_Line {number}_, the accessible name of a Modify line that has no product name yet). Removed: `rfq.detail.column.desired` and `rfq.detail.modify.desiredPrice`, which the screen no longer renders; the proposal column is now labelled by `rfq.detail.reference.column.proposed`.
+- bf9881f: The command palette finds records as well as screens and actions.
+
+  On every open the palette asks `GET /api/v1/admin/global-search/capability`; when the answer names
+  at least one record type, typing at least the minimum search length searches records after a 250 ms
+  pause (the previous request aborted, a stale answer ignored) and shows one group per record type
+  after _Actions_, with server-resolved titles, a status badge, a "more results" hint and a note for a
+  type that could not be searched. Records join the palette's one Arrow/Enter list; a final row opens
+  `/global-search?q=…`. A refused or failed probe — global search switched off or not installed —
+  leaves the palette exactly as it was. A live region announces the number of records found.
+
+  The `core` bundle gains five keys in English and Polish: `appShell.palette.records.searching`,
+  `.more`, `.unavailable`, `.seeAll` and `.announce`, so a host needs `@endora-commerce/mod-i18n` at
+  this version.
+
+- dd939be: The shared admin bundle drops the `invoiceTemplates.*` keys and `appShell.nav.invoiceTemplates`
+  (the invoice template screens moved to the `document_templates` module, which ships its own
+  strings), and relabels `adminRoles.permission.invoices:write` in English and Polish
+  (`specs/152-compare-pdf-template/`).
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+### Patch Changes
+
+- 2420ff9: The `core` bundle gains, in English and Polish, the strings of the price list's bulk add through
+  the product browser: `priceLists.detail.picker.alreadyOnList`, `priceLists.detail.bulkAdd.error`,
+  the cause-specific `priceLists.detail.bulkAdd.error.conflict`,
+  `priceLists.detail.bulkAdd.error.forbidden`, `priceLists.detail.bulkAdd.error.invalid` and
+  `priceLists.detail.bulkAdd.error.notFound`, `priceLists.detail.bulkAdd.failed` (with `{count}`
+  and `{products}`), `priceLists.detail.bulkAdd.failed.product_not_found` and
+  `priceLists.detail.products.add.noPermission`. `priceLists.detail.picker.title` now reads "Add
+  products" / "Dodaj produkty". The single-product drawer's `priceLists.detail.picker.empty`,
+  `priceLists.detail.picker.error.load`, `priceLists.detail.picker.searchPlaceholder` and
+  `priceLists.detail.picker.subtitle` are removed, as are `priceLists.detail.picker.cancel`,
+  `priceLists.detail.products.error.add` and `priceLists.detail.products.loadingProduct`; nothing
+  reads them any more.
+- 97d24cf: The `core` bundle gains the `productBrowser.*` strings in English and Polish, used by the admin
+  kit's `ProductBrowserDialog`, `ProductBrowserTrigger` and the rule-aware `ProductPicker`: the
+  trigger and its missing-permission hint, the status tabs, the type filter, the search
+  placeholder, the column headers, translated product statuses and types, the reasons a product
+  cannot be selected, the selection footer (`productBrowser.action.confirm` is "Add {count}" /
+  "Dodaj {count}"), the per-confirm limit notice, and the loading, empty, load-error and
+  confirm-error states. No existing key changes.
+- 519fecb: **Create order** shows **Items** and **Order summary** only once both the customer and the sales
+  channel are chosen — the two inputs pricing needs; payment method, delivery method and addresses
+  do not gate them. Until then one hint names what is missing. The summary still appears only after
+  the first priced line. Clearing either field hides both sections without discarding the lines,
+  which come back when the field is set again and still count as unsaved work for the
+  leave-the-page prompt. A page opened with `customerAccountId` and `salesChannelId` in the query
+  string shows **Items** at once.
+
+  The `core` bundle gains `orderCreate.gate.missingCustomer`, `orderCreate.gate.missingChannel` and
+  `orderCreate.gate.missingBoth` in English and Polish. No existing key changes.
+
+- 708a3e3: The admin order preview says why a line cannot be ordered, and refuses a sales channel that does not exist.
+
+  **Two new message codes on `POST /api/v1/admin/orders/preview`.** A line is now also unavailable
+  when the customer's Organization may not see the product (`PRODUCT_NOT_VISIBLE_TO_CUSTOMER`) or
+  when the product is not in the assortment of the sales channel named by the request body's
+  `salesChannelId` (`PRODUCT_NOT_IN_SALES_CHANNEL`). Each unavailable line carries exactly one
+  `messages` entry, the first that applies in the order `PRODUCT_NOT_FOUND`,
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`
+  (`ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` in `@endora-commerce/contracts`). An unavailable line
+  keeps the existing shape — `unitPrice: '0'`, `lineTotal: 0`, `unavailable: true` — and adds
+  nothing to the subtotal or VAT. The request and response schemas are unchanged; `messages[].code`
+  stays a string, so a client that does not know a code keeps parsing the response. A soft-deleted
+  product is priced as before.
+
+  **Behaviour change: an unknown `salesChannelId` is now refused.** The preview used to fall back
+  silently to any active channel when the body's `salesChannelId` named none, and priced the
+  basket on that other channel. It now answers **404 `NOT_FOUND`** (the route's existing
+  not-found error) before any line is evaluated, so the channel a preview is priced on
+  and the channel its assortment is checked against are always the one the operator chose. The
+  route is admin-only (`orders:write`); an admin client that sends a stale channel id now receives
+  the error instead of a preview priced on a different channel. Order creation
+  (`POST /api/v1/admin/orders`) is not changed by this release.
+
+  **Create order adds products through the product browser.** Inside **Items** — shown once the
+  customer and the sales channel are chosen — **Browse products** opens the shared picker on the
+  Active tab, where grouped and bundle parents, draft and inactive products, and products already on
+  the order are listed with their reason and cannot be ticked; up to 200 ticked products, across
+  pages and filters, are added in one step as lines of quantity 1. Beside it a quick search by name
+  or SKU appends one product under the same rules. The per-line product search and **Add item** are
+  gone: each line shows the product's name and SKU, an editable quantity (a whole number of 1 or
+  more — anything else marks the line, keeps it out of the preview and blocks submit), the unit
+  price, the line total and a remove action. A line the preview reports unavailable shows that
+  cause's reason instead of a price — "The customer cannot see this product" for
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, "Not in this sales channel's assortment" for
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, and **No price** for `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code
+  the screen does not know — and blocks submit until it is removed; a refused preview (such as a
+  sales channel deleted meanwhile) shows **Could not calculate prices** and marks no line. The
+  created order still carries exactly the lines and quantities on screen, in the unchanged payload
+  shape. The `core` bundle gains `orderCreate.items.browse`, `orderCreate.items.quickSearch`,
+  `orderCreate.items.empty`, `orderCreate.line.notVisible`, `orderCreate.line.notInChannel` and
+  `orderCreate.line.quantityInvalid` in English and Polish, and loses `orderCreate.addItem`, which
+  nothing reads any more.
+
+- b4fbb1c: **Create quote request** adds lines through **Browse products** — the admin kit's shared product
+  browser, many products at once — and a quick search by name or SKU beside it; the per-row product
+  search and **Add line** are gone. Draft and inactive products can be added; grouped and bundle
+  parents are shown with a reason and cannot; a product already on the request is marked as already
+  added. Each line shows name and SKU, an editable whole-number quantity (default 1), an editable
+  agreed unit price and remove.
+
+  The agreed unit price is prefilled from the customer's price lists through a queue with at most
+  four requests in flight, and a response is applied only while it still answers the line's current
+  product, quantity and customer. **A hand-typed agreed price is no longer overwritten** — before,
+  changing the quantity or the customer replaced it. A prefilled price answers one quantity, so
+  once the quantity is no longer a valid one that price is cleared and the line is marked. On a
+  customer change every price not typed by hand is cleared and resolved again for the new
+  customer, so it may become empty; lines added before a customer is chosen are prefilled once one
+  with an organization is.
+
+  **Incomplete lines block submit instead of being dropped**: a line with no agreed price or an
+  invalid quantity is marked and the request cannot be sent until it is fixed or removed; every line
+  on screen is sent. The running total counts the lines with both a valid quantity and a price.
+
+  The `core` bundle gains `rfqCreate.items.browse`, `rfqCreate.items.quickSearch`,
+  `rfqCreate.items.empty`, `rfqCreate.line.priceMissing` and `rfqCreate.line.quantityInvalid` in
+  English and Polish, and loses `rfqCreate.addItem`, which nothing reads any more.
+
+- d571d8c: The quote request History gains the _PDF sent to the customer_ entry and its recipients, template,
+  language and message lines, in English and Polish (`specs/153-quote-request-pdf-template/`).
+- ad55813: E-mail HTML previews are drawn in sandboxed frames that do not run scripts: the e-mail editor's full preview and the newsletter campaign preview carry `sandbox=""`, and the e-mail editor's inline preview of an embedded block or template is drawn in a script-less frame sized to its content instead of being injected into the editor's document. The inline frame's title is the new `core` key `pageBuilder.emailPreview.embedTitle` (English and Polish).
+- 882e88f: The order list's saved views now run on the admin kit's `SavedViewsControl` (#288).
+
+  - Saving a view opens one in-app dialog that asks for the name and whether to share the view, instead of two browser prompts. The name is checked as it is submitted — empty, too long, containing characters that cannot be used, or already used by one of your own views — and a server refusal is shown inside the dialog with what you typed kept.
+  - Deleting a view asks for confirmation in an in-app dialog that names the view and, for a shared view, warns that it disappears for every admin who can open the list. _Delete view_ is offered only for a view you may delete.
+  - Both dialogs are keyboard-operable (focus moves into the dialog, stays there and returns to the control afterwards; Escape cancels) and translated in English and Polish. A shared view is announced as shared in the selector, in words rather than a star.
+  - Loading a view saved without a sort applies the list's default sort (newest first) instead of failing.
+  - Loading a view returns the list to its first page and clears the row selection, without first requesting the old page under the view's filters.
+
+  `@endora-commerce/mod-i18n` drops the four `orders.views.*` keys the replaced component read; the control reads the `savedViews.*` keys added earlier in this feature.
+
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

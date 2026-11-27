@@ -9,6 +9,7 @@ import { ReturnStatusTransition } from '../entities/return-status-transition.ent
 import { ReturnCase } from '../entities/return-case.entity.js';
 import { returnStatusUsageQuery } from './return-status-usage.js';
 import {
+  DEDICATED_EMAIL_STATUSES,
   RETURN_STATUS_INITIAL,
   ReturnStatusGraph,
   type ReturnStatusDef,
@@ -80,13 +81,17 @@ export class ReturnStatusGraphService {
 
   /** The graph plus per-status `inUseCount` for the admin config view. */
   async listGraph(): Promise<{
-    statuses: Array<ReturnStatusDef & { inUseCount: number }>;
+    statuses: Array<ReturnStatusDef & { notifyCustomerOnEntry: boolean; inUseCount: number }>;
     transitions: ReturnTransitionDef[];
   }> {
     const graph = await this.loadGraph();
     const counts = await this.statusUsageCounts();
     return {
-      statuses: graph.statuses.map((s) => ({ ...s, inUseCount: counts.get(s.code) ?? 0 })),
+      statuses: graph.statuses.map((s) => ({
+        ...s,
+        notifyCustomerOnEntry: s.notifyCustomerOnEntry ?? false,
+        inUseCount: counts.get(s.code) ?? 0,
+      })),
       transitions: graph.transitions,
     };
   }
@@ -111,11 +116,16 @@ export class ReturnStatusGraphService {
     isTerminal?: boolean | undefined;
     weight?: number | undefined;
     color?: string | undefined;
+    notifyCustomerOnEntry?: boolean | undefined;
   }): Promise<void> {
+    assertNotifiable(input.code, input.notifyCustomerOnEntry);
     const em = this.emFactory();
     const existing = await em.findOne(ReturnStatus, { code: input.code });
     if (existing) {
-      throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, `Status "${input.code}" already exists.`);
+      // The status code is `statusCode`: `details.code` is the token slot (issue #625).
+      throw new HttpError(409, ERROR_CODES.RETURN_STATUS_CODE_TAKEN, `Status "${input.code}" already exists.`, {
+        statusCode: input.code,
+      });
     }
     const status = em.create(ReturnStatus, {
       code: input.code,
@@ -126,9 +136,14 @@ export class ReturnStatusGraphService {
       isSystem: false,
       weight: input.weight ?? 100,
       color: input.color ?? '#64748b',
+      notifyCustomerOnEntry: input.notifyCustomerOnEntry ?? false,
     });
     em.persist(status);
-    this.#audit(em, 'return_status.create', input.code, null, { code: input.code, defaultName: input.defaultName });
+    this.#audit(em, 'return_status.create', input.code, null, {
+      code: input.code,
+      defaultName: input.defaultName,
+      notifyCustomerOnEntry: status.notifyCustomerOnEntry,
+    });
     await em.flush();
     this.invalidate();
   }
@@ -141,8 +156,10 @@ export class ReturnStatusGraphService {
       isTerminal?: boolean | undefined;
       weight?: number | undefined;
       color?: string | undefined;
+      notifyCustomerOnEntry?: boolean | undefined;
     },
   ): Promise<void> {
+    assertNotifiable(code, patch.notifyCustomerOnEntry);
     const em = this.emFactory();
     const status = await em.findOne(ReturnStatus, { code });
     if (!status) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Status "${code}" not found.`);
@@ -150,24 +167,28 @@ export class ReturnStatusGraphService {
     if (patch.defaultName !== undefined) status.defaultName = patch.defaultName;
     if (patch.weight !== undefined) status.weight = patch.weight;
     if (patch.color !== undefined) status.color = patch.color;
+    const notifyBefore = status.notifyCustomerOnEntry;
+    if (patch.notifyCustomerOnEntry !== undefined) status.notifyCustomerOnEntry = patch.notifyCustomerOnEntry;
     if (patch.isTerminal !== undefined && patch.isTerminal !== status.isTerminal) {
       if (patch.isTerminal) {
         const outgoing = await em.count(ReturnStatusTransition, { fromStatusCode: code });
         if (outgoing > 0) {
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
+            ERROR_CODES.RETURN_STATUS_TERMINAL_HAS_TRANSITIONS,
             `Cannot mark "${code}" terminal while it has outgoing transitions.`,
+            { code: 'mark_terminal', statusCode: code, outgoingCount: outgoing },
           );
         }
       }
       status.isTerminal = patch.isTerminal;
     }
-    this.#audit(em, 'return_status.update', code, null, {
+    this.#audit(em, 'return_status.update', code, { notifyCustomerOnEntry: notifyBefore }, {
       defaultName: status.defaultName,
       weight: status.weight,
       color: status.color,
       isTerminal: status.isTerminal,
+      notifyCustomerOnEntry: status.notifyCustomerOnEntry,
     });
     await em.flush();
     this.invalidate();
@@ -178,14 +199,18 @@ export class ReturnStatusGraphService {
     const status = await em.findOne(ReturnStatus, { code });
     if (!status) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Status "${code}" not found.`);
     if (code === RETURN_STATUS_INITIAL || status.isInitial) {
-      throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'The initial status cannot be deleted.');
+      throw new HttpError(409, ERROR_CODES.RETURN_STATUS_NOT_DELETABLE, 'The initial status cannot be deleted.', {
+        code: 'initial',
+        statusCode: code,
+      });
     }
     const inUse = await em.count(ReturnCase, { statusCode: code });
     if (inUse > 0) {
       throw new HttpError(
         409,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.RETURN_STATUS_IN_USE,
         `Cannot delete status "${code}" while ${inUse} case(s) use it.`,
+        { statusCode: code, caseCount: inUse },
       );
     }
     const edges = await em.find(ReturnStatusTransition, {
@@ -217,8 +242,9 @@ export class ReturnStatusGraphService {
       if (graph.isTerminal(edge.fromStatusCode)) {
         throw new HttpError(
           422,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.RETURN_STATUS_TERMINAL_HAS_TRANSITIONS,
           `Terminal status "${edge.fromStatusCode}" cannot have outgoing transitions.`,
+          { code: 'add_transition', statusCode: edge.fromStatusCode, toStatusCode: edge.toStatusCode },
         );
       }
     }
@@ -243,6 +269,22 @@ export class ReturnStatusGraphService {
   }
 }
 
+/**
+ * `authorized` and `rejected` send their dedicated e-mail, so a status e-mail on
+ * them would be a second one for the same transition (FR-A32): the write refuses
+ * the flag there rather than storing one that never acts.
+ */
+function assertNotifiable(code: string, notify: boolean | undefined): void {
+  if (notify === true && DEDICATED_EMAIL_STATUSES.has(code)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      `"${code}" sends its own e-mail to the customer; it cannot also send the status e-mail.`,
+      { code: 'dedicated_email_status' },
+    );
+  }
+}
+
 function toStatusDef(s: ReturnStatus): ReturnStatusDef {
   return {
     code: s.code,
@@ -253,5 +295,6 @@ function toStatusDef(s: ReturnStatus): ReturnStatusDef {
     isSystem: s.isSystem,
     weight: s.weight,
     color: s.color,
+    notifyCustomerOnEntry: s.notifyCustomerOnEntry,
   };
 }

@@ -29,13 +29,17 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `admin_roles` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `assets_library` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `audit_logs` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `custom_fields` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `email` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `sales_channels` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `taxes` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `organizations` | tylko bramkowanie | rozwiązuje `organizationDetailsPort`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
+| `organizations` | tylko bramkowanie | rozwiązuje `organizationTaxProfilePort`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
 | `price_lists` | tylko bramkowanie | rozwiązuje `pricingService`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
 | `admin_notifications` | nie | degrades-without `adminNotificationRecordPort` — masowe edycje i ponowne indeksowanie wyszukiwarki nadal działają i raportują postęp na stronie Bulk actions; brakuje tylko powiadomienia w panelu — e-mail o zakończeniu nadal trafia do administratora |
 | `admin_search` | nie | contributes-to `adminSearchProviderRegistry` |
@@ -43,17 +47,19 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | `api_keys` | nie | degrades-without `requireBoundApiKey` — zewnętrzne API katalogu przestaje przyjmować wywołania od systemów zewnętrznych |
 | `inventory` | nie | degrades-without `inventoryAvailabilityPort` — listy produktów i zewnętrzne API katalogu przestają podawać przedział dostępności |
 | `inventory` | nie | degrades-without `inventoryProductThresholdWritePort` — zduplikowany produkt nie dziedziczy progów niskiego stanu magazynowego ze źródła |
+| `inventory` | nie | refuses-without `inventoryStockReadPort` — lista produktów nie oferuje filtra stanu magazynowego, a lista lub zaznaczenie wszystkich, które go podają, są odrzucane |
 | `prompt_actions` | nie | contributes-to `promptActionBulkProgressRegistry` |
 | `prompt_actions` | nie | contributes-to `promptActionToolRegistry` |
 | `search` | nie | degrades-without `searchQueryPort` — listy produktów w sklepie są pobierane z PostgreSQL zamiast z indeksu wyszukiwarki |
 | `search` | nie | degrades-without `searchReindexPort` — zmiana flagi `searchable` atrybutu nie przebudowuje indeksu wyszukiwarki |
+| `seo` | nie | degrades-without `seoProductMetaPort` — strony produktów pokazują metadane wyprowadzone z nazwy i opisu, a stare klucze URL odpowiadają „nie znaleziono” |
+| `seo` | nie | refuses-without `seoProductMetaWritePort` — zapis produktu zmieniający pola SEO jest odrzucany, gdy moduł SEO jest wyłączony; zapisy bez zmian SEO i duplikowanie działają bez zmian |
 | `webhooks` | nie | contributes-to `webhookEventRegistry` |
 
 ## Uprawnienia
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
-| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `catalog:write` | Edit catalog | `catalog:read` |
 
 ## Paleta poleceń
@@ -61,13 +67,19 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
 | `new-product` | `/catalog/products/new` | `catalog:write` |
+| `open-archived-products` | `/catalog/products/archived` | `catalog:read` |
+| `open-attachment-types` | `/catalog/attachment-types` | `catalog:read` |
+| `open-attribute-sets` | `/catalog/attribute-sets` | `catalog:read` |
 | `open-attributes` | `/catalog/attributes` | `catalog:read` |
+| `open-bulk-operations` | `/catalog/bulk-operations` | `catalog:read` |
 | `open-categories` | `/catalog/categories` | `catalog:read` |
 | `open-products` | `/catalog/products` | `catalog:read` |
 
 ## Ustawienia
 
-_Brak._
+| Kod | Nazwa | Typ |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Tłumaczenia
 

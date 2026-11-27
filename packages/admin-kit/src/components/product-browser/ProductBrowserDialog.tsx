@@ -7,15 +7,19 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Package, Search } from 'lucide-react';
+import { Package } from 'lucide-react';
 import { ADMIN_PRODUCT_SELECTION_MAX, productTypeSchema } from '@endora-commerce/contracts';
 import { usePageSizePreference } from '../../lib/index.js';
 import type { PageSizeOption } from '../../lib/page-size-options.js';
 import { cn } from '../../lib/utils.js';
 import { useTranslation } from '../../i18n/useTranslation.js';
 import { Badge, type BadgeProps } from '../../ui/badge.js';
+import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
+import { EmptyState } from '../../ui/empty-state.js';
+import { TabPanel, Tabs, type TabItem } from '../../ui/tabs.js';
 import { PaginationFooter } from '../PaginationFooter.js';
+import { ListToolbarSearch } from '../list-toolbar/ListToolbar.js';
 import { ResponsiveTable, type ResponsiveColumn } from '../ResponsiveTable.js';
 import { useFocusTrap } from '../hooks/useFocusTrap.js';
 import {
@@ -26,6 +30,7 @@ import {
 import { productDisplayName } from './product-line.js';
 import {
   NO_PRODUCT_IDS,
+  isProductArchived,
   productSelectability,
   productSelectabilityReasonKey,
   type ProductBrowserRules,
@@ -39,9 +44,15 @@ import type { ProductBrowserItem, ProductBrowserStatus, ProductBrowserType } fro
  * table with the Products list's filters — status tabs with counts, a type chip,
  * a debounced search — and keeps a multi-page selection until the operator adds or
  * cancels. Composed from the design system's own parts (research R-3): the
- * `b2b-scrim` / `b2b-drawer` overlay, `useFocusTrap`, `ResponsiveTable` in
- * `table-scroll` mode, `PaginationFooter`, and the `b2b-tabs` / `b2b-filterbar`
- * classes the Products list renders its own bar with.
+ * theme's side-drawer overlay, `useFocusTrap`, `ResponsiveTable` in
+ * `table-scroll` mode, `PaginationFooter`, the kit's `Tabs` / `TabPanel` for the
+ * status strip (issue #1445), `EmptyState` (issue #1448) and the toolbar's
+ * `ListToolbarSearch`, on kit `Button`s (issue #1492).
+ *
+ * **Reviewing the selection is not a status.** "Show selected only" lists the
+ * selection across every status, so while it is on no tab is selected: the
+ * strip's tabs are disabled (no tab claims the view, none is a tab stop) and the
+ * list is not a tab panel. The footer toggle that entered the review leaves it.
  *
  * **The host owns `open`.** The dialog never closes itself: a host appending lines
  * locally sets `open` to `false` inside `onConfirm`; a host whose confirm is a
@@ -81,21 +92,28 @@ export function ProductBrowserDialog(props: ProductBrowserDialogProps): ReactNod
 
 const SEARCH_DEBOUNCE_MS = 250;
 const TYPES: readonly ProductBrowserType[] = productTypeSchema.options;
-const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+// The Products list's tabs: three over products that
+// are not archived, then Archived on its own axis.
+const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'inactive', 'archived'];
 
 const TAB_LABEL_KEY: Record<ProductBrowserStatusFilter, string> = {
   all: 'productBrowser.tab.all',
   active: 'productBrowser.tab.active',
-  draft: 'productBrowser.tab.draft',
   inactive: 'productBrowser.tab.inactive',
+  archived: 'productBrowser.tab.archived',
+};
+/** What an unfiltered tab with no rows says — the catalogue, or the status, has none. */
+const EMPTY_TAB_KEY: Record<ProductBrowserStatusFilter, string> = {
+  all: 'productBrowser.state.emptyTab.all',
+  active: 'productBrowser.state.emptyTab.active',
+  inactive: 'productBrowser.state.emptyTab.inactive',
+  archived: 'productBrowser.state.emptyTab.archived',
 };
 const STATUS_LABEL_KEY: Record<ProductBrowserStatus, string> = {
-  draft: 'productBrowser.status.draft',
   active: 'productBrowser.status.active',
   inactive: 'productBrowser.status.inactive',
 };
 const STATUS_BADGE_VARIANT: Record<ProductBrowserStatus, BadgeProps['variant']> = {
-  draft: 'secondary',
   active: 'success',
   inactive: 'outline',
 };
@@ -106,11 +124,6 @@ const TYPE_LABEL_KEY: Record<ProductBrowserType, string> = {
   bundle: 'productBrowser.type.bundle',
   virtual: 'productBrowser.type.virtual',
 };
-
-function secondaryName(item: ProductBrowserItem): string | null {
-  const pl = item.name['pl-PL'];
-  return pl !== undefined && pl !== productDisplayName(item) ? pl : null;
-}
 
 type ConfirmState =
   | { kind: 'idle' }
@@ -123,6 +136,7 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
   const baseId = useId();
   const titleId = `${baseId}-title`;
   const countId = `${baseId}-count`;
+  const tabsId = `${baseId}-status`;
 
   // Read-only: `setPageSize` is deliberately never taken (contract B4).
   const { pageSize: preferredPageSize } = usePageSizePreference('catalog-products');
@@ -142,9 +156,15 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
   const [counts, setCounts] = useState<ProductBrowserCounts>({
     all: 0,
     active: 0,
-    draft: 0,
     inactive: 0,
+    archived: 0,
   });
+  // A host that refuses archived products is not offered a tab of rows it cannot
+  // tick (Hick's law); every other host can browse them.
+  const tabs = useMemo(
+    () => (rules.blockArchived ? STATUS_TABS.filter((tab) => tab !== 'archived') : STATUS_TABS),
+    [rules.blockArchived],
+  );
   const [load, setLoad] = useState<'loading' | 'ready' | 'error'>('loading');
   const [reloadToken, setReloadToken] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'idle' });
@@ -303,6 +323,16 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
     setView('all');
   };
 
+  // The tab is the view, not a filter, and the selection is neither: only the
+  // search and the type are cleared.
+  const clearFilters = (): void => {
+    setQuery('');
+    setDebouncedQuery('');
+    setType(null);
+    setPage(0);
+    setView('all');
+  };
+
   const cycleType = (): void => {
     const idx = type === null ? -1 : TYPES.indexOf(type);
     const next = idx + 1 >= TYPES.length ? null : (TYPES[idx + 1] ?? null);
@@ -345,17 +375,11 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
       render: (row): ReactNode => {
         const verdict = selectabilityOf(row);
         const name = productDisplayName(row);
-        const second = secondaryName(row);
         return (
           <div className="min-w-0 max-w-[22rem]">
             <div className="truncate font-medium" title={name}>
               {name}
             </div>
-            {second !== null ? (
-              <div className="truncate text-xs text-muted-foreground" title={second}>
-                {second}
-              </div>
-            ) : null}
             {verdict.selectable ? null : (
               <div id={`${baseId}-reason-${row.id}`} className="text-xs text-muted-foreground">
                 {t(productSelectabilityReasonKey(verdict.reason, rules))}
@@ -373,9 +397,23 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
     {
       id: 'status',
       header: t('productBrowser.column.status'),
-      render: (row): ReactNode => (
-        <Badge variant={STATUS_BADGE_VARIANT[row.status]}>{t(STATUS_LABEL_KEY[row.status])}</Badge>
-      ),
+      // Archived is shown beside the status, never instead of it: the two are
+      // independent. While archived the status drops to a neutral outline so the
+      // Archived pill — the catalogue's own `b2b-badge--warn` look — is the one
+      // coloured mark, as on the Products list and the editor.
+      render: (row): ReactNode => {
+        const archived = isProductArchived(row);
+        return (
+          <span className="inline-flex flex-wrap gap-1">
+            <Badge variant={archived ? 'outline' : STATUS_BADGE_VARIANT[row.status]}>
+              {t(STATUS_LABEL_KEY[row.status])}
+            </Badge>
+            {archived ? (
+              <span className="b2b-badge b2b-badge--warn">{t('productBrowser.status.archived')}</span>
+            ) : null}
+          </span>
+        );
+      },
     },
     {
       id: 'type',
@@ -384,12 +422,85 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
     },
   ];
 
+  const reviewing = view === 'selectedOnly';
+  const filtered = debouncedQuery !== '' || type !== null;
+  const tabItems: TabItem<ProductBrowserStatusFilter>[] = tabs.map((tab) => ({
+    value: tab,
+    label: t(TAB_LABEL_KEY[tab]),
+    count: counts[tab],
+    disabled: reviewing,
+  }));
+
   const loading = view === 'all' && load === 'loading';
   const atCap = selection.size >= max;
   const confirmError =
     confirm.kind === 'failed'
       ? (confirmErrorMessage?.(confirm.error) ?? t('productBrowser.state.confirmError'))
       : null;
+
+  const listBody = (
+    <>
+      {atCap ? (
+        <p role="status" className="bg-muted px-3 py-2 text-sm">
+          {t('productBrowser.limit.notice', { max })}
+        </p>
+      ) : null}
+
+      <div aria-busy={loading || undefined}>
+        {loading ? (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+            {t('productBrowser.state.loading')}
+          </p>
+        ) : view === 'all' && load === 'error' ? (
+          <div role="alert" className="px-3 py-6 text-center text-sm">
+            <p>{t('productBrowser.state.loadError')}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={(): void => setReloadToken((n) => n + 1)}
+            >
+              {t('productBrowser.action.retry')}
+            </Button>
+          </div>
+        ) : (
+          <ResponsiveTable<ProductBrowserItem>
+            mode="table-scroll"
+            columns={columns}
+            data={shownRows}
+            keyExtractor={(row): string => row.id}
+            emptyState={
+              filtered ? (
+                <EmptyState
+                  variant="no-results"
+                  title={t('productBrowser.state.empty')}
+                  onClearFilters={clearFilters}
+                  focusAfterClear={searchRef}
+                />
+              ) : (
+                <EmptyState icon={<Package size={20} />} title={t(EMPTY_TAB_KEY[status])} />
+              )
+            }
+          />
+        )}
+      </div>
+
+      {view === 'all' && load !== 'error' ? (
+        <PaginationFooter
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageSizeChange={(next): void => {
+            setPageSize(next);
+            setPage(0);
+          }}
+          onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
+          onNext={(): void => setPage((p) => p + 1)}
+        />
+      ) : null}
+    </>
+  );
 
   return (
     <>
@@ -413,45 +524,29 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
           </h2>
         </div>
 
-        <div className="b2b-drawer__body" style={{ padding: 0 }}>
-          <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
-            <div className="b2b-tabs-scroll">
-              <div className="b2b-tabs" role="tablist">
-                {STATUS_TABS.map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={view === 'all' && status === tab}
-                    className={cn('b2b-tab', view === 'all' && status === tab && 'is-active')}
-                    onClick={(): void => changeStatus(tab)}
-                  >
-                    <span>{t(TAB_LABEL_KEY[tab])}</span>
-                    <span className="b2b-badge b2b-badge--outline">{counts[tab]}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="overflow-hidden px-3 pt-1">
+            <Tabs
+              items={tabItems}
+              value={status}
+              onValueChange={changeStatus}
+              idBase={tabsId}
+              aria-label={t('productBrowser.tabs.label')}
+            />
           </div>
 
-          <div className="b2b-filterbar">
-            <div className="b2b-filterbar__search">
-              <div className="b2b-input-wrap">
-                <Search size={16} className="lead" aria-hidden="true" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  className="b2b-field b2b-field--addon"
-                  placeholder={t('productBrowser.search.placeholder')}
-                  aria-label={t('productBrowser.search.placeholder')}
-                  value={query}
-                  onChange={(event): void => {
-                    setQuery(event.target.value);
-                    setView('all');
-                  }}
-                />
-              </div>
-            </div>
+          <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2.5">
+            <ListToolbarSearch
+              ref={searchRef}
+              className="sm:max-w-none"
+              label={t('productBrowser.search.placeholder')}
+              placeholder={t('productBrowser.search.placeholder')}
+              value={query}
+              onValueChange={(next): void => {
+                setQuery(next);
+                setView('all');
+              }}
+            />
             <button
               type="button"
               className={cn('b2b-filterchip', type !== null && 'is-on')}
@@ -464,78 +559,34 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
             </button>
           </div>
 
-          {atCap ? (
-            <p role="status" className="px-3 py-2 text-sm" style={{ background: 'var(--surface-muted)' }}>
-              {t('productBrowser.limit.notice', { max })}
-            </p>
-          ) : null}
-
-          <div aria-busy={loading || undefined}>
-            {loading ? (
-              <p className="b2b-muted px-3 py-6 text-center text-sm">
-                {t('productBrowser.state.loading')}
-              </p>
-            ) : view === 'all' && load === 'error' ? (
-              <div role="alert" className="px-3 py-6 text-center text-sm">
-                <p>{t('productBrowser.state.loadError')}</p>
-                <button
-                  type="button"
-                  className="b2b-btn b2b-btn--default b2b-btn--sm mt-2"
-                  onClick={(): void => setReloadToken((n) => n + 1)}
-                >
-                  {t('productBrowser.action.retry')}
-                </button>
-              </div>
-            ) : (
-              <ResponsiveTable<ProductBrowserItem>
-                mode="table-scroll"
-                columns={columns}
-                data={shownRows}
-                keyExtractor={(row): string => row.id}
-                emptyState={
-                  <p className="b2b-muted px-3 py-6 text-center text-sm">
-                    {t('productBrowser.state.empty')}
-                  </p>
-                }
-              />
-            )}
-          </div>
-
-          {view === 'all' && load !== 'error' ? (
-            <PaginationFooter
-              page={page}
-              pageSize={pageSize}
-              total={total}
-              onPageSizeChange={(next): void => {
-                setPageSize(next);
-                setPage(0);
-              }}
-              onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
-              onNext={(): void => setPage((p) => p + 1)}
-            />
-          ) : null}
+          {reviewing ? (
+            listBody
+          ) : (
+            // The list is the strip's one panel. It holds the row checkboxes, so it is
+            // reached through them rather than as a tab stop of its own.
+            <TabPanel idBase={tabsId} value={status} tabIndex={-1}>
+              {listBody}
+            </TabPanel>
+          )}
         </div>
 
         {confirmError !== null && confirm.kind === 'failed' ? (
           <div role="alert" className="flex items-center gap-2 px-4 py-2 text-sm text-destructive">
             <span className="flex-1">{confirmError}</span>
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--default b2b-btn--sm"
-              onClick={(): void => runConfirm(confirm.items)}
-            >
+            <Button type="button" variant="outline" size="sm" onClick={(): void => runConfirm(confirm.items)}>
               {t('productBrowser.action.retry')}
-            </button>
+            </Button>
           </div>
         ) : null}
 
-        <div className="b2b-drawer__foot" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="b2b-drawer__foot flex-wrap items-center">
           <span id={countId} aria-live="polite" className="text-sm">
             {t('productBrowser.selection.count', { count: selection.size })}
           </span>
-          <button
+          <Button
             type="button"
-            className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+            variant="ghost"
+            size="sm"
             disabled={selection.size === 0 || pending}
             onClick={(): void => {
               setSelection(new Map());
@@ -543,36 +594,31 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
             }}
           >
             {t('productBrowser.selection.clear')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+            variant="ghost"
+            size="sm"
             disabled={view === 'all' && selection.size === 0}
             onClick={(): void => setView((v) => (v === 'all' ? 'selectedOnly' : 'all'))}
           >
             {view === 'all'
               ? t('productBrowser.selection.showSelected')
               : t('productBrowser.selection.showAll')}
-          </button>
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--default"
-            disabled={pending}
-            onClick={cancel}
-          >
+          </Button>
+          <span className="flex-1" />
+          <Button type="button" variant="outline" disabled={pending} onClick={cancel}>
             {t('productBrowser.action.cancel')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="b2b-btn b2b-btn--primary"
             aria-busy={pending || undefined}
             aria-describedby={countId}
             disabled={selection.size === 0 || pending}
             onClick={(): void => runConfirm([...selection.values()])}
           >
             {t('productBrowser.action.confirm', { count: selection.size })}
-          </button>
+          </Button>
         </div>
       </aside>
     </>

@@ -1,9 +1,9 @@
 ---
-title: credit_limits
+title: Credit limits
 description: Credit-limit grant + atomic reservation
 ---
 
-# `credit_limits`
+# Credit limits (`credit_limits`)
 
 The Credit Limit payment method. Admins grant a per-Organization limit;
 Customers consume it at checkout. Reservations are atomic and idempotently
@@ -16,7 +16,7 @@ All admin routes are gated by the `credit_limits:manage` permission.
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
 | `GET /api/v1/me/credit-limit` | customer | View granted limit + currently reserved (404 `CREDIT_LIMIT_NOT_GRANTED` if none) |
-| `GET /api/v1/admin/credit-limits` | admin | Roster of every granted limit with active reservations |
+| `GET /api/v1/admin/credit-limits?page=&pageSize=` | admin | One page of granted limits with their active reservations, newest grant first, with `meta: { page, pageSize, total }`; without `pageSize` the whole roster (issue #1664) |
 | `GET /api/v1/admin/organizations/:id/credit-limit` | admin | One organization's limit + reservations |
 | `POST /api/v1/admin/organizations/:id/credit-limit` | admin | Grant initial limit |
 | `PATCH /api/v1/admin/organizations/:id/credit-limit` | admin | Adjust amount (rejects below active reservations unless `allowOverAllocation`) |
@@ -26,6 +26,27 @@ Storefront UX: the Account profile and Checkout page render a
 the limit exists; `credit_limit`-kind payment methods are filtered out
 of Checkout when no limit is granted or the cart total exceeds the
 available credit.
+
+Admin UX: the **Credit limits** screen lists every granted limit; *Grant credit limit* and each
+row's *Adjust limit* open one dialog. The Organization screen's **Commerce** tab carries a
+read-only *Credit limit* summary — granted, reserved and available amounts and the number of
+active reservations, or a note that no limit is granted — whose *Adjust limit* / *Grant credit
+limit* link opens that dialog for the organization (`/credit-limits?organizationId=<id>`). The
+summary is shown only to someone holding `credit_limits:manage`, and not at all while the module
+is off (issue #1544).
+
+Which reservations a customer sees: the limit is shared, so the granted
+amount, the available amount and `activeReservationCount` are always the
+Organization's figures. The `activeReservations` list holds only the
+reservations of orders the customer may read: their own orders, or every
+order of the Organization when their organization role holds
+`orders.view_organization` (the Administrator role holds it implicitly).
+The admin routes always list every reservation.
+
+Every listed reservation carries `orderBusinessId`, its order's customer-facing number (`null`
+for an order the `orders` module did not return), on the customer's route and on the three admin
+views. The admin credit-limit screen shows that number in its reservation table, linked to the
+order.
 
 ## Concurrency model
 
@@ -74,9 +95,27 @@ modules are switched on. The payload is sent whole; the strict schema is
   subscription to it is refused; stored subscriptions are kept and receive
   nothing until it is back on.
 
+## Orders paid by a related payer {#orders-paid-by-a-related-payer}
+
+An order placed with a related payer (the *Related payers* module) reserves the **payer's** credit,
+or its credit owner's when the payer shares a parent's pool; the buyer's credit is untouched.
+`credit_limits` publishes `creditAvailabilityReadPort`, through which the checkout reads the payer's
+available credit to decide whether to offer the credit-limit method.
+
+## In the audit log
+
+Granting, adjusting and crediting a limit from a return are each one entry in the
+platform-wide audit log (`credit_limit.grant`, `credit_limit.adjust`,
+`credit_limit.credit_from_return`), recorded against the Organization. The audit
+log is read by everybody holding `audit_log:read` whatever Organizations they may
+see, so an entry names what changed — `changedFields: ['grantedAmount']`, and the
+return case's id for a credit — and holds no amount. The current limit is on the
+Organization's credit-limit screen. Entries recorded before this change keep the
+amounts they were written with.
+
 ## Extension points
 
 - **Release reasons** — `releaseByOrder(reason)` accepts
-  `'invoice_paid'` and `'order_cancelled'` today. New reasons (e.g.
+  `'invoice_paid'`, `'order_cancelled'` and `'admin_revocation'` today. New reasons (e.g.
   `'manual_override'`) are added by extending the enum and wiring the
   caller.

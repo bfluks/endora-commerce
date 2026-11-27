@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Data } from '@puckeditor/core';
 import { slugify as slugifyText, type BlogPostDetail } from '@endora-commerce/contracts';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, SaveButtonGroup } from '@endora-commerce/admin-kit/ui';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  EditorSection,
+  InlineStatus,
+  Input,
+  Label,
+  PageHeader,
+  SaveButtonGroup,
+  useInlineStatus,
+} from '@endora-commerce/admin-kit/ui';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
+import { AssetFieldPicker, ContentLanguageTabs, ScopePicker, UnsavedChangesHint, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import { isDraftEqual, formatDateTime } from '@endora-commerce/admin-kit/lib';
 import { PageBuilderEditor } from '@endora-commerce/mod-cms/admin-ui';
 import {
   PageBuilderEditorLayout,
@@ -16,15 +28,76 @@ import { PostStatusBadge } from '../components/PostStatusBadge.js';
 import { RelatedPostsPicker } from '../components/RelatedPostsPicker.js';
 import { RelatedProductsPicker } from '../components/RelatedProductsPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
+import { UrlKeysPanel } from '../components/UrlKeysPanel.js';
+import { AuthorPicker } from '../components/AuthorPicker.js';
 
 interface FormState {
   name: string;
   slug: string;
   active: boolean;
   description: string;
+  /** Library asset id, `''` while unset (feature 163). */
+  mainImageAssetId: string;
   metaTitle: string;
   metaDescription: string;
   metaKeywords: string;
+}
+
+/** The fields a post holds per language. */
+type LanguageFields = Pick<FormState, 'name' | 'metaTitle' | 'metaDescription' | 'metaKeywords'>;
+
+/** A language's fields as last saved (the name falls back to English for display). */
+function savedFields(post: BlogPostDetail, language: string): LanguageFields {
+  return {
+    name: pickValue(post.name, language) || pickValue(post.name, 'en-US'),
+    metaTitle: pickValue(post.metaTitle, language),
+    metaDescription: pickValue(post.metaDescription, language),
+    metaKeywords: pickValue(post.metaKeywords, language),
+  };
+}
+
+/** The whole form as `post` was last saved, in `language` (issue #1461: what `dirty` compares against). */
+function savedForm(post: BlogPostDetail, language: string): FormState {
+  return {
+    slug: post.slug,
+    active: post.active,
+    description: post.description ?? '',
+    mainImageAssetId: post.mainImageAssetId ?? '',
+    ...savedFields(post, language),
+  };
+}
+
+/**
+ * What the post links to: its author, its tags and its related posts and products. Issue #1512
+ * (UX audit CONTENT-09; owner decision DEC-08) — these used to write the moment they were picked,
+ * beside fields that waited for Save; they are now part of the draft and go with the one Save.
+ * Order matters for the three lists (it is the storefront's order), so they compare as sequences.
+ */
+interface Links {
+  authorId: string | null;
+  tagIds: string[];
+  relatedPostIds: string[];
+  relatedProductIds: string[];
+}
+
+function savedLinks(post: BlogPostDetail): Links {
+  return {
+    authorId: post.author?.id ?? null,
+    tagIds: post.tags.map((tag) => tag.id),
+    relatedPostIds: [...post.relatedPostIds],
+    relatedProductIds: [...post.relatedProductIds],
+  };
+}
+
+const blankLinks: Links = { authorId: null, tagIds: [], relatedPostIds: [], relatedProductIds: [] };
+
+/** Same channels and languages, in any order. */
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value) => b.includes(value));
+}
+
+function languageFieldsOf(form: FormState): LanguageFields {
+  return { name: form.name, metaTitle: form.metaTitle, metaDescription: form.metaDescription, metaKeywords: form.metaKeywords };
 }
 
 const blankForm: FormState = {
@@ -32,6 +105,7 @@ const blankForm: FormState = {
   slug: '',
   active: true,
   description: '',
+  mainImageAssetId: '',
   metaTitle: '',
   metaDescription: '',
   metaKeywords: '',
@@ -77,12 +151,14 @@ function emptyCanvas(): Data {
 
 export function BlogPostEditor(): ReactNode {
   const t = useTranslation('blog');
+  const { language: adminLanguage } = useTranslationContext();
   const { id } = useParams();
   const isNew = !id || id === 'new';
   const navigate = useNavigate();
   const settingsPanel = usePageBuilderEditorSettingsPanel(isNew);
   const [post, setPost] = useState<BlogPostDetail | null>(null);
   const [form, setForm] = useState<FormState>(blankForm);
+  const [links, setLinks] = useState<Links>(blankLinks);
   // For a new post, slug + meta title are auto-derived from the title until the
   // editor types in either field, at which point that field stops auto-syncing.
   const [slugEdited, setSlugEdited] = useState(false);
@@ -96,24 +172,25 @@ export function BlogPostEditor(): ReactNode {
   // Whether the canvas holds something the server does not: the content request
   // is sent only then, so saving a slug does not rewrite an untouched canvas.
   const [contentDirty, setContentDirty] = useState(false);
+  /**
+   * The unsaved edits of the languages not on screen — their fields when changed and
+   * their canvas when touched — kept across a language switch and saved together
+   * with the language on screen. Without it a switch threw the edits away.
+   */
+  const [stash, setStash] = useState<Record<string, { fields?: LanguageFields; canvas?: Data }>>({});
   const [error, setError] = useState<string | null>(null);
   // Which field a refused save was about, so the field itself says so.
   const [problem, setProblem] = useState<BlogEditorProblem | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  // The result of a save or a status change, said beside the buttons (InlineStatus, not a banner).
+  const status = useInlineStatus();
   const [saving, setSaving] = useState(false);
 
   const reloadFormFromPost = useCallback(
     (loaded: BlogPostDetail, language: string | null) => {
       const lang = language ?? loaded.languages[0] ?? 'en-US';
-      setForm({
-        name: pickValue(loaded.name, lang) || pickValue(loaded.name, 'en-US'),
-        slug: loaded.slug,
-        active: loaded.active,
-        description: loaded.description ?? '',
-        metaTitle: pickValue(loaded.metaTitle, lang),
-        metaDescription: pickValue(loaded.metaDescription, lang),
-        metaKeywords: pickValue(loaded.metaKeywords, lang),
-      });
+      setForm(savedForm(loaded, lang));
+      setLinks(savedLinks(loaded));
+      setStash({});
     },
     [],
   );
@@ -145,6 +222,7 @@ export function BlogPostEditor(): ReactNode {
     if (!isNew) return;
     setPost(null);
     setForm(blankForm);
+    setLinks(blankLinks);
     setScope({ salesChannelIds: [], languages: ['en-US'] });
     setActiveLanguage('en-US');
     setDraftData(null);
@@ -154,24 +232,38 @@ export function BlogPostEditor(): ReactNode {
   }, [isNew]);
 
   /**
-   * Another language's fields and canvas, read from the post as it was last
-   * saved.
+   * Another language's fields and canvas: its unsaved edits when it has any, else
+   * what was last saved. The language being left keeps its own unsaved edits in the
+   * stash, and the fields every language shares (slug, image, …) are not touched.
    *
    * Done where the language is chosen rather than in an effect over `post`: the
-   * tag and related-content pickers save on their own and answer with a new
-   * `post`, and an effect keyed on it would put the stored canvas back under an
-   * operator who is half-way through editing — now that the pickers sit beside
-   * the canvas instead of a screen below it, that is one click away.
+   * address panel saves on its own and the post is re-read after it, and an
+   * effect keyed on `post` would put the stored canvas back under an operator
+   * who is half-way through editing.
    */
   const switchLanguage = useCallback(
     (language: string) => {
+      const leaving = activeLanguage;
       setActiveLanguage(language);
       if (!post) return;
-      reloadFormFromPost(post, language);
-      setDraftData(dataFor(post, language));
-      setContentDirty(false);
+      const next = { ...stash };
+      if (leaving && leaving !== language) {
+        const fields = languageFieldsOf(form);
+        const changed = JSON.stringify(fields) !== JSON.stringify(savedFields(post, leaving));
+        const kept = { ...next[leaving] };
+        if (changed) kept.fields = fields;
+        else delete kept.fields;
+        if (contentDirty && draftData) kept.canvas = draftData;
+        if (kept.fields || kept.canvas) next[leaving] = kept;
+        else delete next[leaving];
+      }
+      const arriving = next[language];
+      setStash(next);
+      setForm((f) => ({ ...f, ...(arriving?.fields ?? savedFields(post, language)) }));
+      setDraftData(arriving?.canvas ?? dataFor(post, language));
+      setContentDirty(Boolean(arriving?.canvas));
     },
-    [post, reloadFormFromPost],
+    [activeLanguage, contentDirty, draftData, form, post, stash],
   );
 
   const refuse = useCallback(
@@ -185,14 +277,11 @@ export function BlogPostEditor(): ReactNode {
     [settingsPanel],
   );
 
-  const create = async (): Promise<void> => {
-    setInfo(null);
+  const create = async (): Promise<boolean> => {
+    status.clear();
     const found = blogEditorProblem({ ...form, ...scope });
     setProblem(found);
-    if (found) {
-      refuse(t(found));
-      return;
-    }
+    if (found) return refuse(t(found));
     setSaving(true);
     setError(null);
     try {
@@ -201,6 +290,7 @@ export function BlogPostEditor(): ReactNode {
         slug: form.slug,
         active: form.active,
         description: form.description || null,
+        mainImageAssetId: form.mainImageAssetId || null,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
         categoryIds: [], // service auto-fills the seeded Default
@@ -216,58 +306,94 @@ export function BlogPostEditor(): ReactNode {
           : {}),
       });
       navigate(`/blog/posts/${created.id}`);
+      return true;
     } catch (err) {
-      refuse(err instanceof Error ? err.message : String(err));
+      return refuse(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
   };
 
   /**
-   * One save for the fields and the canvas.
+   * One save for the fields, what the post links to, and the canvas.
    *
-   * They are still the two requests they always were — the fields, then the
-   * canvas when it was touched, carrying the version the first one answered
-   * with. What went is the second button: "Save metadata" lived at the foot of
-   * the form, and a save action inside a panel that collapses is a save action
-   * that can disappear.
+   * The fields go first, with the author and the tags when either changed; then
+   * the related posts and the related products, each only when changed; then the
+   * canvas when it was touched — every request carrying the version the previous
+   * one answered with. What went is the other buttons: "Save metadata" lived at
+   * the foot of the form, and a save action inside a panel that collapses is a
+   * save action that can disappear; the author, tag and related-item pickers
+   * wrote the moment they were picked (issue #1512, DEC-08). Only the address
+   * panel still saves on its own, and its heading says so (`ImmediateBadge`).
    */
   const save = async (): Promise<boolean> => {
     if (!post) return false;
-    setInfo(null);
+    status.clear();
     const found = blogEditorProblem({ ...form, ...scope });
     setProblem(found);
     if (found) return refuse(t(found));
     setSaving(true);
     setError(null);
     const lang = activeLanguage ?? 'en-US';
+    const saved = savedLinks(post);
+    // Every language with unsaved fields, the one on screen included.
+    const fieldsByLanguage: Record<string, LanguageFields> = {
+      ...Object.fromEntries(
+        Object.entries(stash).flatMap(([language, kept]) => (kept.fields ? [[language, kept.fields]] : [])),
+      ),
+      [lang]: languageFieldsOf(form),
+    };
+    const perLanguage = (key: keyof LanguageFields): Record<string, string> =>
+      Object.fromEntries(Object.entries(fieldsByLanguage).map(([language, fields]) => [language, fields[key]]));
+    // Every touched canvas, the one on screen included.
+    const canvases: Record<string, Data> = {
+      ...Object.fromEntries(
+        Object.entries(stash).flatMap(([language, kept]) => (kept.canvas ? [[language, kept.canvas]] : [])),
+      ),
+      ...(contentDirty && draftData ? { [lang]: draftData } : {}),
+    };
     try {
       let updated = await blogClient.patchPost(post.id, {
-        name: { ...post.name, [lang]: form.name },
+        name: { ...post.name, ...perLanguage('name') },
         slug: form.slug,
         active: form.active,
         description: form.description || null,
+        mainImageAssetId: form.mainImageAssetId || null,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
-        metaTitle: { ...(post.metaTitle ?? {}), [lang]: form.metaTitle },
-        metaDescription: { ...(post.metaDescription ?? {}), [lang]: form.metaDescription },
-        metaKeywords: { ...(post.metaKeywords ?? {}), [lang]: form.metaKeywords },
+        metaTitle: { ...(post.metaTitle ?? {}), ...perLanguage('metaTitle') },
+        metaDescription: { ...(post.metaDescription ?? {}), ...perLanguage('metaDescription') },
+        metaKeywords: { ...(post.metaKeywords ?? {}), ...perLanguage('metaKeywords') },
+        // The author and the tags ride on the fields request, only when changed (DEC-08).
+        ...(links.authorId !== saved.authorId ? { authorAdminUserId: links.authorId } : {}),
+        ...(!isDraftEqual(links.tagIds, saved.tagIds) ? { tagIds: links.tagIds } : {}),
         version: post.version,
       });
-      // The fields are stored from here on, whatever the canvas request does.
+      // The fields are stored from here on, whatever the later requests do.
       setPost(updated);
-      if (contentDirty && activeLanguage && draftData) {
+      // The related items have requests of their own; each carries the version the previous answered with.
+      if (!isDraftEqual(links.relatedPostIds, saved.relatedPostIds)) {
+        updated = await blogClient.setPostRelatedPosts(post.id, links.relatedPostIds, updated.version);
+        setPost(updated);
+      }
+      if (!isDraftEqual(links.relatedProductIds, saved.relatedProductIds)) {
+        updated = await blogClient.setPostRelatedProducts(post.id, links.relatedProductIds, updated.version);
+        setPost(updated);
+      }
+      if (Object.keys(canvases).length > 0) {
         updated = await blogClient.putPostContent(post.id, {
           content: {
             schema_version: updated.content.schema_version ?? 1,
-            languages: { ...updated.content.languages, [activeLanguage]: draftData },
+            languages: { ...updated.content.languages, ...canvases },
           },
           version: updated.version,
         });
         setPost(updated);
         setContentDirty(false);
       }
-      setInfo(t('messages.saved'));
+      setStash({});
+      setLinks(savedLinks(updated));
+      status.show(t('messages.saved'));
       return true;
     } catch (err) {
       return refuse(err instanceof Error ? err.message : String(err));
@@ -280,77 +406,12 @@ export function BlogPostEditor(): ReactNode {
     if (await save()) navigate('/blog/posts');
   };
 
-  const onSaveTags = useCallback(
-    async (tagIds: string[]) => {
-      if (!post) return;
-      setSaving(true);
-      setError(null);
-      setInfo(null);
-      try {
-        const updated = await blogClient.setPostTags(post.id, tagIds, post.version);
-        setPost(updated);
-        setInfo(t('messages.tagsUpdated', { count: tagIds.length }));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
-      }
-    },
-    [post, t],
-  );
-
-  const onSaveRelatedPosts = useCallback(
-    async (relatedPostIds: string[]) => {
-      if (!post) return;
-      setSaving(true);
-      setError(null);
-      setInfo(null);
-      try {
-        const updated = await blogClient.setPostRelatedPosts(
-          post.id,
-          relatedPostIds,
-          post.version,
-        );
-        setPost(updated);
-        setInfo(t('messages.relatedPostsUpdated', { count: relatedPostIds.length }));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
-      }
-    },
-    [post, t],
-  );
-
-  const onSaveRelatedProducts = useCallback(
-    async (productIds: string[]) => {
-      if (!post) return;
-      setSaving(true);
-      setError(null);
-      setInfo(null);
-      try {
-        const updated = await blogClient.setPostRelatedProducts(
-          post.id,
-          productIds,
-          post.version,
-        );
-        setPost(updated);
-        setInfo(t('messages.relatedProductsUpdated', { count: productIds.length }));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
-      }
-    },
-    [post, t],
-  );
-
   const onLifecycle = useCallback(
     async (kind: 'publish' | 'unpublish' | 'archive') => {
       if (!post) return;
       setSaving(true);
       setError(null);
-      setInfo(null);
+      status.clear();
       try {
         const updated =
           kind === 'publish'
@@ -359,35 +420,77 @@ export function BlogPostEditor(): ReactNode {
               ? await blogClient.unpublishPost(post.id, post.version)
               : await blogClient.archivePost(post.id, post.version);
         setPost(updated);
-        setInfo(t('messages.statusUpdated', { status: t(`status.${updated.status}`) }));
+        status.show(t('messages.statusUpdated', { status: t(`status.${updated.status}`) }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setSaving(false);
       }
     },
-    [post, t],
+    [post, status, t],
   );
 
   const ready = !isNew && post !== null && activeLanguage !== null && draftData !== null;
 
+  /**
+   * Issue #1461 (CONTENT-02) — the draft against the last saved version: the
+   * language on screen (fields and canvas), every stashed language, and the scope.
+   * A new post is dirty once anything was typed into it.
+   */
+  const dirty = ((): boolean => {
+    if (!post) {
+      return isNew && (!isDraftEqual(form, blankForm) || scope.salesChannelIds.length > 0);
+    }
+    const lang = activeLanguage ?? post.languages[0] ?? 'en-US';
+    if (!isDraftEqual(form, savedForm(post, lang))) return true;
+    if (!isDraftEqual(links, savedLinks(post))) return true;
+    if (!sameMembers(scope.salesChannelIds, post.salesChannelIds) || !sameMembers(scope.languages, post.languages)) return true;
+    if (contentDirty && draftData && !isDraftEqual(draftData, dataFor(post, lang))) return true;
+    return Object.entries(stash).some(
+      ([language, kept]) =>
+        (kept.fields !== undefined && !isDraftEqual(kept.fields, savedFields(post, language))) ||
+        (kept.canvas !== undefined && !isDraftEqual(kept.canvas, dataFor(post, language))),
+    );
+  })();
+
+  // A "Saved." stays only while nothing has changed since: the next edit clears it (issue #1512).
+  const { clear: clearStatus } = status;
+  useEffect(() => {
+    if (dirty) clearStatus();
+  }, [dirty, clearStatus]);
+
+  const discard = (): void => {
+    if (!post) {
+      setForm(blankForm);
+      setScope({ salesChannelIds: [], languages: ['en-US'] });
+      return;
+    }
+    const lang = activeLanguage ?? post.languages[0] ?? 'en-US';
+    setForm(savedForm(post, lang));
+    setLinks(savedLinks(post));
+    setScope({ salesChannelIds: post.salesChannelIds, languages: post.languages });
+    setStash({});
+    setDraftData(dataFor(post, lang));
+    setContentDirty(false);
+  };
+
   return (
     <PageBuilderEditorLayout
       settingsPanel={settingsPanel}
+      dirty={dirty}
+      onSave={isNew ? create : save}
+      onDiscard={discard}
       header={
         <>
           <PageHeader
+            back={{ label: t('postList.title'), to: '/blog/posts' }}
             title={isNew ? t('postEditor.title.new') : form.name || t('postEditor.title.edit')}
-            description={
-              isNew
-                ? t('postEditor.description.new')
-                : t('postEditor.description.edit')
-            }
+            description={isNew ? t('postEditor.description.new') : undefined}
             actions={
-              <div className="flex flex-wrap gap-2">
-                <Button asChild variant="outline">
-                  <Link to="/blog/posts">{t('postEditor.backToList')}</Link>
-                </Button>
+              <div data-save-actions className="flex flex-wrap items-center gap-2">
+                <UnsavedChangesHint dirty={dirty} />
+                {/* Mounted before it has text, so a result is announced and not only shown (WCAG 4.1.3). */}
+                <InlineStatus {...status.props} />
                 {/* Publishing is the last step of writing, not a setting: it
                     stays in the header, where it is reachable with the panel
                     put away. Only the transition the status allows is offered. */}
@@ -434,15 +537,6 @@ export function BlogPostEditor(): ReactNode {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          {/* A live region that is there before it has anything to say, so the
-              result of a save is announced and not only shown (WCAG 4.1.3). */}
-          <div role="status">
-            {info ? (
-              <Alert role="none">
-                <AlertDescription>{info}</AlertDescription>
-              </Alert>
-            ) : null}
-          </div>
         </>
       }
       canvasBar={
@@ -464,7 +558,7 @@ export function BlogPostEditor(): ReactNode {
               <PostStatusBadge status={post.status} active={post.active} />
               <span>
                 {post.publishedAt
-                  ? t('postEditor.publishedAt', { date: new Date(post.publishedAt).toLocaleString() })
+                  ? t('postEditor.publishedAt', { date: formatDateTime(post.publishedAt, adminLanguage) })
                   : t('postEditor.notPublished')}
               </span>
             </div>
@@ -490,7 +584,9 @@ export function BlogPostEditor(): ReactNode {
             activeLanguage={activeLanguage}
             onResolveLanguageContent={(language) =>
               structuredClone(
-                language === activeLanguage && draftData ? draftData : (dataFor(post, language) ?? emptyCanvas()),
+                language === activeLanguage && draftData
+                  ? draftData
+                  : (stash[language]?.canvas ?? dataFor(post, language) ?? emptyCanvas()),
               )
             }
             resource={{ type: 'blog_post', id: post.id }}
@@ -506,163 +602,167 @@ export function BlogPostEditor(): ReactNode {
       }
       settings={
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('sections.metadata')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label htmlFor="post-name">{t('fields.namePerLanguage')}</Label>
-                <Input
-                  id="post-name"
-                  aria-invalid={problem === 'validation.nameRequired' ? true : undefined}
-                  aria-describedby={problem === 'validation.nameRequired' ? 'post-error' : undefined}
-                  value={form.name}
-                  onChange={(event) => {
-                    const name = event.target.value;
-                    setForm((f) => ({
-                      ...f,
-                      name,
-                      // New post: keep slug + meta title in sync with the title
-                      // until the editor overrides either one.
-                      ...(isNew && !slugEdited ? { slug: slugify(name) } : {}),
-                      ...(isNew && !metaTitleEdited ? { metaTitle: name } : {}),
-                    }));
-                  }}
-                  placeholder={t('postEditor.namePlaceholder')}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="post-slug">{t('fields.slug')}</Label>
-                <Input
-                  id="post-slug"
-                  aria-invalid={problem === 'validation.slugInvalid' ? true : undefined}
-                  aria-describedby={problem === 'validation.slugInvalid' ? 'post-error' : undefined}
-                  value={form.slug}
-                  onChange={(event) => {
-                    setSlugEdited(true);
-                    setForm((f) => ({ ...f, slug: event.target.value.toLowerCase() }));
-                  }}
-                  className="font-mono"
-                  placeholder="best-cordless-trimmers-2026"
-                />
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id="post-active"
-                  type="checkbox"
-                  checked={form.active}
-                  onChange={(event) => setForm((f) => ({ ...f, active: event.target.checked }))}
-                />
-                {t('fields.activeWhenPublished')}
-              </label>
-            </CardContent>
-          </Card>
-
-          <ScopePicker value={scope} onChange={setScope} />
-
-          <Card data-settings-group="seo">
-            <CardHeader>
-              <CardTitle className="text-base">{t('sections.seo')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label htmlFor="post-meta-title">{t('fields.metaTitlePerLanguage')}</Label>
-                <Input
-                  id="post-meta-title"
-                  value={form.metaTitle}
-                  onChange={(event) => {
-                    setMetaTitleEdited(true);
-                    setForm((f) => ({ ...f, metaTitle: event.target.value }));
-                  }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="post-meta-description">{t('fields.metaDescriptionPerLanguage')}</Label>
-                <Input
-                  id="post-meta-description"
-                  value={form.metaDescription}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, metaDescription: event.target.value }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="post-meta-keywords">{t('fields.metaKeywordsPerLanguage')}</Label>
-                <Input
-                  id="post-meta-keywords"
-                  value={form.metaKeywords}
-                  onChange={(event) =>
-                    setForm((f) => ({ ...f, metaKeywords: event.target.value }))
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <EditorSection as="h3" title={t('sections.metadata')}>
+            <div className="space-y-1">
+              <Label htmlFor="post-name">{t('fields.namePerLanguage')}</Label>
+              <Input
+                id="post-name"
+                aria-invalid={problem === 'validation.nameRequired' ? true : undefined}
+                aria-describedby={problem === 'validation.nameRequired' ? 'post-error' : undefined}
+                value={form.name}
+                onChange={(event) => {
+                  const name = event.target.value;
+                  setForm((f) => ({
+                    ...f,
+                    name,
+                    // New post: keep slug + meta title in sync with the title
+                    // until the editor overrides either one.
+                    ...(isNew && !slugEdited ? { slug: slugify(name) } : {}),
+                    ...(isNew && !metaTitleEdited ? { metaTitle: name } : {}),
+                  }));
+                }}
+                placeholder={t('postEditor.namePlaceholder')}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="post-slug">{t('fields.slug')}</Label>
+              <Input
+                id="post-slug"
+                aria-invalid={problem === 'validation.slugInvalid' ? true : undefined}
+                aria-describedby={problem === 'validation.slugInvalid' ? 'post-error' : undefined}
+                value={form.slug}
+                onChange={(event) => {
+                  setSlugEdited(true);
+                  setForm((f) => ({ ...f, slug: event.target.value.toLowerCase() }));
+                }}
+                className="font-mono"
+                placeholder="best-cordless-trimmers-2026"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                id="post-active"
+                type="checkbox"
+                checked={form.active}
+                onChange={(event) => setForm((f) => ({ ...f, active: event.target.checked }))}
+              />
+              {t('fields.activeWhenPublished')}
+            </label>
+            <div className="space-y-1">
+              <Label htmlFor="post-image">{t('fields.mainImage')}</Label>
+              <AssetFieldPicker
+                id="post-image"
+                value={form.mainImageAssetId}
+                onChange={(assetId) => setForm((f) => ({ ...f, mainImageAssetId: assetId }))}
+                acceptMimePrefix="image/"
+                allowUpload
+              />
+              <p className="text-xs text-muted-foreground">{t('postEditor.mainImageHint')}</p>
+            </div>
+          </EditorSection>
 
           {post ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{t('sections.tags')}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TagPicker
-                  value={post.tags.map((tag) => tag.id)}
-                  onChange={(next) => void onSaveTags(next)}
-                />
-              </CardContent>
-            </Card>
+            <EditorSection as="h3" title={t('author.title')}>
+              <AuthorPicker
+                value={links.authorId}
+                saved={post.author ?? null}
+                disabled={saving}
+                onChange={(authorId) => setLinks((l) => ({ ...l, authorId }))}
+              />
+            </EditorSection>
+          ) : null}
+
+          {post && activeLanguage ? (
+            <UrlKeysPanel
+              kind="post"
+              entityId={post.id}
+              language={activeLanguage}
+              // The keys' save bumps the post's version; the form's edits stay.
+              onSaved={() =>
+                void blogClient.getPost(post.id).then((fresh) => setPost((p) => (p ? { ...p, version: fresh.version } : fresh)))
+              }
+            />
+          ) : null}
+
+          <ScopePicker value={scope} onChange={setScope} titleAs="h3" />
+
+          <EditorSection as="h3" title={t('sections.seo')} data-settings-group="seo">
+            <div className="space-y-1">
+              <Label htmlFor="post-meta-title">{t('fields.metaTitlePerLanguage')}</Label>
+              <Input
+                id="post-meta-title"
+                value={form.metaTitle}
+                onChange={(event) => {
+                  setMetaTitleEdited(true);
+                  setForm((f) => ({ ...f, metaTitle: event.target.value }));
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="post-meta-description">{t('fields.metaDescriptionPerLanguage')}</Label>
+              <Input
+                id="post-meta-description"
+                value={form.metaDescription}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, metaDescription: event.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="post-meta-keywords">{t('fields.metaKeywordsPerLanguage')}</Label>
+              <Input
+                id="post-meta-keywords"
+                value={form.metaKeywords}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, metaKeywords: event.target.value }))
+                }
+              />
+            </div>
+          </EditorSection>
+
+          {post ? (
+            <EditorSection as="h3" title={t('sections.tags')}>
+              <TagPicker
+                value={links.tagIds}
+                onChange={(tagIds) => setLinks((l) => ({ ...l, tagIds }))}
+              />
+            </EditorSection>
           ) : null}
 
           {post ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{t('sections.relatedPosts')}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <RelatedPostsPicker
-                  value={post.relatedPostIds}
-                  selfId={post.id}
-                  onChange={(next) => void onSaveRelatedPosts(next)}
-                />
-              </CardContent>
-            </Card>
+            <EditorSection as="h3" title={t('sections.relatedPosts')}>
+              <RelatedPostsPicker
+                value={links.relatedPostIds}
+                selfId={post.id}
+                onChange={(relatedPostIds) => setLinks((l) => ({ ...l, relatedPostIds }))}
+              />
+            </EditorSection>
           ) : null}
 
           {post ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{t('sections.relatedProducts')}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <RelatedProductsPicker
-                  value={post.relatedProductIds}
-                  onChange={(next) => void onSaveRelatedProducts(next)}
-                />
-              </CardContent>
-            </Card>
+            <EditorSection as="h3" title={t('sections.relatedProducts')}>
+              <RelatedProductsPicker
+                value={links.relatedProductIds}
+                onChange={(relatedProductIds) => setLinks((l) => ({ ...l, relatedProductIds }))}
+              />
+            </EditorSection>
           ) : null}
 
           {/* Last, and away from Save: archiving is rare and takes the post
               off the storefront. */}
           {post ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{t('sections.lifecycle')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-sm text-muted-foreground">{t('postEditor.archiveHint')}</p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={saving || post.status === 'archived'}
-                  onClick={() => void onLifecycle('archive')}
-                >
-                  {t('common.archive')}
-                </Button>
-              </CardContent>
-            </Card>
+            <EditorSection as="h3" title={t('sections.lifecycle')}>
+              <p className="text-sm text-muted-foreground">{t('postEditor.archiveHint')}</p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={saving || post.status === 'archived'}
+                onClick={() => void onLifecycle('archive')}
+              >
+                {t('common.archive')}
+              </Button>
+            </EditorSection>
           ) : null}
         </>
       }

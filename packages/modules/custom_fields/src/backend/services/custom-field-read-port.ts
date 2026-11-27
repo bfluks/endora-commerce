@@ -100,6 +100,10 @@ export function toCustomFieldDefinitionRecord(
     audience: definition.audience,
     sortOrder: definition.sortOrder,
     config: definition.config ?? {},
+    listFilter: definition.listFilter,
+    carryTo: [...(definition.carryTo ?? [])],
+    customerInput: [...(definition.customerInput ?? [])],
+    adminAccess: definition.adminAccess ?? 'edit',
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
   };

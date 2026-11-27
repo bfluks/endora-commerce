@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { orgSalesChannels } from './org-sales-channels';
+import { shippedCoreBundle } from '../../helpers/core-bundle';
+import { byId, developerIdLabels } from '../../helpers/developer-ids';
+import { expectNoAxeViolations } from '../../helpers/axe';
+import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
+import { ApiError } from '@endora-commerce/admin-kit/lib';
 
 /**
  * The real providers, not a stubbed hook (feature 091, P3 and P4d).
@@ -71,6 +77,7 @@ const CUSTOMER = {
   firstName: 'Jan',
   lastName: 'Kowalski',
   organizationName: 'Acme',
+  organizationId: 'org-1',
 };
 const ORG_ADDRESS = {
   id: 'addr-1',
@@ -81,7 +88,7 @@ const ORG_ADDRESS = {
   country: 'PL',
   isDefault: true,
 };
-const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: { 'en-US': 'Widget' } };
+const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: 'Widget' };
 
 const PREVIEW = {
   lines: [{ productId: 'prod-1', quantity: 1, unitPrice: '10.00', currency: 'PLN', lineTotal: 10 }],
@@ -99,6 +106,8 @@ const PREVIEW = {
 
 const BUNDLE = passthroughBundle('core', [
   'common.action.back',
+  'orders.page.title',
+  'common.action.cancel',
   'orderCreate.field.customer',
   'orderCreate.field.salesChannel',
   'orderCreate.field.paymentMethod',
@@ -132,8 +141,8 @@ beforeEach(() => {
     if (path === '/api/v1/admin/customers/cust-1') return Promise.resolve({ data: CUSTOMER });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [CUSTOMER] });
     if (path.startsWith('/api/v1/admin/catalog/products')) return Promise.resolve({ data: [PRODUCT] });
-    if (path.startsWith('/api/v1/admin/sales-channels')) {
-      return Promise.resolve({ items: [{ id: 'chan-1', code: 'CH', name: { 'en-US': 'Channel 1' }, active: true }] });
+    if (path.endsWith('/sales-channels')) {
+      return Promise.resolve(orgSalesChannels([{ id: 'chan-1', code: 'CH', name: { 'en-US': 'Channel 1' }, active: true }]));
     }
     if (path.startsWith('/api/v1/admin/payment-methods')) {
       return Promise.resolve({ data: [{ id: 'pay-1', code: 'PM', name: { 'en-US': 'Payment 1' }, status: 'active' }] });
@@ -141,6 +150,8 @@ beforeEach(() => {
     if (path.startsWith('/api/v1/admin/delivery-methods')) {
       return Promise.resolve({ data: [{ id: 'del-1', code: 'DM', name: { 'en-US': 'Delivery 1' }, status: 'active' }] });
     }
+    // The new-address country picker's list.
+    if (path.startsWith('/api/v1/dictionary')) return Promise.resolve({ data: { countries: [] } });
     return Promise.resolve({ data: [] });
   });
   postSpy.mockImplementation((path: string) => {
@@ -149,9 +160,9 @@ beforeEach(() => {
   });
 });
 
-/** Open a combobox by its aria-label and click the option matching `label`. */
-async function pick(comboLabel: string, optionLabel: string): Promise<void> {
-  await userEvent.click(screen.getByLabelText(comboLabel));
+/** Open a combobox (by its label, or the element itself) and click the option matching `label`. */
+async function pick(comboLabel: string | HTMLElement, optionLabel: string): Promise<void> {
+  await userEvent.click(typeof comboLabel === 'string' ? screen.getByLabelText(comboLabel) : comboLabel);
   const option = await screen.findByRole('option', { name: new RegExp(optionLabel) });
   await userEvent.click(option);
 }
@@ -180,12 +191,12 @@ describe('OrderCreatePage', () => {
     renderPage();
 
     // Customer is a server-side search picker: type, then pick the result.
-    await userEvent.type(screen.getByLabelText('customerAccountId'), 'Jan');
-    await pick('customerAccountId', 'Jan Kowalski');
+    await userEvent.type(byId('customerAccountId'), 'Jan');
+    await pick(byId('customerAccountId'), 'Jan Kowalski');
 
-    await pick('salesChannelId', 'Channel 1');
-    await pick('paymentMethodId', 'Payment 1');
-    await pick('deliveryMethodId', 'Delivery 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
+    await pick(byId('paymentMethodId'), 'Payment 1');
+    await pick(byId('deliveryMethodId'), 'Delivery 1');
 
     // Product line — added through the quick search, a server-side search picker.
     await addWidget();
@@ -218,13 +229,13 @@ describe('OrderCreatePage', () => {
   it('clears a chosen method when the channel is changed to one that does not offer it', async () => {
     const reference = getSpy.getMockImplementation()!;
     getSpy.mockImplementation((path: string) => {
-      if (path.startsWith('/api/v1/admin/sales-channels')) {
-        return Promise.resolve({
-          items: [
+      if (path.endsWith('/sales-channels')) {
+        return Promise.resolve(
+          orgSalesChannels([
             { id: 'chan-1', code: 'CH1', name: { 'en-US': 'Channel 1' }, active: true },
             { id: 'chan-2', code: 'CH2', name: { 'en-US': 'Channel 2' }, active: true },
-          ],
-        });
+          ]),
+        );
       }
       if (path.startsWith('/api/v1/admin/delivery-methods')) {
         return Promise.resolve({
@@ -250,23 +261,23 @@ describe('OrderCreatePage', () => {
     });
     renderPage();
 
-    await userEvent.type(screen.getByLabelText('customerAccountId'), 'Jan');
-    await pick('customerAccountId', 'Jan Kowalski');
-    await pick('salesChannelId', 'Channel 1');
-    await pick('paymentMethodId', 'Payment 1');
-    await pick('deliveryMethodId', 'Only on channel 1');
+    await userEvent.type(byId('customerAccountId'), 'Jan');
+    await pick(byId('customerAccountId'), 'Jan Kowalski');
+    await pick(byId('salesChannelId'), 'Channel 1');
+    await pick(byId('paymentMethodId'), 'Payment 1');
+    await pick(byId('deliveryMethodId'), 'Only on channel 1');
     await addWidget();
 
     const submit = screen.getByText('orderCreate.submit');
     await waitFor(() => expect(submit).not.toBeDisabled());
 
     // The other channel does not offer the chosen delivery method.
-    await pick('salesChannelId', 'Channel 2');
+    await pick(byId('salesChannelId'), 'Channel 2');
 
     // The choice is gone: the form is incomplete again, and what it would have
     // sent is not sent.
     await waitFor(() => expect(submit).toBeDisabled());
-    await userEvent.click(screen.getByLabelText('deliveryMethodId'));
+    await userEvent.click(byId('deliveryMethodId'));
     expect(await screen.findByRole('option', { name: /Everywhere/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Only on channel 1/ })).not.toBeInTheDocument();
 
@@ -291,6 +302,17 @@ describe('OrderCreatePage', () => {
    * back to. The page reads all of it as opaque — it never learns what an
    * origin *is*.
    */
+  // #1549 (SALES-27): opened from the list, the way back is the header back link to Orders —
+  // not an outline Back button among the header actions.
+  it('goes back to Orders through the header back link above the title', () => {
+    renderPage();
+    const heading = screen.getByRole('heading', { level: 1 });
+    const back = within(heading.closest('header')!).getByRole('link', { name: 'orders.page.title' });
+    expect(back).toHaveAttribute('href', '/orders');
+    expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'common.action.back' })).toBeNull();
+  });
+
   describe('opened with an origin', () => {
     const ORIGIN_ID = '00000000-0000-4000-8000-0000000000b1';
     const ORGANIZATION_ID = '00000000-0000-4000-8000-0000000000a1';
@@ -311,11 +333,11 @@ describe('OrderCreatePage', () => {
       );
 
       // Neither picker is touched: both arrive chosen, by name.
-      await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
-      await waitFor(() => expect(screen.getByLabelText('salesChannelId')).toHaveValue('Channel 1'));
+      await waitFor(() => expect(byId('customerAccountId')).toHaveValue('Jan Kowalski'));
+      await waitFor(() => expect(byId('salesChannelId')).toHaveValue('Channel 1'));
 
-      await pick('paymentMethodId', 'Payment 1');
-      await pick('deliveryMethodId', 'Delivery 1');
+      await pick(byId('paymentMethodId'), 'Payment 1');
+      await pick(byId('deliveryMethodId'), 'Delivery 1');
       await addWidget();
 
       const submit = screen.getByText('orderCreate.submit');
@@ -358,7 +380,7 @@ describe('OrderCreatePage', () => {
           .map(([path]) => String(path))
           .filter((path) => path.startsWith('/api/v1/admin/customers?'));
       // A typed search stays inside the organization as well.
-      await userEvent.type(screen.getByLabelText('customerAccountId'), 'Jan');
+      await userEvent.type(byId('customerAccountId'), 'Jan');
       await waitFor(() => expect(searches().some((path) => path.includes('q=Jan'))).toBe(true));
       for (const path of searches()) {
         expect(new URLSearchParams(path.split('?')[1]).get('organizationId')).toBe(ORGANIZATION_ID);
@@ -371,17 +393,21 @@ describe('OrderCreatePage', () => {
       );
       const back = screen.getByRole('link', { name: 'common.action.back' });
       expect(back).toHaveAttribute('href', RETURN_TO);
+      // #1549 (SALES-27): the way back is the header's own back link, above the title.
+      const heading = screen.getByRole('heading', { level: 1 });
+      expect(heading.closest('header')).toContainElement(back);
+      expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
       // The customer arrived chosen and its default address followed by itself:
       // nothing here was typed, so leaving at once asks nothing.
-      await waitFor(() => expect(screen.getByLabelText('deliveryAddress-existing')).toHaveValue('Acme HQ ★'));
+      await waitFor(() => expect(byId('deliveryAddress-existing')).toHaveValue('Acme HQ ★'));
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
       try {
         await userEvent.click(back);
         expect(confirm).not.toHaveBeenCalled();
 
         // A choice the operator made is unsaved work, as it always was.
-        await pick('paymentMethodId', 'Payment 1');
+        await pick(byId('paymentMethodId'), 'Payment 1');
         await userEvent.click(back);
         expect(confirm).toHaveBeenCalledTimes(1);
       } finally {
@@ -395,9 +421,9 @@ describe('OrderCreatePage', () => {
       ['a type alone', { originType: 'crm_opportunity' }],
     ])('sends no origin for %s', async (_label, params) => {
       renderPage(entry({ ...params, customerAccountId: 'cust-1', salesChannelId: 'chan-1' }));
-      await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
-      await pick('paymentMethodId', 'Payment 1');
-      await pick('deliveryMethodId', 'Delivery 1');
+      await waitFor(() => expect(byId('customerAccountId')).toHaveValue('Jan Kowalski'));
+      await pick(byId('paymentMethodId'), 'Payment 1');
+      await pick(byId('deliveryMethodId'), 'Delivery 1');
       await addWidget();
       const submit = screen.getByText('orderCreate.submit');
       await waitFor(() => expect(submit).not.toBeDisabled());
@@ -412,8 +438,199 @@ describe('OrderCreatePage', () => {
       'does not follow a return address that leaves the application: %s',
       async (returnTo) => {
         renderPage(entry({ returnTo }));
-        expect(screen.getByRole('link', { name: 'common.action.back' })).toHaveAttribute('href', '/orders');
+        expect(screen.getByRole('link', { name: 'orders.page.title' })).toHaveAttribute('href', '/orders');
       },
     );
+  });
+});
+
+/**
+ * Issue #1449 (UX audit 2026-11-17, DS-19) — the order form ends with the kit's sticky save bar:
+ * in view while the long form scrolls, Cancel first and the one primary (Create) last
+ * (Von Restorff, Jakob), and a refused create said beside the button that caused it
+ * (Proximity) rather than at the top of the page, out of view.
+ */
+describe('OrderCreatePage — the sticky save bar (#1449)', () => {
+  function bar(): HTMLElement {
+    const node = screen.getByText('orderCreate.submit').closest<HTMLElement>('[data-slot="sticky-form-actions"]');
+    expect(node).not.toBeNull();
+    return node!;
+  }
+
+  it('ends the page with Cancel, then Create last, sticky on desktop', () => {
+    const { container } = renderWithI18n(
+      withSession(
+        <MemoryRouter initialEntries={['/orders/new']}>
+          <OrderCreatePage />
+        </MemoryRouter>,
+        {
+          session: adminSession({ permissions: ['*'] }),
+          presence: modulePresence({ present: ['orders', 'quick_order'] }),
+        },
+      ),
+      BUNDLE,
+    );
+    expect(bar()).toHaveAttribute('data-desktop', 'sticky');
+    expect(
+      [...bar().querySelectorAll('a, button')].map((node) => node.textContent?.trim()),
+    ).toEqual(['common.action.cancel', 'orderCreate.submit']);
+    expect(container.querySelector('[data-slot="sticky-form-actions"]')!.parentElement!.lastElementChild).toBe(bar());
+  });
+
+  it('cancels back to the order list', () => {
+    renderPage();
+    expect(within(bar()).getByRole('link', { name: 'common.action.cancel' })).toHaveAttribute('href', '/orders');
+  });
+
+  it('cancels back to the screen that opened it', () => {
+    renderPage(`/orders/new?${new URLSearchParams({ returnTo: '/crm/opportunities' }).toString()}`);
+    expect(within(bar()).getByRole('link', { name: 'common.action.cancel' })).toHaveAttribute(
+      'href',
+      '/crm/opportunities',
+    );
+  });
+
+  it('says a refused create in the bar, beside Create', async () => {
+    postSpy.mockImplementation((path: string) => {
+      if (path.endsWith('/orders/preview')) return Promise.resolve({ data: PREVIEW });
+      return Promise.reject(new ApiError(422, { error: { code: 'VALIDATION_FAILED', message: 'Refused by the server.' } }));
+    });
+    renderPage('/orders/new?customerAccountId=cust-1&salesChannelId=chan-1');
+    await waitFor(() => expect(byId('customerAccountId')).toHaveValue('Jan Kowalski'));
+    await pick(byId('paymentMethodId'), 'Payment 1');
+    await pick(byId('deliveryMethodId'), 'Delivery 1');
+    await addWidget();
+    const submit = screen.getByText('orderCreate.submit');
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await userEvent.click(submit);
+    expect(await within(bar()).findByRole('alert')).toHaveTextContent('Refused by the server.');
+    expect(screen.getAllByText('Refused by the server.')).toHaveLength(1);
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Issue #1475 (UX audit SALES-10): every field is named by the label the
+ * operator sees, in the operator's language — never by a developer id such as
+ * `customerAccountId` or `deliveryAddress-street` set as its `aria-label`.
+ * The shipped bundle, not a passthrough, so a missing key fails.
+ */
+describe.each(['en', 'pl'] as const)('OrderCreatePage — fields named by their visible labels (%s)', (language) => {
+  const bundle = shippedCoreBundle(language);
+  const shipped = bundle.core!;
+  /** The shipped copy for `key`, failing when the bundle has none. */
+  function copy(key: string): string {
+    const value = shipped[key];
+    if (value === undefined) throw new Error(`No ${language} copy for ${key}`);
+    return value;
+  }
+
+  function renderTranslated(): { container: HTMLElement } {
+    return renderWithI18n(
+      withSession(
+        // The new-address country picker reads the admin language.
+        <AppLanguageContext.Provider value={{ language, setLanguage: (): void => {} }}>
+          <MemoryRouter initialEntries={['/orders/new']}>
+            <OrderCreatePage />
+          </MemoryRouter>
+        </AppLanguageContext.Provider>,
+        {
+          session: adminSession({ permissions: ['*'] }),
+          presence: modulePresence({ present: ['orders', 'quick_order'] }),
+        },
+      ),
+      bundle,
+      { language },
+    );
+  }
+
+  it('names the pickers and the note by the label beside them', async () => {
+    renderTranslated();
+    expect(await screen.findByRole('combobox', { name: copy('orderCreate.field.customer') })).toHaveAttribute(
+      'id',
+      'customerAccountId',
+    );
+    expect(screen.getByRole('combobox', { name: copy('orderCreate.field.paymentMethod') })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: copy('orderCreate.field.deliveryMethod') })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: copy('orderCreate.field.note') })).toBeInTheDocument();
+    expect(
+      screen.getByRole('combobox', { name: copy('orderCreate.address.deliveryHeading') }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('combobox', { name: copy('orderCreate.address.billingHeading') }),
+    ).toBeInTheDocument();
+  });
+
+  it('names the sales channel picker once the channels are read', async () => {
+    renderTranslated();
+    await userEvent.type(byId('customerAccountId'), 'Jan');
+    await pick(byId('customerAccountId'), 'Jan Kowalski');
+    expect(
+      await screen.findByRole('combobox', { name: copy('orderCreate.field.salesChannel') }),
+    ).toBeInTheDocument();
+  });
+
+  it('names a new address\'s fields inside a group named by the address', async () => {
+    renderTranslated();
+    const delivery = await screen.findByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    await userEvent.click(within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.new') }));
+    for (const key of ['recipientName', 'street', 'postalCode', 'city', 'phone']) {
+      expect(
+        within(delivery).getByRole('textbox', { name: copy(`orderCreate.address.field.${key}`) }),
+      ).toHaveAttribute('id', `deliveryAddress-${key}`);
+    }
+    expect(
+      within(delivery).getByRole('combobox', { name: copy('orderCreate.address.field.country') }),
+    ).toBeInTheDocument();
+  });
+
+  it('says which address source is chosen, not only by colour (aria-pressed, issue #1445)', async () => {
+    renderTranslated();
+    const delivery = await screen.findByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    const existing = within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.existing') });
+    const fresh = within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.new') });
+    expect(existing).toHaveAttribute('aria-pressed', 'true');
+    expect(fresh).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(fresh);
+    expect(existing).toHaveAttribute('aria-pressed', 'false');
+    expect(fresh).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('names the address-source toggle pair as a group (issue #1600)', async () => {
+    renderTranslated();
+    const delivery = await screen.findByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    const source = within(delivery).getByRole('group', { name: copy('orderCreate.address.mode.label') });
+    expect(within(source).getByRole('button', { name: copy('orderCreate.address.mode.existing') })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(source).getByRole('button', { name: copy('orderCreate.address.mode.new') })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('pressing the source already chosen keeps what was typed (issue #1600)', async () => {
+    renderTranslated();
+    const delivery = await screen.findByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    const fresh = within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.new') });
+    await userEvent.click(fresh);
+    const street = within(delivery).getByRole('textbox', { name: copy('orderCreate.address.field.street') });
+    await userEvent.type(street, 'Prosta 1');
+    await userEvent.click(fresh);
+    expect(within(delivery).getByRole('textbox', { name: copy('orderCreate.address.field.street') })).toHaveValue('Prosta 1');
+  });
+
+  it('lays a new address\'s fields out in the parties card, not in a frame of their own (#1498, SALES-13)', async () => {
+    renderTranslated();
+    const delivery = await screen.findByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    await userEvent.click(within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.new') }));
+    const street = within(delivery).getByRole('textbox', { name: copy('orderCreate.address.field.street') });
+    for (let node = street.parentElement; node && node !== delivery; node = node.parentElement) {
+      expect(node.className.split(/\s+/)).not.toContain('border');
+    }
+  });
+
+  it('carries no developer id as an accessible name, and passes axe', async () => {
+    const { container } = renderTranslated();
+    await screen.findByRole('combobox', { name: copy('orderCreate.field.customer') });
+    const delivery = screen.getByRole('group', { name: copy('orderCreate.address.deliveryHeading') });
+    await userEvent.click(within(delivery).getByRole('button', { name: copy('orderCreate.address.mode.new') }));
+    expect(developerIdLabels(container)).toEqual([]);
+    await expectNoAxeViolations(container);
   });
 });

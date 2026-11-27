@@ -1,17 +1,17 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 
 /**
  * Feature 027 US6 — CartDetail interaction test.
  *
  * Drives the React component through jsdom. Mocks `apiClient.get` /
- * `.post` so the page never hits the network. Verifies the reject
- * flow's required-reason gating + the success path that hides the
- * reject form and re-fetches the detail.
+ * `.post` so the page never hits the network. The reject flow itself —
+ * the header menu entry and its dialog (issue #1548) — is
+ * `CartDetail.reject-dialog.test.tsx`.
  */
 
 const getSpy = vi.fn();
@@ -68,6 +68,9 @@ const BUNDLE = passthroughBundle('carts', [
   'carts.column.unit',
   'carts.column.line',
   'carts.column.total',
+  'carts.column.discount',
+  'carts.detail.netTotal',
+  'carts.detail.grossTotal',
   'carts.detail.audit',
   'carts.detail.auditEmpty',
   'carts.audit.when',
@@ -117,13 +120,30 @@ function activeCartFixture(): unknown {
   };
 }
 
+function renderDetailWithHandle(): ReturnType<typeof renderWithI18n> {
+  return renderWithI18n(
+    withSession(
+      <MemoryRouter initialEntries={['/carts/00000000-0000-4000-8000-0000000000c1']}>
+        <Routes>
+          <Route path="/carts/:id" element={<CartDetail />} />
+        </Routes>
+      </MemoryRouter>,
+      { session: adminSession({ permissions: ['*'] }) },
+    ),
+    BUNDLE,
+  );
+}
+
 function renderDetail(): void {
   renderWithI18n(
-    <MemoryRouter initialEntries={['/carts/00000000-0000-4000-8000-0000000000c1']}>
-      <Routes>
-        <Route path="/carts/:id" element={<CartDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    withSession(
+      <MemoryRouter initialEntries={['/carts/00000000-0000-4000-8000-0000000000c1']}>
+        <Routes>
+          <Route path="/carts/:id" element={<CartDetail />} />
+        </Routes>
+      </MemoryRouter>,
+      { session: adminSession({ permissions: ['*'] }) },
+    ),
     BUNDLE,
   );
 }
@@ -155,44 +175,27 @@ describe('CartDetail', () => {
     expect(screen.getAllByText(/39,98\s*zł/).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reject button is disabled until a reason is typed; clicking submits', async () => {
+  /** Issue #1396 — the net total row, and the gross total row when the detail knows it. */
+  it('shows the net total and the gross total, and omits the gross row when it is unknown', async () => {
     getSpy
-      .mockResolvedValueOnce({ data: activeCartFixture() })
+      .mockResolvedValueOnce({ data: { ...(activeCartFixture() as object), totalGross: { amount: 49.18, currency: 'PLN' } } })
       .mockResolvedValueOnce({ data: [] });
-    postSpy.mockResolvedValue({ data: { id: '00000000-0000-4000-8000-0000000000c1' } });
-
-    renderDetail();
+    const { unmount } = renderDetailWithHandle();
     await waitFor(() => {
-      expect(screen.getByText('Sample')).toBeInTheDocument();
+      expect(screen.getByText('carts.detail.grossTotal')).toBeInTheDocument();
     });
+    expect(screen.getByText('carts.detail.netTotal')).toBeInTheDocument();
+    expect(screen.getByText(/49,18\s*zł/)).toBeInTheDocument();
+    unmount();
 
-    const u = userEvent.setup();
-    await u.click(screen.getByText('carts.reject.open'));
-    const reasonInput = screen.getByLabelText('carts.reject.reasonLabel');
-    const submitButton = screen.getByText('carts.reject.confirm');
-    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
-
-    await u.type(reasonInput, 'Out of budget');
-    expect((submitButton as HTMLButtonElement).disabled).toBe(false);
-
-    // Stub the post-reject re-fetch: detail + audit endpoints must stay distinct.
-    getSpy.mockImplementation((url: string) => {
-      if (typeof url === 'string' && url.endsWith('/audit')) {
-        return Promise.resolve({ data: [] });
-      }
-      return Promise.resolve({
-        data: { ...(activeCartFixture() as object), status: 'rejected' },
-      });
-    });
-
-    await u.click(submitButton);
-
+    getSpy
+      .mockResolvedValueOnce({ data: { ...(activeCartFixture() as object), totalGross: null } })
+      .mockResolvedValueOnce({ data: [] });
+    renderDetailWithHandle();
     await waitFor(() => {
-      expect(postSpy).toHaveBeenCalledWith(
-        '/api/v1/admin/carts/00000000-0000-4000-8000-0000000000c1/reject',
-        { reason: 'Out of budget' },
-      );
+      expect(screen.getByText('carts.detail.netTotal')).toBeInTheDocument();
     });
+    expect(screen.queryByText('carts.detail.grossTotal')).toBeNull();
   });
 
   it('hides the reject button on a terminal cart', async () => {
@@ -204,5 +207,7 @@ describe('CartDetail', () => {
       expect(screen.getByText('Sample')).toBeInTheDocument();
     });
     expect(screen.queryByText('carts.reject.open')).toBeNull();
+    // Issue #1548 — the only entry of the header's "More" menu is off, so there is no menu.
+    expect(screen.queryByRole('button', { name: 'common.action.more' })).toBeNull();
   });
 });

@@ -44,6 +44,7 @@ function harness(options: {
           salesChannelId: null,
           businessId: 'QR-9',
           documentTemplateId: null,
+          sharedWithCustomer: true,
           version: 7,
           ...(options.quote ?? {}),
         };
@@ -206,12 +207,14 @@ describe('quote_request.send_document', () => {
         },
       }),
     ]);
+    // How many, never the addresses: the pdf-sent event keeps those (D-288, #470).
     expect(outcome.after).toEqual({
       templateId: T1,
       language: 'pl-PL',
-      recipients: ['buyer@example.com', 'two@example.com'],
-      failedRecipients: [],
+      recipientCount: 2,
+      failedRecipientCount: 0,
     });
+    expect(JSON.stringify(outcome.after)).not.toContain('@example.com');
     expect(JSON.stringify(outcome.after)).not.toContain('offer.');
     expect(h.quote!['version']).toBe(7);
     expect(h.log.indexOf('canSeeOrganization')).toBeLessThan(h.log.indexOf('send:buyer@example.com'));
@@ -221,6 +224,17 @@ describe('quote_request.send_document', () => {
     const h = harness({ canSee: false });
     expect(await refusal(makeSendDocumentCommand(input(), h.deps).run(h.ctx))).toMatchObject({ statusCode: 404 });
     expect(h.sender.send).not.toHaveBeenCalled();
+  });
+
+  // `specs/192-quote-request-draft-share/` (FR-007) — not sent while unshared.
+  it('a quote its customer cannot see yet is refused before anything is sent', async () => {
+    const h = harness({ quote: { sharedWithCustomer: false } });
+    expect(await refusal(makeSendDocumentCommand(input(), h.deps).run(h.ctx))).toMatchObject({
+      statusCode: 409,
+      code: 'RFQ_NOT_SHARED',
+    });
+    expect(h.sender.send).not.toHaveBeenCalled();
+    expect(h.created).toEqual([]);
   });
 
   it.each([['deactivated'], ['no_transport'], ['no_definition']] as const)(
@@ -247,7 +261,7 @@ describe('quote_request.send_document', () => {
     const outcome = await makeSendDocumentCommand(input(), h.deps).run(h.ctx);
     expect(outcome.result).toEqual({ sent: ['two@example.com'], failed: ['buyer@example.com'] });
     expect((h.created[0]!['payload'] as { recipients: string[] }).recipients).toEqual(['two@example.com']);
-    expect(outcome.after).toMatchObject({ recipients: ['two@example.com'], failedRecipients: ['buyer@example.com'] });
+    expect(outcome.after).toMatchObject({ recipientCount: 1, failedRecipientCount: 1 });
   });
 
   it('every recipient failing: refused, nothing recorded', async () => {

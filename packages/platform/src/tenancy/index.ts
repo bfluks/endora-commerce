@@ -65,11 +65,21 @@ export {
   RuleScoped,
 } from './org-scoped.decorator.js';
 /** Row 21 — the sanctioned cross-organization widening (FR-005/FR-013). */
-export { withSystemScope } from './escape-hatch.js';
+export { withSystemScope, withSystemScopeActingFor } from './escape-hatch.js';
 /** Row 28, plus `orgConstraintFor`'s return shape. */
 export {
   orgConstraintFor,
-  isOrgInScope,
-  ruleVisibleForScope,
+  /** Issue #955 Phase 2 — async; they replaced the synchronous `isOrgInScope` / `ruleVisibleForScope`. */
+  orgInScope,
+  ruleInScope,
+  orgScopeTest,
+  /** Issue #305 — the sanctioned readers of a scope, for every constraint arm. */
+  orgScopeWhere,
+  orgScopeSql,
+  assignedOrganizationIdsForRanking,
+  orgConstraintForAdminScope,
+  reachesNoOrganization,
   type OrgConstraint,
+  type OrgScopeSql,
+  type OrgScopeSource,
 } from './derived-scope.js';

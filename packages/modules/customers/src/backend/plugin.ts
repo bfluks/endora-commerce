@@ -1,8 +1,9 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { FastifyInstance } from 'fastify';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, AuditRedactionPort } from '@endora-commerce/platform/kernel';
 import { CustomerRegistrationService } from './services/customer-registration-service.js';
-import { CustomerAddressService } from './services/customer-address-service.js';
+import { AddressBookRetirementService } from './services/address-book-retirement-service.js';
 import { CustomerDefaultsService } from './services/customer-defaults-service.js';
 import {
   CustomerAuthorityService,
@@ -16,22 +17,31 @@ import { CustomerPresenceService } from './services/customer-presence-service.js
 import { AnonymizationSweepWorker } from './workers/anonymization-sweep-worker.js';
 import type {
   AddressReadPort,
+  AddressServicePort,
   AuthSessionPort,
   AuthSessionReadPort,
+  CartAnonymizationPort,
   CartQueryPort,
+  EmailDeliveryAnonymizationPort,
   CustomFieldValuePort,
   CustomerAccountAdminSearchPort,
+  CustomFieldListFilterPort,
+  CustomerAccountCommandPort,
   CustomerAccountLifecycleWritePort,
+  CustomerAccountPreferencePort,
   CustomerAccountReadPort,
   CustomerAuthPort,
   CustomerGroupReadPort,
   CustomerPasswordResetPort,
   DefaultPreferencePort,
   EmailMailerPort,
+  TemplateEmailPort,
   ImpersonationPort,
   OrderListPort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
   PersonalOrganizationPort,
   RfqCustomerPort,
   VatValidator,
@@ -104,13 +114,22 @@ export interface CustomersModuleOptions {
    */
   authSessionReadPort: AuthSessionReadPort;
   customerAccountReadPort: CustomerAccountReadPort;
+  /** Issue #652 (D-292) — the buyer's e-mail-language write, for the self-service route. */
+  customerAccountPreferencePort: CustomerAccountPreferencePort;
   /**
    * Feature 075, Phase C — the rest of `customer_accounts`' published surface
    * this module's own screens run on: the lifecycle writes it used to perform
    * by mutating that module's entity, the admin list's query, and the group
    * names beside it.
+   *
+   * Since `specs/186-aggregate-ports/` (issue #1822) the writes are
+   * `customerAccountCommandPort`'s — block, unblock, delete, restore, the
+   * group, the custom-field patch, the standalone registration and the
+   * retention scrub — and the lifecycle port is left with the two
+   * Organization moves `specs/191-membership-join-requests/` replaces.
    */
-  customerAccountLifecycleWritePort: CustomerAccountLifecycleWritePort;
+  customerAccountCommandPort: CustomerAccountCommandPort;
+  customerAccountLifecycleWritePort: Pick<CustomerAccountLifecycleWritePort, 'setOrganization' | 'detachToPersonalOrganization'>;
   customerAccountAdminSearchPort: CustomerAccountAdminSearchPort;
   customerGroupReadPort: CustomerGroupReadPort;
   /**
@@ -121,8 +140,27 @@ export interface CustomersModuleOptions {
    */
   organizationDetailsPort: OrganizationDetailsPort;
   personalOrganizationPort: PersonalOrganizationPort;
-  /** `addresses`' published read: the org-shared book a customer may pick from. */
+  /**
+   * `organizations`' role read (`specs/170-organization-roles/` WP-02b): the
+   * target's predefined role an account moved to a company lands on (owner
+   * ruling PR-11), the administrator role the depletion guards ask about, and
+   * — WP-03 — the role the self-service profile and the impersonation answer
+   * name (FR-008).
+   */
+  organizationRoleReadPort: Pick<OrganizationRoleReadPort, 'predefinedRoleId' | 'roleRef'>;
+  /** `organizations`' answer to "what may this member do" — the self-service profile's permissions (FR-056). */
+  organizationPermissionPort: Pick<OrganizationPermissionPort, 'effective'>;
+  /**
+   * `addresses`' published read: the customer's Organization book — every
+   * customer's one address book since `specs/173-b2c-address-book-merge/`.
+   */
   addressReadPort: AddressReadPort;
+  /**
+   * `addresses`' published write (`specs/173-b2c-address-book-merge/`): the
+   * retirement job moves B2C personal-book rows through it, and the retention
+   * sweep anonymizes a scrubbed personal Organization's addresses with it.
+   */
+  addressServicePort: AddressServicePort;
   /**
    * Which organizations the acting staff member may see —
    * `organizations`' `organizationSalesRepScopePort` (issue #108).
@@ -138,7 +176,7 @@ export interface CustomersModuleOptions {
   salesRepVisibility: SalesRepVisibility;
   requireCustomer: RequireCustomerGuard;
   resolveCustomerActor: ResolveCustomerActor;
-  /** Reads `customers.allow_registration_without_organization`. */
+  /** Reads `customers.allow_registration_without_organization` for the request's channel. */
   resolveAllowRegistrationWithoutOrganization: () => Promise<boolean>;
   /**
    * `orders`' published list, which the self-service history panel and the
@@ -159,6 +197,11 @@ export interface CustomersModuleOptions {
   rfqService: RfqCustomerPort;
   auditLogService: AuditPort;
   /**
+   * The platform-owned audit redaction (issue #844): the retention sweep
+   * erases the anonymised subject's audit history through it.
+   */
+  auditRedactionService: AuditRedactionPort;
+  /**
    * `quick_order`'s ordering defaults, which the customer-detail screen and
    * self-service profile render and edit (issue #216).
    *
@@ -174,13 +217,31 @@ export interface CustomersModuleOptions {
   vatValidator: VatValidator;
   mailer: EmailMailerPort;
   /**
+   * `transactional_emails`' template sender (issue #1295): the operator-triggered
+   * password-reset e-mail renders through it. Absent, or answering `false` for
+   * a code with no definition, the plain {@link mailer} sends an English one.
+   */
+  templateEmail?: TemplateEmailPort;
+  /**
    * `carts`' reporting read: the account's current cart and its abandoned ones,
    * for the customer-detail panel. This host used to build a second
    * `CartQueryService` from an import of that module's directory (feature 075).
    */
   cartQueryPort: CartQueryPort;
+  /**
+   * `carts`' step in the anonymisation sweep (issue #920): the reasons
+   * operators and approvers wrote about the account's carts are erased.
+   */
+  cartAnonymizationPort: CartAnonymizationPort;
+  /**
+   * `email`'s step in the anonymisation sweep (issue #928): the records of the
+   * e-mails sent to the account lose the address, the subject and the envelope.
+   */
+  emailDeliveryAnonymizationPort: EmailDeliveryAnonymizationPort;
   /** Base URL for the storefront set-password link in reset emails. */
   storefrontBaseUrl: string;
+  /** Feature 167 — the channel admin-sent storefront links are composed for (system default). */
+  linkChannel?: () => Promise<ChannelUrlFacts | null>;
   /** Reads `customers.deletion_retention_days`. */
   resolveDeletionRetentionDays: () => Promise<number>;
   /** Reads `customers.presence_freshness_minutes`. */
@@ -191,11 +252,19 @@ export interface CustomersModuleOptions {
    * Command and takes this validator as the merge (feature 075).
    */
   customFieldValues?: CustomFieldValuePort;
+  /**
+   * Issue #1903 — `custom_fields`' list-filter port: the Customer
+   * custom fields the admin list offers as filters, and their condition.
+   * Absent, the list offers none and refuses any it is sent.
+   */
+  customFieldListFilter?: CustomFieldListFilterPort;
 }
 
 export interface CustomersModuleHandle {
   registrationService: CustomerRegistrationService;
   anonymizationSweepWorker: AnonymizationSweepWorker;
+  /** The release-1 personal-address-book retirement (`specs/173-b2c-address-book-merge/`). */
+  addressBookRetirement: AddressBookRetirementService;
   /**
    * Exposed so the sales-rep scope this module *uses* can be asserted (issue
    * #108). The defect it closes was invisible to `tsc` and to every route test,
@@ -210,31 +279,29 @@ export function customersModule(options: CustomersModuleOptions): {
 } {
   const customerAuthService = options.customerAuthService;
   const registrationService = new CustomerRegistrationService({
-    accounts: options.customerAccountLifecycleWritePort,
+    accounts: options.customerAccountCommandPort,
     sessionService: options.sessionService,
     resolveAllowRegistrationWithoutOrganization:
       options.resolveAllowRegistrationWithoutOrganization,
   });
-  const customerAddressService = new CustomerAddressService(
-    options.emFactory,
-    options.addressReadPort,
-    options.customerAccountReadPort,
-    options.auditLogService,
-  );
+  const addressBookRetirement = new AddressBookRetirementService({
+    emFactory: options.emFactory,
+    accounts: options.customerAccountReadPort,
+    organizations: options.organizationDetailsPort,
+    addresses: options.addressServicePort,
+    auditLog: options.auditLogService,
+  });
   const customerDefaultsService = new CustomerDefaultsService(
-    options.emFactory,
     options.defaultPreferencePort,
-    customerAddressService,
+    options.addressReadPort,
   );
   const authorityService = new CustomerAuthorityService(options.salesRepVisibility);
+  // `specs/186-aggregate-ports/` (#1822) — the block's depletion guard and its
+  // session revocation are inside `customer_accounts`' Command now.
   const moderationService = new CustomerModerationService(
     options.customerAccountReadPort,
-    options.customerAccountLifecycleWritePort,
+    options.customerAccountCommandPort,
     authorityService,
-    {
-      destroyAllForCustomer: (customerAccountId) =>
-        options.sessionService.destroyAllForCustomer(customerAccountId),
-    },
   );
   const queryService = new CustomerAdminQueryService(customerDefaultsService, {
     accounts: options.customerAccountReadPort,
@@ -242,6 +309,7 @@ export function customersModule(options: CustomersModuleOptions): {
     organizations: options.organizationDetailsPort,
     customerGroups: options.customerGroupReadPort,
     orders: options.orderReadPort,
+    ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
   });
   const orgAssignmentService = new CustomerOrgAssignmentService(
     options.customerAccountReadPort,
@@ -249,15 +317,23 @@ export function customersModule(options: CustomersModuleOptions): {
     options.organizationDetailsPort,
     authorityService,
     options.personalOrganizationPort,
+    options.organizationRoleReadPort,
+    options.customerAccountCommandPort,
   );
   const deletionService = new CustomerDeletionService(
     options.customerAccountReadPort,
-    options.customerAccountLifecycleWritePort,
+    options.customerAccountCommandPort,
     options.personalOrganizationPort,
     authorityService,
+    options.addressServicePort,
+    options.resolveDeletionRetentionDays,
+    addressBookRetirement,
+    options.cartAnonymizationPort,
+    options.emailDeliveryAnonymizationPort,
     {
-      destroyAllForCustomer: (customerAccountId) =>
-        options.sessionService.destroyAllForCustomer(customerAccountId),
+      redaction: options.auditRedactionService,
+      addressReads: options.addressReadPort,
+      retiredAddressBook: addressBookRetirement,
     },
   );
   const presenceService = new CustomerPresenceService(
@@ -279,23 +355,27 @@ export function customersModule(options: CustomersModuleOptions): {
     await registerCustomersRegisterRoutes(app, { registrationService });
     await registerCustomersSelfRoutes(app, {
       accounts: options.customerAccountReadPort,
+      organizationRoles: options.organizationRoleReadPort,
+      organizationPermissions: options.organizationPermissionPort,
       requireCustomer: options.requireCustomer,
       resolveCustomerActor: options.resolveCustomerActor,
       customerAuthService,
       orderList: options.orderList,
       rfqService: options.rfqService,
-      customerAddressService,
       customerDefaultsService,
+      preferences: options.customerAccountPreferencePort,
     });
     await registerCustomersAdminRoutes(app, {
       accounts: options.customerAccountReadPort,
-      accountWrites: options.customerAccountLifecycleWritePort,
+      organizationRoles: options.organizationRoleReadPort,
+      accountWrites: options.customerAccountCommandPort,
       requireAdmin: options.requireAdmin,
       resolveModerationActor: options.resolveModerationActor,
       moderationService,
       queryService,
       orgAssignmentService,
-      addressService: customerAddressService,
+      organizationAddresses: options.addressReadPort,
+      addressBookRetirement,
       cartQueryService: options.cartQueryPort,
       orderList: options.orderList,
       rfqService: options.rfqService,
@@ -305,14 +385,16 @@ export function customersModule(options: CustomersModuleOptions): {
       presenceService,
       passwordResetService,
       mailer: options.mailer,
+      ...(options.templateEmail ? { templateEmail: options.templateEmail } : {}),
       auditLogService: options.auditLogService,
       storefrontBaseUrl: options.storefrontBaseUrl,
+      ...(options.linkChannel ? { linkChannel: options.linkChannel } : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
     });
   };
 
   return {
     plugin,
-    handle: () => ({ registrationService, anonymizationSweepWorker, authorityService }),
+    handle: () => ({ registrationService, anonymizationSweepWorker, addressBookRetirement, authorityService }),
   };
 }

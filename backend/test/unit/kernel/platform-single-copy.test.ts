@@ -348,7 +348,7 @@ describe('the platform is one copy (feature 080, the relocation)', () => {
   // than the assertion relaxed: it is the whole point of this file that the
   // count is exact, and a `toBeGreaterThan` here would make the next real
   // duplication invisible.
-  it('shares 56 values across the five published subpaths, which is every one still spelled twice', () => {
+  it('shares 62 values across the five published subpaths, which is every one still spelled twice', () => {
     // Not a target and not a floor somebody chose: it opened at **57**, the
     // number the superseded `host-package-copy.test.ts` measured as *distinct*
     // over this same population, and it is here so that the inversion is visible
@@ -391,6 +391,42 @@ describe('the platform is one copy (feature 080, the relocation)', () => {
     // own accounts — `AuthenticationAttemptThrottle`, `addressOrigin`,
     // `ADDRESS_POLICY` and `ACCOUNT_POLICY`. Its two numeric constants are
     // primitives and carry no identity, so they are not counted.
+    // **56 -> 57 is the same event, on `./tenancy`:** it gained
+    // `withSystemScopeActingFor` (feature 163, S-W2) — a worker's system scope
+    // acting for the admin who queued the work — and the application's tenancy
+    // shim forwards the barrel, so the name is comparable from its first day.
+    // **57 -> 62 is the same event, on `./tenancy`:** issue #305 published the
+    // derived-scope readers a module needs once a sales representative's reach
+    // is a complement — `orgScopeWhere`, `orgScopeSql`, `reachesNoOrganization`,
+    // `assignedOrganizationIdsForRanking` and `orgConstraintForAdminScope`.
+    // **62 -> 63 is the same event, on `./tenancy`:** issue #955 Phase 2
+    // replaced the synchronous `isOrgInScope` / `ruleVisibleForScope` with the
+    // async `orgInScope` / `ruleInScope` (two out, two in) and added
+    // `orgScopeTest`, the synchronous predicate a caller takes once.
+    // **63 -> 72 is the same event, on `./kernel`:** declared extension columns
+    // (`specs/178-extensible-columns/`) published `defineColumnExtension`, the
+    // two Zod schema builders, `extensionColumns` and its five errors.
+    // **72 -> 81 is the same event, on `./commands`:** command hooks
+    // (`specs/176-command-hooks-outbox/` P2) published `CommandHookRefusal`,
+    // `currentCommandHookOrigin` and the seven composition refusals; the other
+    // new names are types and carry no identity.
+    // **81 -> 82 is the same event, on `./commands`:** the command outbox
+    // (`specs/176-command-hooks-outbox/` P3) published `PermanentOutboxFailure`.
+    // **82 -> 83 is the same event, on `./kernel`:** issue #185 published
+    // `configuredAdminBaseUrl`, the one reader of the platform-owned
+    // `ADMIN_BASE_URL`.
+    // **83 -> 84 is the same event, on `./kernel`:** issue #1096 published
+    // `subscribeWhenReady`, how a cross-process cache subscriber waits out the
+    // ioredis handshake; `HandshakeAwareSubscriber` is a type and carries no
+    // identity.
+    // **84 -> 94 is the same event, on `./commands`:** command middleware
+    // (`specs/189-command-middleware/` P1) published `CommandRefusedError`,
+    // `currentCommandMiddlewareOrigin` and the eight composition refusals; the
+    // handler and outcome shapes are types and carry no identity.
+    // **94 -> 95 is the same event, on `./kernel`:** side-table extensions
+    // (`specs/187-side-table-extensions/` B1) published `lazyEntityExtensionReads`,
+    // how a host read port holds `entityExtensionReads`; `EntityExtensionReads`
+    // and `EntityExtensionLoaderEntry` are types and carry no identity.
     //
     // It is summed over the **five published** subpaths and not over every
     // comparison, which is what preserves that provenance: no host-internal
@@ -401,7 +437,7 @@ describe('the platform is one copy (feature 080, the relocation)', () => {
     const total = comparisons
       .filter((entry) => published.has(entry.subpath))
       .reduce((sum, entry) => sum + entry.shared.length, 0);
-    expect(total).toBe(56);
+    expect(total).toBe(95);
   });
 
   /**

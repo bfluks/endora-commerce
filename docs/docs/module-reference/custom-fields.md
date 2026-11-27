@@ -11,12 +11,12 @@ description: "Everything the `custom_fields` module's manifest declares: permiss
 
 # `custom_fields` — module reference
 
-Rendered from the module's own manifest, and from nothing written by hand. Nobody has written a page about what this module *does* yet; the [module map](../modules/module-map.generated.md) lists every module the platform composes.
+Rendered from the module's own manifest, and from nothing written by hand. What the module *does* is [its own page](../modules/custom_fields.md).
 
 | | |
 | --- | --- |
 | Module id | `custom_fields` |
-| Name | Custom Fields |
+| Name | Custom fields |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-custom-fields` |
 | Licence | `MIT` |
@@ -29,6 +29,7 @@ Rendered from the module's own manifest, and from nothing written by hand. Nobod
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `_i18n` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
 ## Permissions
@@ -42,6 +43,7 @@ Rendered from the module's own manifest, and from nothing written by hand. Nobod
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-custom-field` | `/custom-fields/new` | `custom_fields:write` |
 | `open-custom-fields` | `/custom-fields` | `custom_fields:read` |
 
 ## Settings

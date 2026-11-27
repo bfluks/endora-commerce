@@ -97,7 +97,7 @@ describe('permissionless admin routes, at runtime (issue #141)', () => {
       firstName: 'No',
       lastName: 'Role',
     });
-    await em.persistAndFlush(account);
+    await em.persist(account).flush();
     ADMIN_COOKIES[NO_ROLE] = { adminUserId: account.id };
   });
 
@@ -107,7 +107,13 @@ describe('permissionless admin routes, at runtime (issue #141)', () => {
   });
 
   it('every mounted admin route is known to the static reader, and only listed ones answer without a permission', async () => {
-    const document = (await h.app.inject({ method: 'GET', url: '/api/v1/_openapi.json' })).json() as {
+    const document = (
+      await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/_openapi.json',
+        cookies: { b2b_session: 'stub-admin-session' },
+      })
+    ).json() as {
       paths: Record<string, Record<string, unknown>>;
     };
     const mounted: Array<{ key: string; method: string; url: string }> = [];
@@ -281,7 +287,7 @@ describe('permissionless admin routes, at runtime (issue #141)', () => {
         adminRoleId: (role.json() as { data: { id: string } }).data.id,
         status: 'active',
       });
-      await em.persistAndFlush(account);
+      await em.persist(account).flush();
       const cookie = `stub-runtime-crm-writer-${Date.now()}`;
       ADMIN_COOKIES[cookie] = { adminUserId: account.id };
       try {

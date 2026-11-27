@@ -183,7 +183,10 @@ describe('seo declares its contributions beside its settings', () => {
   });
 
   it('every contribution is narrowed to one setting: none renders beside a setting of another module', () => {
-    for (const entry of seo.contributions.zones ?? []) {
+    // Only the Settings screen's zone: the product editor's SEO link (feature 163) is not a setting row.
+    const settingRows = (seo.contributions.zones ?? []).filter((entry) => entry.zone === 'settings.setting.after');
+    expect(settingRows.length).toBeGreaterThan(0);
+    for (const entry of settingRows) {
       expect(typeof entry.match?.['settingCode']).toBe('string');
     }
   });
@@ -430,7 +433,7 @@ describe('the robots.txt preview', () => {
     const warning = notice(container, 'storefront-outdated') as HTMLElement;
     // It says what is known — not confirmed — rather than what is inferred.
     expect(warning.textContent).toContain('did not confirm');
-    expect(warning.textContent).toContain('may run an older version');
+    expect(warning.textContent).toContain('may need an update');
     const block = file(container) as HTMLElement;
     expect(block.textContent).toBe(BASE);
     expect(warning.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

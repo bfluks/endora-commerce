@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AdminRole, AdminUser, Organization, OrganizationSalesRepAssignment } from '../../helpers/package-entities.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -40,6 +41,7 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
   let repCookie: string;
   let assignedOrgId: string;
   let foreignOrgId: string;
+  const OTHER_REP_ID = randomUUID();
 
   const orders: Record<string, string> = {};
   const returnCases: Record<string, string> = {};
@@ -129,7 +131,7 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
     } else {
       role.permissions = Array.from(new Set([...role.permissions, ...grants]));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
 
     const rep = em.create(AdminUser, {
       email: `child-scope-rep-${stamp}@audit.local`,
@@ -140,16 +142,19 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
     });
     const assigned = newOrganization(em, 'Child scope assigned org', 'A');
     const foreign = newOrganization(em, 'Child scope foreign org', 'F');
-    await em.persistAndFlush([rep, assigned, foreign]);
+    await em.persist([rep, assigned, foreign]).flush();
     assignedOrgId = assigned.id;
     foreignOrgId = foreign.id;
 
-    await em.persistAndFlush(
+    await em.persist([
       em.create(OrganizationSalesRepAssignment, {
         organizationId: assignedOrgId,
         adminUserId: rep.id,
       }),
-    );
+      // #305 — the foreign organization is another representative's: an
+      // unassigned organization is in every representative's reach.
+      em.create(OrganizationSalesRepAssignment, { organizationId: foreignOrgId, adminUserId: OTHER_REP_ID }),
+    ]).flush();
 
     // One pair per route, so no assertion depends on a row an earlier assertion
     // created (the retry route writes).
@@ -166,13 +171,13 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
     const rows = keys.map((key) =>
       newOrder(em, key.startsWith('own') ? assignedOrgId : foreignOrgId),
     );
-    await em.persistAndFlush(rows);
+    await em.persist(rows).flush();
     keys.forEach((key, i) => {
       orders[key] = rows[i]!.id;
     });
 
     for (const key of ['ownPayments', 'foreignPayments', 'ownRetry', 'foreignRetry'] as const) {
-      await em.persistAndFlush(
+      await em.persist(
         em.create(Payment, {
           orderId: orders[key]!,
           paymentMethodId,
@@ -184,18 +189,18 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
           currency: 'PLN',
           externalReference: `PSP-REF-${key}-${stamp}`,
         }),
-      );
+      ).flush();
     }
 
     for (const key of ['ownShipments', 'foreignShipments'] as const) {
-      await em.persistAndFlush(
+      await em.persist(
         em.create(Shipment, {
           orderId: orders[key]!,
           deliveryMethodId,
           status: 'success',
           externalReference: `TRACK-${key}-${stamp}`,
         }),
-      );
+      ).flush();
     }
 
     // The second `@OrgScoped` aggregate with `@GlobalEntity` children, and the
@@ -211,7 +216,7 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
         currency: 'PLN',
         submittedAt: new Date(),
       });
-      await em.persistAndFlush(rc);
+      await em.persist(rc).flush();
       returnCases[key] = rc.id;
 
       const shipment = em.create(ReturnShipment, {
@@ -228,7 +233,7 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
         isCustomerVisible: false,
         notifyCustomer: false,
       });
-      await em.persistAndFlush([shipment, comment]);
+      await em.persist([shipment, comment]).flush();
       returnShipments[key] = shipment.id;
     }
 
@@ -237,6 +242,7 @@ describe('Admin child-aggregate routes honour the sales-rep assignment scope', (
   });
 
   afterAll(async () => {
+    await h.em().getConnection().execute('delete from organization_sales_rep_assignments where admin_user_id = ?', [OTHER_REP_ID]);
     delete ADMIN_COOKIES[repCookie];
     await teardownBackendServer(h);
   });

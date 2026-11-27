@@ -8,11 +8,118 @@ home for these rules, so never restate them in `AGENTS.md` or in a tool-specific
 All user-facing strings ship in **both `en` and `pl`**; a static CI check rejects hard-coded
 literals in the admin SPA (`pnpm --filter backend run i18n:hardcoded`, in the `quality` job since
 issue #116 — before that it was cited here while running nowhere). It compares the tree to
-`HARDCODED_STRINGS_BASELINE`, a **per-file two-way ratchet** over the 274 pre-existing findings: a
+`HARDCODED_STRINGS_BASELINE`, a **per-file two-way ratchet** over the pre-existing findings: a
 new hard-coded string fails, and so does a baseline number left standing after the strings under it
 were translated. Never raise a number to make the build pass — add the key. Run
 `pnpm --filter backend run i18n:hardcoded -- --strict` to see the whole remaining debt, or pass one
 path while draining a screen.
+
+**The admin walk reads four shapes since issue #1316**, which re-measured its ledger rather than
+draining it: **`jsx-text`** — JSX text that is not a code token, where a single capitalised word
+(`Delete`, `Inactive`, `Re-activate`) is a label and not a token, while a lower-case, all-capitals,
+camel-cased or `_`/`.`/`/`-bearing word still is; **`jsx-attr`** — the visible attributes and every
+prop named for copy (`description`, `label`, `emptyLabel`, …), read through `{…}`, conditionals and
+fallbacks as the storefront's are; **`jsx-expression`** — a literal rendered as a JSX child,
+`{error ?? 'Channel not found.'}`; and **`setter-literal`** — prose or a one-word label handed to a
+`useState` setter, `setError('Delete failed.')`, while a state value (`setStatus('idle')`) is not.
+A template is judged with each substitution read as a word, so `select-${id}` is a token and
+`Remove ${name}` is copy.
+
+**Issue #1433 added the fallbacks**, re-measuring the ledger again: **`copy-property`** — a literal
+under a property, default prop or variable named for copy (`confirm({ title: 'Delete?' })`, an
+options or Puck field table's `label`, `{ label = 'Drag a file here' }`,
+`const emptyMessage = props.emptyMessage ?? 'No rows.'`), and the other prose or one-word values of
+an object one of whose values that reported, which is a component's `DEFAULT_LABELS`; and
+**`fallback-literal`** — prose or a one-word label handed to an error helper (a callee named for an
+error or a message, `formatError(err, 'Save failed.')`), and a prose literal kept behind `??` / `||`
+that nothing else claimed, outside a diagnostic, a `throw` and a comparison. Still not seen: a word
+or sentence passed to any other call (`toast('Saved')`), a constant whose name says nothing
+(`const unit = 'pcs'`), and a one-word `??` fallback (`status ?? 'Draft'`), which is as often a state
+value as a label.
+
+**The kit's own words come from the `core` bundle** (`packages/modules/_i18n/i18n/{en,pl}.json`,
+through `useTranslation('core')`), never from an English default in the component: a caller that
+passes no `labels` / `placeholder` / `ariaLabel` gets the operator's language, and a caller's prop
+still wins. A kit default written as an English literal is what made every rule editor and picker
+English for a Polish operator until issue #1433.
+
+**An enum value is a code, and an admin screen shows its label** (issue #1434). A status, a kind or
+an actor type arrives as `Pending`, `rejected_by_org_admin` or `org_admin`. The module that owns
+the screen declares the vocabulary once, in `src/admin/lib/labels.ts`, as
+`defineEnumLabels({ value: 'full.catalogue.key', … })` from `@endora-commerce/admin-kit/lib`. The
+screen renders `labels.label(t, value)`, and a filter takes `labels.options(t)`. The helper fixes two
+rules for every module: a value the map does not declare is shown as itself, never as a
+missing-key placeholder, and no value is the dash. Type the map over the published union
+(`defineEnumLabels<RfqStatus>(…)`) where `@endora-commerce/contracts` has one, so a new value is
+a type error until it has a label. A screen showing another module's records still owns the copy
+(the customer detail labels quote request statuses from its own bundle), and a vocabulary the
+operator configures, such as order statuses, is read from the name the API serves. The root
+`eslint.config.js` refuses `{x.status}`, `{x.kind}`, `{x.action}` and the like as JSX text in admin
+sources. The selector works on syntax, not types. A site that is not an enum carries an
+`eslint-disable-next-line` that says why, and a site that is debt names the issue that will fix it.
+
+**A page description is opt-in, one line and at most 80 characters** (issue #1436, UX audit
+2026-11-17, DS-02). `PageHeader`'s `description` is clamped to one line and is written only when
+it says something the screen does not already show — a code, a scope, a count nowhere else on the
+page, a state. It never restates the title (*"Orders" — "View and manage customer orders"*), never
+describes the controls below it (*"Choose the type, the currency and the sales channels"* above a
+form holding exactly those fields), and never speaks the implementation (*"Meilisearch"*,
+*"fan-out"*, a table name, a permission code). Explanation the operator needs once — a precedence
+rule, a consequence of deleting — goes to `help`, a ⓘ beside the title that is read when asked
+for. When a description is cut, its key is deleted from **both** bundles in the same change; a
+key left behind with no reader is copy a translator keeps paying for. The same budget holds for
+`FormField`'s `hint`, which is clamped to one line by the same reasoning; its `help` takes the rest.
+
+**The budget is a table, and it has an instrument** (issue #1451, DS-23; DEC-01 *"the rule now,
+the check after the first text pass"*). Measured in characters of the **English** bundle:
+`*.page.description` and `*.subtitle` ≤ 80, `*.hint` ≤ 80; text over 80 moves to `help` (the
+`HelpTip` ⓘ popover), which is capped at 280 — anything longer goes to the module's docs, linked.
+`settingLabels.*.description` ≤ 120, the full explanation linked from the docs. A setting's description
+**never falls back to another language** (issue #1522): the Settings screen shows the
+administrator's language or nothing, and the manifest's English only to an English reader, so a
+module that declares settings ships `settingLabels.<code>.name` and `.description` in both
+bundles. A name still falls back, because the row cannot be found without one. Only English
+is measured because it is the source language: the Polish is rewritten from it in the same
+change, and runs longer than its source by a margin no author can remove. `pnpm --filter backend
+run check:text-budget` holds it as a two-way ratchet over the copy that stood when it landed
+(`TEXT_BUDGET_BASELINE`): a new over-budget key fails, a ledgered key may not grow, and an entry
+whose copy was shortened or removed fails until it is re-measured with `--print-baseline` and
+lowered or deleted.
+
+**The storefront is in the same run since issue #85**, with its own ledger,
+`STOREFRONT_HARDCODED_STRINGS_BASELINE`, ratcheted the same two ways. Its walk is the `storefront`
+workspace member's `.ts` **and** `.tsx` sources (tests, `test/`, `scripts/` and `public/` excepted),
+and it is judged by a strict reading the admin walk does not get, so the admin ledger is unchanged.
+Six finding kinds, each literal reported once, under the first that claims it:
+
+- **`jsx-text`** — any JSX text with a letter in it, single words included (`Koszyk`, `Cart`);
+  symbols, digits and entities carry none, and `<code>`, `<kbd>`, `<samp>`, `<script>`, `<style>`
+  and SVG `<text>`/`<tspan>` are exempt.
+- **`jsx-attr`** — a visible attribute (`title`, `alt`, `placeholder`, `label`, the text-bearing
+  `aria-*`, and a component prop named for copy: `removeLabel`, `cardHeading`), read through
+  `{…}`: parentheses, both branches of a conditional, `&&`'s right operand, `||`, `??`, `+` and a
+  template — never through a call, so `{t('key')}` is not a finding.
+- **`jsx-expression`** — a literal rendered as a JSX child, through the same pass-through set:
+  `{ok ? 'Saved' : 'Failed'}`.
+- **`copy-property`** — a literal under a property named for copy (`title`, `description`,
+  `label`, `heading`, `message`, `placeholder`, `text`, `hint`, `body`, … and camelCase names ending
+  in `Label`, `Heading`, `Hint`, `Note`, …), which is Next's `metadata` and every label table; and
+  the other word-shaped values of an object literal one of whose values was reported.
+- **`prose-literal`** — any other literal shaped like prose: a capital and two or more words, or a
+  sentence ending. Not a developer's diagnostic (`console.*`, `new …Error`, `throw`, a
+  `[tag]`-prefixed message), a comparison or `case`, a key, a catalogue call, styling (`className`,
+  `cn()`, `style={{…}}`, a font family), an HTTP header or status body, a URL, MIME type, colour
+  or SVG path.
+- **`polish-literal`** — a literal carrying a Polish diacritic that none of the above claimed.
+
+All six skip a per-language structure — an object literal with two or more locale-keyed properties,
+which is the catalogue's shape. **What stays invisible**, declared rather than discovered: a single
+lower-case word, or a single capitalised one, outside every named context (`const unit = 'szt.'`,
+`const label = 'Uwagi'` rendered later by name); a word reached only through a function argument
+(`format(x, 'Total')`); and copy that arrives from a variable whose initialiser is one of those. A
+storefront string is keyed into **both** locales of one namespace under
+`storefront/lib/i18n/messages/` — `defineMessages` makes a key missing from either a `tsc` error —
+and `storefront/lib/i18n/format.ts` fills its `{name}` placeholders in one pass.
 
 **Read those first two clauses as a rule and an instrument, not as a rule and its enforcement** —
 the semicolon has been doing work it cannot do. The rule is every user-facing string; the
@@ -48,10 +155,10 @@ were constitutional, the amendment is drafted for them in
 and a pointer from the other** — never two statements of one rule.
 
 **Where it already holds, measured rather than assumed.** The **storefront** implements all three
-clauses and is the strongest of the three surfaces: `storefront/lib/i18n/messages.ts` declares
-`const MESSAGES: Record<string, Record<MessageKey, string>>`, and that inner `Record` is **total**
-— so a Polish string missing from the catalogue is a **`tsc` error**, not a runtime fallback, and
-`pnpm -r run typecheck` is the instrument. Its `tForLocale` still carries the runtime chain
+clauses and is the strongest of the three surfaces: every namespace under
+`storefront/lib/i18n/messages/` is written through `defineMessages`, which types the `pl-PL` block
+as exactly the keys of the `en-US` one — so a Polish string missing from the catalogue is a **`tsc`
+error**, not a runtime fallback, and `pnpm -r run typecheck` is the instrument. Its `tForLocale` still carries the runtime chain
 (requested locale → `en-US` → the key), which is what answers a *third* locale nobody has written
 a catalogue for. The **admin** implements the same chain independently in
 `packages/admin-kit/src/i18n/resolver.ts` (`FALLBACK_LANGUAGE = 'en'`, requested → English →
@@ -117,6 +224,69 @@ either — it turns on one derived fact:
 - **There is no reader with a language** — a webhook payload, an integration document. Ship a code
   and **no prose at all**. `webhooks`' `eventType` already does.
 
+**A URL-borne error carries a code, never a sentence** (owner ruling, issues #650 and #745; first
+applied in #742). This paragraph is the one home of that rule. It does not move the boundary
+above: the backend still translates its own responses, because it can resolve the reader's
+language. The question here is what a *consumer* may put into a URL once it holds that response.
+
+- **What travels.** A redirect, or any other URL, carries the API's `error.code`, or the
+  consumer's own code for a refusal it cannot name. It may also carry **typed values**, each one
+  validated when it is read and dropped when it fails: a positive integer (`^[1-9]\d{0,8}$`, the
+  cart's `min=` from #783), a non-negative decimal amount with at most two places (#791), or an
+  ISO 4217 currency code (`^[A-Z]{3}$`). A decimal amount is a **display figure** rounded to two
+  places: the page only formats it and never does arithmetic with it, and it is not a lossless
+  copy of a four-place unit price. A page reads them through the one storefront reader,
+  `storefront/lib/url-typed-values.ts`, never a pattern of its own, so a dropped value leaves the
+  sentence without its figure instead of rendering `NaN` or handing `Intl` a code it throws on.
+- **What never travels.** No free text: no product name, no sentence (the backend's `message` or
+  `detail` included), no e-mail address. A sentence in a query string is text anyone can put on
+  the page as a system message with a crafted link. A name or an address there is personal data
+  in logs and browser history.
+- **Who words it.** The storefront maps a code it knows to a key in its own catalogue, in both
+  shipped languages. It renders a code it does not know as the page's generic failure, never as
+  the raw value. A page whose status line may stay empty can show nothing instead. Quick order
+  does this, and that holds only while every one of its actions falls back to a code the page
+  knows. The Admin UI's pre-auth sign-in screen follows the same rule (#813): `admin-shell`'s
+  `preauth-login-copy.ts` words each federated sign-in code in English only, because that screen
+  has no language source before a session exists.
+- **One named exception: the buyer's own search text.** Quick order's `q=` carries what the buyer
+  typed into its search box (#790). It may, on three conditions: the page caps it where it reads
+  it (120 characters, the search's own limit), it is the buyer's input and nothing else's, and it
+  is shown only as the quoted query or as an input's value — never as a system message.
+- **Data the buyer uploaded stays on the backend, not in the URL or a cookie** (#790; #809, owner
+  ruling of 2026-11-07, replacing the cookie of PR #805). The quick-order preview — the buyer's
+  CSV, rejected raw lines included — is kept by `quick_order` in Redis, one per buyer session,
+  keyed by the Organization, the buyer and a digest of the session, behind `GET` / `PUT` /
+  `DELETE /api/v1/quick-order/preview`; no preview id travels anywhere. It holds what the import
+  reads (`quick_order.import_max_rows`), the rows past that limit as one count; a preview grown
+  past it from search, or one over the 2 MiB body cap, is refused in words, never written and
+  never cut short. It expires an hour after its last write — a read does not
+  extend it — and an action that finds it gone tells the buyer to paste the list again. It is
+  dropped on a successful build and on sign-out; an expired session can no longer name it, so its
+  TTL ends it. The cookie's budget was nginx's default header buffers; nothing the storefront
+  writes depends on them now.
+- **Rejected: a short-lived error cookie.** It is per-request state. It puts a `Set-Cookie` on
+  server-rendered redirects, which hurts caching (Principle VII). And it would still ship the
+  backend's sentence, so it adds a mechanism without solving the problem (Principle IV).
+
+There are two instruments. `storefront/test/url-errors/no-sentence-in-url.test.ts` (from #783)
+refuses an `encodeURIComponent`-wrapped value after `error=`, `reason=`, `couponError=`,
+`problem=` or one of the typed figures beside them (#791) in any source under `storefront/app/`; its list of pages not yet swept is two-way and only shrinks.
+`storefront/test/url-errors/no-free-text-in-url.test.ts` (from #790) collects every query
+parameter the storefront builds from a value — a template, `encodeURIComponent`, a
+`URLSearchParams` key or a `.set()` — in `app/`, `components/` and `lib/` (not `lib/api/` or
+`lib/dictionary/`, which address the backend), and refuses a name not on its allow-list; its list
+of known free-text sites is two-way and only shrinks. Both bounds are declared, not discovered.
+The allow-list is **by name**: it is a promise about a parameter's value, not a proof. And a code
+built into a template (`?error=${code}`) is **not** trusted by its name (#810): the net reads the
+expression and accepts a vocabulary call (`failureCode(`, `signInErrorParam(` and the per-page
+code mappers), a literal or a choice between literals, or an identifier on its short
+`CODE_IN_TEMPLATE` list, each entry read and confirmed to be typed as a closed code union. That
+proof is textual — a listed identifier is only as good as the type it was read to have, and a
+code built with `' +` concatenation is refused outright. The per-page tests beside them are the
+evidence that a crafted value never reaches the screen; the free-text net also holds that no
+scanned source but the reader carries a typed value's pattern.
+
 **Four kinds of string leave the backend and only the first is in scope**, which is the
 distinction that makes the question answerable: *platform prose* a developer wrote (a bundle,
 `en` + `pl`); *operator content* the shop wrote (per-language columns — a category name, a
@@ -124,6 +294,20 @@ transactional-email body — and never a bundle); a *machine token* (`eventType`
 status — never translated); and *third-party text* passed through verbatim (a vendor's failure
 detail — never translated, and wrapping it is a different decision). Sweeping these together is
 how "should the backend hold translations" becomes unanswerable.
+
+**Manifest prose is platform prose, and a seeded row is too until an operator edits it** (issue
+#1809). A manifest's English — the module's `name`, `description` and `activation.reason`, an
+e-mail's `name` and `description` — reaches the admin in an HTTP response, so the backend
+translates it from the declaring module's own bundle and keeps the manifest's sentence as the
+fallback: `module.name`, `module.description`, `module.nonDeactivatableReason`, and
+`transactionalEmails.<code>.name` / `.description` / `.reason` (the reason lives in the sending
+module's registered defaults). The English entry repeats the manifest's sentence, and
+`backend/test/unit/_i18n/manifest-prose-bundles.test.ts` holds the two equal and the Polish one
+present for every registered module. A seeded row with one text column — a system CMS hook — is
+translated on read only while it still holds the seeded English, from `seededHooks.<code>.*`; once
+an operator changes it, it is operator content and passes through as written. A row that already
+stores per-language names, such as `order_statuses.name`, is operator content from the start: the
+response carries every language and the consumer picks the reader's.
 
 **Classify by where the string is *read*, never by what carries it.** A mechanism-keyed population
 is defined by the presence of the mechanisms somebody enumerated, and they are unbounded:

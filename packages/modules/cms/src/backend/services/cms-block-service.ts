@@ -5,13 +5,18 @@ import {
   type CmsBlockDetail,
   type CmsBlockSummary,
   type CreateCmsBlockRequest,
+  type DuplicateCmsRecordRequest,
   type PatchCmsBlockRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AuditState, CommandBus } from '@endora-commerce/platform/commands';
-import { walkUnknownComponents } from './content-tree-walker.js';
+import { walkAssetIds, walkUnknownComponents } from './content-tree-walker.js';
+import { assertAssetsLinkable, type CmsAssetVisibility } from './linkable-assets.js';
+import { assertAnchors } from './anchor-guard.js';
 import type { CmsReferenceRegistry } from './cms-reference-registry.js';
 import type { CmsContentInvalidator } from './cms-content-invalidator.js';
+import { copyCandidate, copyName, copyPrefix, likeLiteral, pickCopyNumber } from './copy-naming.js';
 
 type BlockRow = {
   id: string;
@@ -60,6 +65,8 @@ export class CmsBlockService {
     private readonly knownComponentNames: () => Iterable<string>,
     private readonly references: CmsReferenceRegistry,
     private readonly invalidator?: CmsContentInvalidator,
+    /** Issue #544 — asked before a save stores an asset id the block did not already hold. */
+    private readonly assets?: CmsAssetVisibility,
   ) {}
 
   /** What a block change reaches is `CmsContentInvalidator.blocksChanged`'s to say. */
@@ -150,6 +157,97 @@ export class CmsBlockService {
     return this.get(id);
   }
 
+  /**
+   * Issue #1495 (UX audit CONTENT-13, DEC-17) — a copy of a block, as one
+   * `cms_block.duplicate` Command audited against the **copy**: every
+   * language's tree byte for byte, the languages, the description, `active` and
+   * the channel set, under a new code and at version 1.
+   * Its hook attachments are not copied: the copy would render beside the
+   * original at once. A copied `active` is safe, since nothing embeds the new code.
+   *
+   * The code is the source's with the lowest free `-copy`, `-copy-2`, … suffix,
+   * free meaning held by no block in any channel, so the answer does not depend
+   * on the scope. The taken set is read under a transaction lock, so two
+   * duplicates of one block get `-copy` and `-copy-2` rather than a conflict;
+   * `assertCodeAvailable` still runs after the write and is the authority. The
+   * content checks of a content save do not run: the tree is a stored row's
+   * that already passed them.
+   */
+  async duplicate(sourceId: string, input: DuplicateCmsRecordRequest): Promise<CmsBlockDetail> {
+    if (!isUuidShape(sourceId)) {
+      throw new HttpError(404, ERROR_CODES.CMS_BLOCK_NOT_FOUND, 'CMS Block not found.');
+    }
+    const id = randomUUID();
+    let code: string | null = null;
+    await this.commandBus.run<void>({
+      action: 'cms_block.duplicate',
+      objectType: BLOCK_OBJECT_TYPE,
+      objectId: id,
+      run: async ({ em: tx }) => {
+        await tx.execute("select pg_advisory_xact_lock(hashtext('cms_blocks.code'))");
+        const source = await this.findRow(sourceId, tx);
+        if (!source) throw new HttpError(404, ERROR_CODES.CMS_BLOCK_NOT_FOUND, 'CMS Block not found.');
+        const n = pickCopyNumber([source.code], await this.takenCodes(tx, source.code));
+        if (n === null) {
+          throw new HttpError(
+            409,
+            ERROR_CODES.CMS_CODE_CONFLICT,
+            `Could not allocate a free CMS Block code derived from "${source.code}".`,
+          );
+        }
+        const channelIds = await this.channelIdsFor(sourceId, tx);
+        const now = new Date();
+        const copy: BlockRow = {
+          ...source,
+          id,
+          name: copyName(source.name, input.name),
+          code: copyCandidate(source.code, n),
+          version: 1,
+          created_at: now,
+          updated_at: now,
+        };
+        await tx.execute(
+          `insert into cms_blocks
+            (id, name, code, active, description, content, languages, version, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, 1, ?, ?)`,
+          [
+            id,
+            copy.name,
+            copy.code,
+            copy.active,
+            copy.description,
+            JSON.stringify({ languages: source.content.languages ?? {} }),
+            JSON.stringify(copy.languages),
+            now,
+            now,
+          ],
+        );
+        await this.replaceChannelScope(tx, id, channelIds, copy.code);
+        await this.assertCodeAvailable(tx, copy.code, channelIds, id);
+        code = copy.code;
+        return {
+          result: undefined,
+          before: null,
+          after: { ...(await this.auditState(tx, copy)), sourceBlockId: sourceId },
+        };
+      },
+    });
+    if (code) await this.invalidateForBlockCodes([code]);
+    return this.get(id);
+  }
+
+  /** Every code a block holds, its own or a channel's, that a copy of `base` could collide with — one query. */
+  private async takenCodes(em: EntityManager, base: string): Promise<Set<string>> {
+    const pattern = `${likeLiteral(copyPrefix(base))}%`;
+    const rows = (await em.execute(
+      `select code as value from cms_blocks where code like ?
+       union
+       select code as value from cms_block_sales_channels where code like ?`,
+      [pattern, pattern],
+    )) as Array<{ value: string }>;
+    return new Set(rows.map((row) => row.value));
+  }
+
   async get(id: string): Promise<CmsBlockDetail> {
     const row = await this.findRow(id);
     if (!row) throw new HttpError(404, ERROR_CODES.CMS_BLOCK_NOT_FOUND, 'CMS Block not found.');
@@ -227,6 +325,9 @@ export class CmsBlockService {
         const row = await this.findRow(id, tx);
         if (!row) throw new HttpError(404, ERROR_CODES.CMS_BLOCK_NOT_FOUND, 'CMS Block not found.');
         this.assertVersion(row, version);
+        // One anchor names one place in this language's tree (feature 163, R-8).
+        assertAnchors({ [language]: data });
+        await assertAssetsLinkable(this.assets, walkAssetIds(data), walkAssetIds(row.content));
         invalidatedCode = row.code;
 
         const unknown = walkUnknownComponents(data, new Set(this.knownComponentNames()));
@@ -282,6 +383,8 @@ export class CmsBlockService {
   }
 
   private async findRow(id: string, em = this.emFactory()): Promise<BlockRow | null> {
+    // A malformed id names no row; PostgreSQL would answer it with a 500 (issue #781).
+    if (!isUuidShape(id)) return null;
     const rows = (await em.execute('select * from cms_blocks where id = ?', [
       id,
     ])) as BlockRow[];

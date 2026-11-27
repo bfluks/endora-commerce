@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildOrderConfirmationEmail,
   buildOrderConfirmationVariables,
+  resolveOrderConfirmationProse,
 } from './order-confirmation.js';
 import {
   noCarrierShippingLineRenderer,
@@ -105,8 +107,12 @@ describe('buildOrderConfirmationEmail', () => {
     expect(body).toContain('none');
   });
 
-  it('localizes summary labels for pl-PL', () => {
-    const mail = buildOrderConfirmationEmail({ ...input(), language: 'pl-PL' }, renderers);
+  it('localizes summary labels for pl-PL', async () => {
+    const pl = JSON.parse(
+      readFileSync(new URL('../../../i18n/pl.json', import.meta.url), 'utf8'),
+    ) as Record<string, string>;
+    const prose = await resolveOrderConfirmationProse(async (key) => pl[key] ?? `orders.${key}`, 'pl-PL');
+    const mail = buildOrderConfirmationEmail({ ...input(), language: 'pl-PL' }, renderers, prose);
     expect(mail.subject).toContain('Potwierdzenie zamówienia');
     expect(mail.text).toContain('Suma częściowa: 100.00 PLN');
     expect(mail.text).toContain('VAT: 23.00 PLN');
@@ -131,5 +137,24 @@ describe('buildOrderConfirmationVariables', () => {
     expect(order.summaryText).toContain('VAT:');
     expect(order.summaryText).toContain('Razem:');
     expect(order.summaryText).not.toContain('Subtotal:');
+  });
+});
+
+/** Owner ruling of 2026-10-25 (§10.18) — a unit price shows its significant places, up to four. */
+describe('buildOrderConfirmationVariables — unit prices', () => {
+  it('writes a sub-cent unit price at its places and the line value at two', () => {
+    const base = input();
+    const vars = buildOrderConfirmationVariables(
+      { ...base, items: [{ productSnapshot: { sku: 'S', name: 'Screw' }, quantity: 10_000, unitPrice: '0.0125', lineTotal: '153.75' }] },
+      renderers,
+    );
+    const [item] = (vars['order'] as { items: Array<{ unitPrice: string; lineTotal: string }> }).items;
+    expect(item).toMatchObject({ unitPrice: '0.0125 PLN', lineTotal: '153.75 PLN' });
+  });
+
+  it('writes a unit price with zero third and fourth places at two', () => {
+    const vars = buildOrderConfirmationVariables(input(), renderers);
+    const [item] = (vars['order'] as { items: Array<{ unitPrice: string }> }).items;
+    expect(item!.unitPrice).toBe('40.00 PLN');
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { grossFromNetHalfUp } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import type { BackendServerHandle } from '../../helpers/test-server.js';
@@ -78,7 +79,7 @@ export async function seedInvoiceableOrder(
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
 
   const item1 = em.create(OrderItem, {
     orderId: order.id,
@@ -87,7 +88,9 @@ export async function seedInvoiceableOrder(
     quantity: 1,
     unitPrice: '900.00',
     taxRate: lineTaxRate.toFixed(4),
-    lineTotal: '900.00',
+    // Placement stores a line's gross here (issue #417); the invoice prices
+    // the line from `unitPrice × quantity` and never reads it as a net.
+    lineTotal: grossFromNetHalfUp('900.00', lineTaxRate, 'fraction'),
     ...(opts.packagingUnitName
       ? { packagingUnitSnapshot: { name: opts.packagingUnitName, baseQuantity: 1 } }
       : {}),
@@ -96,12 +99,14 @@ export async function seedInvoiceableOrder(
     orderId: order.id,
     productId: randomUUID(),
     productSnapshot: { sku: 'TM-2', name: 'Example Labour Hours', primaryAssetUrl: null },
-    quantity: 27,
-    unitPrice: '170.00',
+    // 53 × 85.00 = 4505.00 net — the reference invoice's 26.5 hours at 170.00,
+    // in the whole quantities an order line holds.
+    quantity: 53,
+    unitPrice: '85.00',
     taxRate: lineTaxRate.toFixed(4),
-    lineTotal: '4505.00',
+    lineTotal: grossFromNetHalfUp('4505.00', lineTaxRate, 'fraction'),
   });
-  await em.persistAndFlush([item1, item2]);
+  await em.persist([item1, item2]).flush();
 
   return { orderId: order.id, salesChannelId, itemIds: [item1.id, item2.id] };
 }

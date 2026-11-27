@@ -7,6 +7,8 @@ import { CreditLimit } from '../entities/credit-limit.entity.js';
 import { CreditLimitReservation } from '../entities/credit-limit-reservation.entity.js';
 import { CreditLimitReturnTopup } from '../entities/credit-limit-return-topup.entity.js';
 import type { CreditTopupResult, OrganizationInheritancePort } from '@endora-commerce/contracts';
+import { compareDecimals, moneySum, isUuidShape } from '@endora-commerce/contracts';
+import { availableCredit, coversAmount, creditAmount } from './credit-money.js';
 
 /**
  * CreditLimitService (T214) — implements the contract documented in
@@ -90,6 +92,7 @@ export class CreditLimitService {
 
   async getForOrganization(organizationId: string): Promise<CreditLimit | null> {
     const em = this.emFactory();
+    if (!isUuidShape(organizationId)) return null;
     const own = await em.findOne(CreditLimit, { organizationId });
     if (own || !this.inheritance) return own;
     // Feature 056 — fall back to the nearest ancestor holding a limit. The owner
@@ -104,9 +107,22 @@ export class CreditLimitService {
     );
   }
 
-  async listAll(): Promise<CreditLimit[]> {
-    const em = this.emFactory();
-    return em.find(CreditLimit, {}, { orderBy: { createdAt: 'desc' } });
+  /**
+   * One page of credit limits, newest grant first, and the total across every
+   * page (issue #1664). `id` breaks a `createdAt` tie, or a page boundary could
+   * repeat a row and skip another. No `limit` reads the whole list.
+   */
+  async listPage(page: { offset: number; limit?: number }): Promise<{ rows: CreditLimit[]; total: number }> {
+    const [rows, total] = await this.emFactory().findAndCount(
+      CreditLimit,
+      {},
+      {
+        orderBy: { createdAt: 'desc', id: 'asc' },
+        offset: page.offset,
+        ...(page.limit === undefined ? {} : { limit: page.limit }),
+      },
+    );
+    return { rows, total };
   }
 
   async listActiveReservations(creditLimitId: string): Promise<CreditLimitReservation[]> {
@@ -144,11 +160,9 @@ export class CreditLimitService {
         const limit = this.#applyGrant(em, input);
         return {
           result: limit,
-          after: {
-            organizationId: input.organizationId,
-            grantedAmount: limit.grantedAmount,
-            currency: input.currency,
-          },
+          // Names, never values (#470, D-288): the amount and the Organization
+          // are the tenant's; the audit log is read without Organization reach.
+          after: { changedFields: ['currency', 'grantedAmount'] },
         };
       },
       event: () => ({
@@ -174,7 +188,7 @@ export class CreditLimitService {
   ): CreditLimit {
     return em.create(CreditLimit, {
       organizationId: input.organizationId,
-      grantedAmount: input.grantedAmount.toFixed(2),
+      grantedAmount: creditAmount(input.grantedAmount),
       currency: input.currency,
       ...(input.grantedByAdminUserId !== undefined
         ? { grantedByAdminUserId: input.grantedByAdminUserId }
@@ -270,13 +284,14 @@ export class CreditLimitService {
       throw new Error('CREDIT_LIMIT_NOT_GRANTED');
     }
     const reservedSum = await this.#sumActiveReservations(em, limit.id);
-    if (!input.allowOverAllocation && input.grantedAmount < reservedSum) {
+    if (!input.allowOverAllocation && compareDecimals(input.grantedAmount, reservedSum) < 0) {
       return { result: { ok: false, code: 'ADJUSTMENT_BELOW_ACTIVE' } };
     }
-    const before = { organizationId: input.organizationId, grantedAmount: limit.grantedAmount };
-    limit.grantedAmount = input.grantedAmount.toFixed(2);
-    const after = { organizationId: input.organizationId, grantedAmount: limit.grantedAmount };
-    return { result: { ok: true, limit }, before, after };
+    const previous = limit.grantedAmount;
+    limit.grantedAmount = creditAmount(input.grantedAmount);
+    // Names, never values (#470): which field changed, not from what to what.
+    const after = { changedFields: previous === limit.grantedAmount ? [] : ['grantedAmount'] };
+    return { result: { ok: true, limit }, after };
   }
 
   /**
@@ -400,25 +415,20 @@ export class CreditLimitService {
     // records `pending_manual` and an operator settles it out of band.
     if (!limit) return { result: { applied: false, alreadyApplied: false } };
 
-    const before = { organizationId: input.organizationId, grantedAmount: limit.grantedAmount };
-    const newAmount = this.#round2(Number(limit.grantedAmount) + input.amount);
-    limit.grantedAmount = newAmount.toFixed(2);
+    const newAmount = Number(moneySum([limit.grantedAmount, input.amount]));
+    limit.grantedAmount = creditAmount(newAmount);
     em.persist(
       em.create(CreditLimitReturnTopup, {
         returnCaseId: input.returnCaseId,
         organizationId: input.organizationId,
-        amount: input.amount.toFixed(2),
+        amount: creditAmount(input.amount),
         currency: input.currency,
       }),
     );
     return {
       result: { applied: true, alreadyApplied: false, availableAmountAfter: newAmount },
-      before,
-      after: {
-        organizationId: input.organizationId,
-        grantedAmount: limit.grantedAmount,
-        returnCaseId: input.returnCaseId,
-      },
+      // Names, never values (#470): the return case is an id, the amount is not recorded.
+      after: { changedFields: ['grantedAmount'], returnCaseId: input.returnCaseId },
     };
   }
 
@@ -479,23 +489,26 @@ export class CreditLimitService {
     if (limit.currency !== input.currency) {
       return { ok: false, code: 'CURRENCY_MISMATCH' as const };
     }
-    const granted = Number(limit.grantedAmount);
     const reservedSum = await this.#sumActiveReservations(em, limit.id);
-    const available = granted - reservedSum;
-    if (available < input.amount) {
-      return { ok: false, code: 'LIMIT_INSUFFICIENT' as const, availableAmount: available };
+    const available = availableCredit(limit.grantedAmount, reservedSum);
+    if (!coversAmount(available, input.amount)) {
+      return { ok: false, code: 'LIMIT_INSUFFICIENT' as const, availableAmount: Number(available) };
     }
     const reservation = em.create(CreditLimitReservation, {
       creditLimitId: limit.id,
       orderId: input.orderId,
       reservingOrganizationId: input.organizationId,
-      amount: input.amount.toFixed(2),
+      amount: creditAmount(input.amount),
       currency: input.currency,
       status: 'active',
     });
-    await em.persistAndFlush(reservation);
+    await em.persist(reservation).flush();
     this.#emitReserved(input);
-    return { ok: true, reservationId: reservation.id, availableAmountAfter: available - input.amount };
+    return {
+      ok: true,
+      reservationId: reservation.id,
+      availableAmountAfter: Number(availableCredit(available, input.amount)),
+    };
   }
 
   /**
@@ -540,27 +553,30 @@ export class CreditLimitService {
       return { ok: false, code: 'CURRENCY_MISMATCH' as const };
     }
 
-    const granted = Number(owner.granted_amount);
     const reservedSum =
       mode === 'shared_pool'
         ? await this.#sumReservationsForLimit(em, owner.id)
         : await this.#sumReservationsForOrg(em, input.organizationId);
-    const available = granted - reservedSum;
-    if (available < input.amount) {
-      return { ok: false, code: 'LIMIT_INSUFFICIENT' as const, availableAmount: available };
+    const available = availableCredit(owner.granted_amount, reservedSum);
+    if (!coversAmount(available, input.amount)) {
+      return { ok: false, code: 'LIMIT_INSUFFICIENT' as const, availableAmount: Number(available) };
     }
 
     const reservation = em.create(CreditLimitReservation, {
       creditLimitId: owner.id,
       orderId: input.orderId,
       reservingOrganizationId: input.organizationId,
-      amount: input.amount.toFixed(2),
+      amount: creditAmount(input.amount),
       currency: input.currency,
       status: 'active',
     });
-    await em.persistAndFlush(reservation);
+    await em.persist(reservation).flush();
     this.#emitReserved(input);
-    return { ok: true, reservationId: reservation.id, availableAmountAfter: available - input.amount };
+    return {
+      ok: true,
+      reservationId: reservation.id,
+      availableAmountAfter: Number(availableCredit(available, input.amount)),
+    };
   }
 
   #emitReserved(input: { organizationId: string; orderId: string; amount: number }): void {
@@ -574,7 +590,7 @@ export class CreditLimitService {
   }
 
   /** Σ active reservations against a credit_limits row (transaction-scoped). */
-  async #sumReservationsForLimit(em: EntityManager, creditLimitId: string): Promise<number> {
+  async #sumReservationsForLimit(em: EntityManager, creditLimitId: string): Promise<string> {
     const rows = (await em.getConnection().execute(
       `select coalesce(sum(amount), 0) as total
          from credit_limit_reservations
@@ -583,7 +599,7 @@ export class CreditLimitService {
       'all',
       em.getTransactionContext(),
     )) as Array<{ total: string | number | null }>;
-    return Number(rows[0]?.total ?? 0);
+    return String(rows[0]?.total ?? '0');
   }
 
   /**
@@ -596,7 +612,7 @@ export class CreditLimitService {
    * `PESSIMISTIC_WRITE` held on the owner's credit row, for a figure `reserve`
    * is handed by its caller and writes onto the reservation row itself.
    */
-  async #sumReservationsForOrg(em: EntityManager, organizationId: string): Promise<number> {
+  async #sumReservationsForOrg(em: EntityManager, organizationId: string): Promise<string> {
     const rows = (await em.getConnection().execute(
       `select coalesce(sum(amount), 0) as total
          from credit_limit_reservations
@@ -605,7 +621,7 @@ export class CreditLimitService {
       'all',
       em.getTransactionContext(),
     )) as Array<{ total: string | number | null }>;
-    return Number(rows[0]?.total ?? 0);
+    return String(rows[0]?.total ?? '0');
   }
 
   async releaseByOrder(input: {
@@ -637,8 +653,8 @@ export class CreditLimitService {
       reservation.releasedReason = input.reason;
       await tx.flush();
 
-      const reservedSum = limit ? await this.#sumActiveReservations(tx, limit.id) : 0;
-      const granted = limit ? Number(limit.grantedAmount) : 0;
+      const reservedSum = limit ? await this.#sumActiveReservations(tx, limit.id) : '0';
+      const granted = limit ? limit.grantedAmount : '0';
 
       this.events.emit('credit_limit.released.v1', {
         eventId: randomUUID(),
@@ -651,14 +667,9 @@ export class CreditLimitService {
       return {
         ok: true,
         reservationId: reservation.id,
-        availableAmountAfter: granted - reservedSum,
+        availableAmountAfter: Number(availableCredit(granted, reservedSum)),
       };
     });
-  }
-
-  /** Two-decimal rounding for a money amount held as a JS number. */
-  #round2(n: number): number {
-    return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
   /**
@@ -674,13 +685,13 @@ export class CreditLimitService {
    * `test/integration/credit_limits/release-reads-its-transaction.test.ts` is
    * that case.
    */
-  async #sumActiveReservations(em: EntityManager, creditLimitId: string): Promise<number> {
+  async #sumActiveReservations(em: EntityManager, creditLimitId: string): Promise<string> {
     const rows = await em.execute<{ total: string | number | null }[]>(
       `select coalesce(sum(amount), 0) as total
        from credit_limit_reservations
        where credit_limit_id = ? and status = 'active'`,
       [creditLimitId],
     );
-    return Number(rows[0]?.total ?? 0);
+    return String(rows[0]?.total ?? '0');
   }
 }

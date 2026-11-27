@@ -202,6 +202,35 @@ export const SettingValueByChannelSchema = z.object({
   updatedAt: z.iso.datetime(),
 });
 
+/**
+ * Issue #930 — the module that declared a setting says that what is stored is
+ * not what is in force, so the Settings screen does not show a setting as "on"
+ * while it does nothing. `code` is a token the screen looks up in the owner's
+ * bundle (`settingLabels.<setting code>.notice.<code>`); `message` is the
+ * English sentence it falls back to.
+ */
+export const SettingNoticeSchema = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+});
+export type SettingNotice = z.infer<typeof SettingNoticeSchema>;
+
+/**
+ * Issue #349, E-349-1 — the module that declared a setting says what writing
+ * `whenValue` would do, so the Settings screen asks before it saves that value:
+ * switching `mfa.admin.totp_enforced` on signs out every administrator without
+ * a second factor. `code` is a token the screen looks up in the owner's bundle
+ * (`settingLabels.<setting code>.confirmation.<code>`), interpolated with
+ * `params`; `message` is the English sentence it falls back to.
+ */
+export const SettingWriteConfirmationSchema = z.object({
+  whenValue: z.unknown(),
+  code: z.string().min(1),
+  message: z.string().min(1),
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+});
+export type SettingWriteConfirmation = z.infer<typeof SettingWriteConfirmationSchema>;
+
 export const SettingDtoSchema = z.object({
   id: z.uuid(),
   code: z.string(),
@@ -269,6 +298,17 @@ export const SettingDtoSchema = z.object({
    * setting the ordinary write path refuses (the audited Command owns it).
    */
   activationControl: z.boolean().optional(),
+  /**
+   * Issue #930 — present only while the owning module says the stored value is
+   * not in force (see {@link SettingNoticeSchema}). Absent otherwise.
+   */
+  notice: SettingNoticeSchema.optional(),
+  /**
+   * Issue #349, E-349-1 — present only while the owning module asks for a
+   * confirmation before a write of `whenValue` (see
+   * {@link SettingWriteConfirmationSchema}). Absent otherwise.
+   */
+  confirmation: SettingWriteConfirmationSchema.optional(),
 });
 export type SettingDto = z.infer<typeof SettingDtoSchema>;
 
@@ -286,6 +326,28 @@ export type SettingGroupDto = z.infer<typeof SettingGroupDtoSchema>;
 export const SettingsListResponseSchema = z.object({
   groups: z.array(SettingGroupDtoSchema),
 });
+export type SettingsListResponse = z.infer<typeof SettingsListResponseSchema>;
+
+/**
+ * A setting group without its settings — the reply to `POST
+ * /api/v1/admin/settings/groups` and `PATCH /api/v1/admin/settings/groups/:code`
+ * (issue #599).
+ */
+export const SettingGroupSummaryDtoSchema = SettingGroupDtoSchema.omit({ settings: true });
+export type SettingGroupSummaryDto = z.infer<typeof SettingGroupSummaryDtoSchema>;
+
+/** One row of `GET /api/v1/admin/settings/groups`: the group, how many settings it holds, and when it last changed. */
+export const SettingGroupRowDtoSchema = SettingGroupSummaryDtoSchema.extend({
+  settingCount: z.number().int().nonnegative(),
+  updatedAt: z.iso.datetime(),
+});
+export type SettingGroupRowDto = z.infer<typeof SettingGroupRowDtoSchema>;
+
+/** `GET /api/v1/admin/settings/groups` — every group, without its settings (issue #599). */
+export const SettingGroupRowsResponseSchema = z.object({
+  groups: z.array(SettingGroupRowDtoSchema),
+});
+export type SettingGroupRowsResponse = z.infer<typeof SettingGroupRowsResponseSchema>;
 
 export const SettingsListQuerySchema = z.object({
   groupCode: z.string().optional(),
@@ -325,6 +387,7 @@ export const GroupUpdateRequestSchema = z.object({
 });
 
 export const SettingDetailResponseSchema = SettingDtoSchema;
+export type SettingDetailResponse = z.infer<typeof SettingDetailResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // (4) Storefront shop-information surface
@@ -333,9 +396,9 @@ export const SettingDetailResponseSchema = SettingDtoSchema;
 /**
  * Public shop / company contact information resolved for the active sales
  * channel. Backs the storefront footer, the 404 "need help?" block and the
- * contact form. Every field is a string; an unset (or not-yet-registered)
- * setting resolves to an empty string so the storefront can decide what to
- * render. The contact-form recipient list is intentionally omitted — it is
+ * contact form. Every text field is a string; an unset (or not-yet-registered)
+ * setting resolves to an empty string (`logoUrl` to `null`, `socialProfiles`
+ * to `[]`) so the storefront can decide what to render. The contact-form recipient list is intentionally omitted — it is
  * an internal routing concern, not public information.
  */
 export const ShopInfoSchema = z.object({
@@ -344,6 +407,13 @@ export const ShopInfoSchema = z.object({
   contactEmail: z.string(),
   supportEmail: z.string(),
   phone: z.string(),
+  /**
+   * The public URL of the asset `shop.logo_asset_id` names, or `null` while it
+   * is unset or unresolvable (feature 163, FR-035).
+   */
+  logoUrl: z.string().nullable(),
+  /** `shop.social_profiles` — `https:` URLs only, for `sameAs` (feature 163, FR-035). */
+  socialProfiles: z.array(z.string()),
 });
 export type ShopInfo = z.infer<typeof ShopInfoSchema>;
 
@@ -412,6 +482,45 @@ export const HomepageConfigResponseSchema = z.object({ data: HomepageConfigSchem
 export type HomepageConfigResponse = z.infer<typeof HomepageConfigResponseSchema>;
 
 // ---------------------------------------------------------------------------
+// Time-zone names, and the reporting time zone (owner decisions 2026-10-27, #465)
+// ---------------------------------------------------------------------------
+
+/**
+ * The reporting time zone: the calendar in which a report counts a day, a
+ * month or any other range of days. A setting of the `analytics` module, so
+ * that no single reporting module owns it — Projects and CRM analytics read
+ * it (#474). An IANA name; default `UTC`. Read it through
+ * {@link ReportingTimeZonePort}, never by code: `analytics` can be switched
+ * off, and a reader then counts in `UTC`.
+ */
+export const ANALYTICS_REPORTING_TIME_ZONE_SETTING = 'analytics.reporting_time_zone';
+
+/**
+ * Container name: `reportingTimeZonePort`. Owner: `analytics`. Gated — a
+ * reader decides `analytics`' presence first and counts in `UTC` without it
+ * (a `degrades-without` edge).
+ */
+export interface ReportingTimeZonePort {
+  /** `analytics.reporting_time_zone`, platform-wide. */
+  timeZone(): Promise<string>;
+}
+
+let knownTimeZones: Set<string> | null = null;
+
+/**
+ * Whether `value` is a time zone the runtime knows — an IANA name from
+ * `Intl.supportedValuesOf('timeZone')`, or `UTC`. A time-zone setting is held
+ * to this on write, because a zone the runtime does not know makes every
+ * calendar computation in it throw.
+ */
+export function isIanaTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value === 'UTC') return true;
+  knownTimeZones ??= new Set(Intl.supportedValuesOf('timeZone'));
+  return knownTimeZones.has(value);
+}
+
+// ---------------------------------------------------------------------------
 // --- ports -----------------------------------------------------------------
 //
 // The in-process **write** surface `settings` publishes (feature 075, Phase P).
@@ -440,6 +549,12 @@ export interface SettingsAdminAuditContext {
  */
 export interface SettingsSetValueResult {
   affectedChannelIds: string[];
+  newVersion: string;
+}
+
+/** What a per-channel reset did: the channels whose own value it removed. */
+export interface SettingsResetValuesResult {
+  resetChannelIds: string[];
   newVersion: string;
 }
 
@@ -475,6 +590,17 @@ export interface SettingsAdminPort {
     expectedVersion: string | null,
     actor: SettingsAdminAuditContext,
   ): Promise<SettingsSetValueResult>;
+  /**
+   * Removes the named channels' own value, so they inherit the platform-wide
+   * value again (issue #1588). The platform-wide value is never touched — that
+   * is a different operation, and an empty subset is refused rather than read
+   * as "all channels".
+   */
+  resetValuesForSubset(
+    code: string,
+    channelCodes: string[],
+    actor: SettingsAdminAuditContext,
+  ): Promise<SettingsResetValuesResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +643,15 @@ export interface SettingWriteValidationInput {
    * this.
    */
   readonly proposedValue: unknown;
+  /**
+   * Every value the setting holds **before** the write: the platform-wide
+   * value in force (the stored global value, else the manifest default) and
+   * each channel's own row. A rule about what a write newly introduces — an
+   * asset id the caller may not see (issue #544) — reads this, so re-saving a
+   * value already stored is not judged as adding it. `settings` always sends
+   * it; absent reads as "nothing is stored".
+   */
+  readonly currentValues?: readonly unknown[];
   /** Every sales channel in the platform, active or not, with its post-write value. */
   readonly projection: readonly SettingWriteChannelProjection[];
   /** Channel ids the write targets; empty for a platform-wide (`scope: 'all'`) write. */
@@ -535,6 +670,76 @@ export interface SettingWriteValidator {
   readonly codes: readonly string[];
   /** Throws an `HttpError` to refuse. Resolving is acceptance. */
   validate(input: SettingWriteValidationInput): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Read notices, contributed by the owning module (issue #930)
+// ---------------------------------------------------------------------------
+
+export interface SettingNoticeInput {
+  readonly code: string;
+  /** The module that declared the setting. */
+  readonly ownerModuleId: string;
+  /**
+   * The platform-wide value in force before any per-channel row: the stored
+   * global value, else the manifest default. `null` for a `secret` setting,
+   * whose value never leaves `settings`.
+   */
+  readonly value: unknown;
+}
+
+export interface SettingNoticeProvider {
+  /** The module contributing the provider — used for the presence filter. */
+  readonly contributorModuleId: string;
+  /** Exact setting codes, for the reason {@link SettingWriteValidator.codes} gives. */
+  readonly codes: readonly string[];
+  /** A notice to show beside the setting, or `null` when there is nothing to say. */
+  notice(input: SettingNoticeInput): Promise<SettingNotice | null>;
+  /**
+   * Issue #349, E-349-1 — what to ask before a write, given the value in force
+   * now, or `null` when there is nothing to ask. Optional: most providers only
+   * comment on what is stored.
+   */
+  confirmation?(input: SettingNoticeInput): Promise<SettingWriteConfirmation | null>;
+}
+
+/**
+ * Container name: `settingNoticeRegistry`. Owner: `settings`. A contribution
+ * seam like {@link SettingWriteValidatorRegistryPort}: pushed into once from a
+ * boot hook, and filtered by contributor presence.
+ */
+export interface SettingNoticeRegistryPort {
+  register(provider: SettingNoticeProvider): void;
+  /** Providers for `code`, filtered by contributor presence. */
+  forCode(code: string): readonly SettingNoticeProvider[];
+  /** The first notice a present provider gives for the setting, or `null`. */
+  noticeFor(input: SettingNoticeInput): Promise<SettingNotice | null>;
+  /** The first write confirmation a present provider gives for the setting, or `null`. */
+  confirmationFor(input: SettingNoticeInput): Promise<SettingWriteConfirmation | null>;
+}
+
+/**
+ * The payload `settings` emits as `settings.value_changed`, after a value
+ * write or reset has committed. In-process and best-effort, like every
+ * EventBus event.
+ */
+export interface SettingsValueChangedPayload {
+  readonly eventId: string;
+  readonly occurredAt: string;
+  readonly settingCode: string;
+  /** Channels whose own row the write set or reset; empty for a platform-wide write. */
+  readonly salesChannelIds: readonly string[];
+  /** Whether the platform-wide value was set or reset. */
+  readonly globalValueUpdated: boolean;
+  readonly valueType: string;
+  /**
+   * Issue #349, E-349-1 — the administrator who made the write, and the id of
+   * the session they made it from, so a consequence that ends other sessions
+   * can spare that one. `null` / absent for a write with no administrator
+   * behind it (a boot reconciler, a seed).
+   */
+  readonly actorAdminUserId?: string | null;
+  readonly actorSessionId?: string | null;
 }
 
 /**

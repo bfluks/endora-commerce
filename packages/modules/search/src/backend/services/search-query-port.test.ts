@@ -25,7 +25,6 @@ const ctx: SearchQueryContext = {
   resolvedChannel: {
     id: '00000000-0000-0000-0000-0000000000c1',
     code: 'pl_retail',
-    isPublic: true,
     defaultCurrency: 'PLN',
     defaultLanguage: 'pl',
   },
@@ -41,6 +40,7 @@ describe('createSearchQueryPort', () => {
   it('hands a successful page back under the `ok` arm', async () => {
     const port = createSearchQueryPort({
       listProducts: async () => page,
+      matchingProductIds: async () => [],
     });
 
     const outcome = await port.listProducts({ limit: 20 }, ctx);
@@ -55,6 +55,7 @@ describe('createSearchQueryPort', () => {
       listProducts: async () => {
         throw new SearchBackendUnavailable('connect ECONNREFUSED 127.0.0.1:7700');
       },
+      matchingProductIds: async () => [],
     });
 
     const outcome = await port.listProducts({ limit: 20 }, ctx);
@@ -73,8 +74,49 @@ describe('createSearchQueryPort', () => {
       listProducts: async () => {
         throw boom;
       },
+      matchingProductIds: async () => [],
     });
 
     await expect(port.listProducts({ limit: 20 }, ctx)).rejects.toBe(boom);
+  });
+
+  // Issue #1326 — the result set's ids, for `catalog`'s facet counts, degrade
+  // the same way and for the same reason as the page does.
+  describe('matchingProductIds', () => {
+    it('hands the ids back under the `ok` arm', async () => {
+      const port = createSearchQueryPort({
+        listProducts: async () => page,
+        matchingProductIds: async () => ['p1', 'p2'],
+      });
+
+      expect(await port.matchingProductIds({ q: 'bearing' }, ctx)).toEqual({ status: 'ok', ids: ['p1', 'p2'] });
+    });
+
+    it('converts SearchBackendUnavailable into the `index-unavailable` arm', async () => {
+      const port = createSearchQueryPort({
+        listProducts: async () => page,
+        matchingProductIds: async () => {
+          throw new SearchBackendUnavailable('connect ECONNREFUSED 127.0.0.1:7700');
+        },
+      });
+
+      const outcome = await port.matchingProductIds({ q: 'bearing' }, ctx);
+
+      expect(outcome.status).toBe('index-unavailable');
+      if (outcome.status !== 'index-unavailable') throw new Error('expected an unavailable outcome');
+      expect(outcome.reason).toContain('ECONNREFUSED');
+    });
+
+    it('lets every other failure through', async () => {
+      const boom = new Error('The search language is not one this channel offers.');
+      const port = createSearchQueryPort({
+        listProducts: async () => page,
+        matchingProductIds: async () => {
+          throw boom;
+        },
+      });
+
+      await expect(port.matchingProductIds({ q: 'bearing' }, ctx)).rejects.toBe(boom);
+    });
   });
 });

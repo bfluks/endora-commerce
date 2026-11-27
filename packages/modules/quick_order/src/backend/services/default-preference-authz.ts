@@ -5,10 +5,13 @@ import type { QuickOrderPreferenceScope } from '@endora-commerce/contracts';
  * Pure authorization for managing default ordering preferences (feature 039,
  * FR-018). The actor's identity + (for a customer-scoped target) the target
  * customer's organization are resolved by the service from the DB; this
- * function only applies the rule, so it is unit-testable.
+ * function only applies the rule, so it is unit-testable. Async since issue
+ * #955 Phase 2: a salesperson's reach is answered on demand.
  *
  *   - Customer        → only their own customer scope.
- *   - Org admin       → own organization scope + customers within that org.
+ *   - Organization administrator (the *Administrator* role, a reserved
+ *     capability — `specs/170-organization-roles/` FR-012)
+ *                     → own organization scope + customers within that org.
  *   - Salesperson     → assigned organizations + customers within them.
  *   - Platform admin  → any scope.
  */
@@ -30,11 +33,11 @@ export interface PreferenceTarget {
  *   organization that customer belongs to (null if none). Ignored for an
  *   organization-scoped target.
  */
-export function canManagePreference(
+export async function canManagePreference(
   actor: PreferenceActor,
   target: PreferenceTarget,
   targetCustomerOrganizationId: string | null,
-): boolean {
+): Promise<boolean> {
   switch (actor.kind) {
     case 'platform_admin':
       return true;
@@ -42,20 +45,40 @@ export function canManagePreference(
     case 'customer':
       return target.scope === 'customer' && target.scopeId === actor.customerAccountId;
 
-    case 'org_admin':
+    case 'administrator':
       if (target.scope === 'organization') return target.scopeId === actor.organizationId;
       return targetCustomerOrganizationId === actor.organizationId;
 
     case 'salesperson':
-      if (target.scope === 'organization') {
-        return actor.assignedOrganizationIds.includes(target.scopeId);
-      }
-      return (
-        targetCustomerOrganizationId !== null &&
-        actor.assignedOrganizationIds.includes(targetCustomerOrganizationId)
-      );
+      if (target.scope === 'organization') return actor.reaches(target.scopeId);
+      return targetCustomerOrganizationId !== null && actor.reaches(targetCustomerOrganizationId);
 
     default:
       return false;
   }
+}
+
+/**
+ * Who may **read** a scope's stored defaults (issue #359): whoever may manage
+ * it, and additionally a customer reading their own Organization's row — the
+ * defaults they inherit, which the storefront names beside "use the
+ * organization default". Writing it stays {@link canManagePreference}'s.
+ *
+ * @param readerOrganizationId the caller's own Organization (null if none).
+ */
+export async function canReadPreference(
+  actor: PreferenceActor,
+  target: PreferenceTarget,
+  targetCustomerOrganizationId: string | null,
+  readerOrganizationId: string | null,
+): Promise<boolean> {
+  if (
+    target.scope === 'organization' &&
+    readerOrganizationId !== null &&
+    readerOrganizationId !== '' &&
+    target.scopeId === readerOrganizationId
+  ) {
+    return true;
+  }
+  return canManagePreference(actor, target, targetCustomerOrganizationId);
 }

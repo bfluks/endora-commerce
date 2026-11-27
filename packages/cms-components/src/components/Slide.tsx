@@ -12,9 +12,10 @@ import {
   DEFAULT_BOX_PROPS,
 } from '../fields/shared-fields.js';
 import { SLIDE_CONTENT_SLOT_EDIT_PROPS } from '../editor/slot-edit-props.js';
+import { ITEM_TAGS_FIELD, itemTagsAttribute } from './carousel/carousel-filter.js';
 
 const SlideRender: PuckComponent<SlideProps> = (props) => {
-  const { content: Content, puck, ...box } = props;
+  const { content: Content, puck, tags, ...box } = props;
   const editing = puck?.isEditing === true;
   const Slot = Content as ComponentType<typeof SLIDE_CONTENT_SLOT_EDIT_PROPS>;
 
@@ -23,6 +24,7 @@ const SlideRender: PuckComponent<SlideProps> = (props) => {
       {...box}
       className={`cmsc-pb-slide cmsc:h-full cmsc:w-full${editing ? ' cmsc-pb-slide--editing' : ''}`}
       {...(editing ? { previewTier: 'desktop' as const } : {})}
+      attributes={itemTagsAttribute(tags)}
     >
       {editing ? (
         <Slot {...SLIDE_CONTENT_SLOT_EDIT_PROPS} />
@@ -40,11 +42,14 @@ const slideConfig: ComponentConfig<SlideProps> = {
       type: 'slot',
       label: 'Content',
       // Row is the layout primitive inside a slide; Column only via Row.
-      disallow: ['cms.Column', 'cms.ContentSlider', 'cms.Slide'],
+      // A Section stands only at the top level of a page (feature 163, FR-000).
+      disallow: ['cms.Column', 'cms.ContentSlider', 'cms.Slide', 'cms.Section', 'cms.SectionGroup'],
     },
     margin: BOX_MARGIN_FIELD,
     padding: BOX_PADDING_FIELD,
     border: BOX_BORDER_FIELD,
+    // Feature 163, T131: tags for the Carousel's filter.
+    tags: ITEM_TAGS_FIELD,
   },
   defaultProps: {
     content: [],

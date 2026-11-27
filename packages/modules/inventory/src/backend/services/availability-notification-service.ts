@@ -3,20 +3,29 @@ import {
   ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
   isProductVisibleTo,
+  scopeLanguageOf,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type CustomerAccountReadPort,
   type EmailMailerPort,
   type ProductAudience,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import {
-  outOfRequestChannel,
-  type SalesChannelMembershipPort,
-} from '@endora-commerce/platform/kernel';
+import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 import { AvailabilityNotification } from '../entities/availability-notification.entity.js';
 import { StockLevel } from '../entities/stock-level.entity.js';
 import type { InventoryTemplateEmailPort } from './low-stock-alert-service.js';
+import { restockDisposition } from './restock-product-state.js';
+import { backInStockNames } from './back-in-stock-names.js';
+import { sendBackInStockEmail } from './back-in-stock-email.js';
+
+/** The (channel, scope language) a subscription is asked and stamped in (issue #696). */
+interface SubscriptionScope {
+  channelId: string;
+  languageCode: string;
+}
 
 export interface SubscribeInput {
   productId: string;
@@ -31,6 +40,14 @@ export interface SubscribeInput {
    * for the same reason. Both storefront routes pass the real one.
    */
   audience?: ProductAudience;
+  /**
+   * Feature 163 — the request's language tag, resolved against the request
+   * channel's languages to the scope language L the availability question is
+   * asked in. Absent: the channel's default language. The storefront routes pass
+   * the channel language the whole `Accept-Language` asks for
+   * (`requestScopeLanguage`, issue #1011), which resolves to itself here.
+   */
+  languageTag?: string | undefined;
 }
 
 export interface AdminListFilter {
@@ -138,18 +155,17 @@ export class AvailabilityNotificationService {
      */
     private readonly customerAccounts: CustomerAccountReadPort,
     /**
-     * `salesChannelMembershipPort` — the sanctioned bridge accessor
-     * (Constitution XII), through which {@link subscribe} asks whether the
-     * request's channel publishes the product at all.
+     * `catalogProductAvailabilityPort`, owned by `catalog` (feature 163) —
+     * through which {@link subscribe} asks whether the product is available at
+     * the request's (channel, language) to the caller now. Membership of the
+     * request channel (Constitution XII) is part of that answer.
      *
      * Required rather than optional, and placed before the two optional
      * transports so a construction site cannot leave it off by accident: an
-     * optional channel gate is a composition that silently answers without one,
-     * which is precisely the state this parameter was added to end. It is a
-     * kernel registration rather than a module's, so it adds no edge to this
-     * module's manifest.
+     * optional gate is a composition that silently answers without one.
+     * `catalog` is a declared dependency of this module already.
      */
-    private readonly channelMembership: SalesChannelMembershipPort,
+    private readonly catalogAvailability: CatalogProductAvailabilityPort,
     private readonly mailer?: EmailMailerPort,
     private readonly templateEmail?: InventoryTemplateEmailPort,
   ) {}
@@ -191,23 +207,21 @@ export class AvailabilityNotificationService {
   }
 
   /**
-   * May this caller acquire this product at all — the two filters every
-   * product acquisition seam owes (issue #227, issue #259).
+   * May this caller acquire this product at all — the question every product
+   * acquisition seam owes (issue #227, issue #259, feature 163).
    *
-   * Both are asked through the shared machinery rather than restated here:
-   * `isProductVisibleTo` is the platform's one answer to "may this audience see
-   * this product", and {@link outOfRequestChannel} is the channel half, which
-   * that predicate says in writing it is not. The channel is read off the
-   * request scope through `salesChannelMembershipPort` — the sanctioned bridge
-   * accessor — and never re-resolved here; outside a request (a worker, a CLI,
-   * a fixture calling the service directly) there is no channel to be out of
-   * and the gate answers `false`.
+   * Inside a request it is `catalog`'s availability answer at the request's
+   * (channel, language) for this audience now: status, publication window,
+   * channel-effective audience and membership of the request channel, read off
+   * the request scope and never re-resolved here. Outside a request (a worker, a
+   * CLI, a fixture calling the service directly) there is no channel to ask
+   * about, and the global audience rule is the whole of it, as before.
    *
    * The caller gets **one** answer for "no", and the reason is the whole point:
-   * the three states this can refuse — the row is not there, the operator
-   * restricted it to another organisation, another channel sells it — must be
-   * one response, or an unauthenticated caller can sort product ids by reading
-   * which refusal came back. The later gates (`PRODUCT_UNMANAGED_STOCK`,
+   * the states this can refuse — the row is not there, the operator restricted
+   * it, another channel sells it, it is switched off or outside its window —
+   * must be one response, or an unauthenticated caller can sort product ids by
+   * reading which refusal came back. The later gates (`PRODUCT_UNMANAGED_STOCK`,
    * `PRODUCT_IN_STOCK`) do discriminate, deliberately and harmlessly: they are
    * reached only for a product this caller may already see in the catalogue,
    * whose existence and stock band that catalogue answers anyway.
@@ -215,9 +229,28 @@ export class AvailabilityNotificationService {
   async #mayAcquire(
     product: Pick<CatalogProductRecord, 'id' | 'visibility' | 'allowedOrganizationIds'>,
     audience: ProductAudience | undefined,
+    scope: SubscriptionScope | null,
   ): Promise<boolean> {
-    if (!isProductVisibleTo(product, audience ?? ANONYMOUS_PRODUCT_AUDIENCE)) return false;
-    return !(await outOfRequestChannel(this.channelMembership, product.id));
+    const who = audience ?? ANONYMOUS_PRODUCT_AUDIENCE;
+    if (scope === null) return isProductVisibleTo(product, who);
+    const available = await this.catalogAvailability.filterAvailable([product.id], {
+      channelId: scope.channelId,
+      languageCode: scope.languageCode,
+      audience: who,
+    });
+    return available.has(product.id);
+  }
+
+  /**
+   * The request's (channel, scope language), or `null` outside a request — read off the
+   * resolved request channel (Constitution XII), never re-resolved. The one answer both the
+   * availability gate above and the stamped subscription (issue #696) take, so the e-mail names
+   * the product in exactly the scope its availability was judged in.
+   */
+  #requestScope(languageTag: string | undefined): SubscriptionScope | null {
+    const channel = currentSalesChannel();
+    if (channel === null) return null;
+    return { channelId: channel.id, languageCode: scopeLanguageOf(channel, languageTag) };
   }
 
   /**
@@ -234,13 +267,14 @@ export class AvailabilityNotificationService {
     // self-service subscription record, not an audited domain-state mutation.
     const em = this.emFactory();
     const product = await this.catalogProducts.findById(input.productId, { liveOnly: true });
+    const scope = this.#requestScope(input.languageTag);
     // Asking to be told when a product returns is an **acquisition**: the
     // caller names a product id they chose, the platform stores a row against
     // it, and answers later with an e-mail naming it. So the two gates every
     // other acquisition seam applies are applied here, and all three states —
     // absent, restricted, sold on another channel — leave through the one
     // refusal below.
-    if (!product || !(await this.#mayAcquire(product, input.audience))) {
+    if (!product || !(await this.#mayAcquire(product, input.audience, scope))) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
     if (!product.manageStock) {
@@ -297,8 +331,13 @@ export class AvailabilityNotificationService {
       ...ownerColumns(owner),
       email: input.email,
       status: 'queued',
+      // Issue #696 — the scope the buyer subscribed in, so the back-in-stock e-mail names the
+      // product as they saw it. Outside a request there is none, and the e-mail says the Global
+      // name.
+      salesChannelId: scope?.channelId ?? null,
+      languageCode: scope?.languageCode ?? null,
     });
-    await em.persistAndFlush(subscription);
+    await em.persist(subscription).flush();
     return subscription;
   }
 
@@ -306,6 +345,13 @@ export class AvailabilityNotificationService {
     // command-coverage-ignore: customer notification opt-out — flips a
     // self-service subscription to cancelled, not an audited domain mutation.
     const em = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(
+        404,
+        'AVAILABILITY_NOTIFICATION_NOT_FOUND',
+        'Subscription not found.',
+      );
+    }
     const row = await em.findOne(AvailabilityNotification, { id });
     if (!row) {
       throw new HttpError(
@@ -332,7 +378,7 @@ export class AvailabilityNotificationService {
     if (filter.status) where['status'] = filter.status;
 
     const [rows, total] = await em.findAndCount(AvailabilityNotification, where, {
-      orderBy: { requestedAt: 'desc' },
+      orderBy: { requestedAt: 'desc', id: 'desc' },
       offset: page * pageSize,
       limit: pageSize,
     });
@@ -354,7 +400,7 @@ export class AvailabilityNotificationService {
       items: rows.map((r) => {
         const p = productById.get(r.productId);
         const productName = p
-          ? p.name['en-US'] ?? Object.values(p.name)[0] ?? p.sku
+          ? p.name || p.sku /* the operator list: Global (FR-031) */
           : '—';
         const email =
           r.email ??
@@ -403,10 +449,27 @@ export class AvailabilityNotificationService {
     const rows = await em.find(AvailabilityNotification, where);
     if (rows.length === 0) return { notified: 0 };
 
+    // The wider read (no `liveOnly`), so a deleted product resolves and is told apart from an
+    // archived or switched-off one.
     const product = await this.catalogProducts.findById(input.productId);
-    const productName = product
-      ? product.name['en-US'] ?? Object.values(product.name)[0] ?? product.sku
-      : 'product';
+    const now = new Date();
+    // Issue #468 — asked once, before any subscriber is mailed.
+    const disposition = restockDisposition(product, now);
+    if (disposition === 'hold') return { notified: 0 };
+    if (disposition === 'cancel') {
+      // The same treatment as a subscriber with no e-mail address below.
+      for (const row of rows) {
+        row.status = 'cancelled';
+        row.notifiedAt = now;
+      }
+      await em.flush();
+      return { notified: 0 };
+    }
+    // Issue #696 — each subscriber is told the product's effective name at the scope they
+    // subscribed in; a subscription with none (written before #696) keeps the Global name.
+    const productNames = product
+      ? await backInStockNames(rows, product, this.catalogAvailability)
+      : new Map<string, string>();
     const customerIds = Array.from(
       new Set(rows.map((r) => r.customerAccountId).filter((id): id is string => typeof id === 'string')),
     );
@@ -415,7 +478,6 @@ export class AvailabilityNotificationService {
       : [];
     const emailById = new Map(customers.map((c) => [c.id, c.email]));
 
-    const now = new Date();
     let notified = 0;
     for (const row of rows) {
       const to = row.email ?? (row.customerAccountId ? emailById.get(row.customerAccountId) : null);
@@ -424,43 +486,22 @@ export class AvailabilityNotificationService {
         row.notifiedAt = now;
         continue;
       }
-      const messageId = `availability:${row.id}`;
-      const meta = {
-        productId: input.productId,
-        variantId: input.variantId ?? null,
-        notificationId: row.id,
-      };
-      let sentViaTemplate = false;
-      if (this.templateEmail) {
-        sentViaTemplate = await this.templateEmail.trySend({
-          code: 'availability_back_in_stock',
+      // Issue #1256 — the template, in the subscription's channel and language.
+      await sendBackInStockEmail(
+        { templateEmail: this.templateEmail, mailer: this.mailer },
+        {
+          notificationId: row.id,
           to,
-          messageId,
-          variables: { product: { name: productName } },
-          meta,
-        });
-      }
-      if (!sentViaTemplate && this.mailer) {
-        const outcome = await this.mailer.send({
-          messageId,
-          to,
-          subject: `Back in stock: ${productName}`,
-          text: `Good news — "${productName}" is available again.`,
-          kind: 'availability_back_in_stock',
-          meta,
-        });
-        // Only the transport's refusal is named here. `logged` (issue #186) is the
-        // console driver saying no mail server is configured: it has already
-        // written the message to the log itself, and the delivery record says so.
-        if (outcome.status === 'suppressed') {
-          // Still marked notified below: the transport's one suppression is an
-          // already-accepted `messageId`, so this subscriber has the message.
-          console.warn('[inventory] the back-in-stock e-mail was not sent', {
+          productName: productNames.get(row.id) ?? 'product',
+          salesChannelId: row.salesChannelId ?? null,
+          languageCode: row.languageCode ?? null,
+          meta: {
+            productId: input.productId,
+            variantId: input.variantId ?? null,
             notificationId: row.id,
-            reason: outcome.reason,
-          });
-        }
-      }
+          },
+        },
+      );
       row.status = 'notified';
       row.notifiedAt = now;
       notified += 1;

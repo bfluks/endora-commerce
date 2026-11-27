@@ -3,7 +3,7 @@ title: Developer guide
 sidebar_position: 3
 ---
 
-# Developer guide — Sales Channels
+# Developer guide — Sales channels
 
 How a backend module integrates with the Sales Channels module: scoping queries by the resolved channel, managing memberships, and reading channel context from request handlers.
 
@@ -24,12 +24,55 @@ app.get('/api/v1/storefront/products', async () => {
 
 Outside the request lifecycle (background jobs, CLI scripts), resolve the `salesChannelResolutionPort` from the container and call `getByCode(code)` or `getSystemDefault()`; type it with `SalesChannelResolutionPort` from `@endora-commerce/platform/kernel`. The `SalesChannelResolverService` class behind it is not published.
 
+## Channel access: routes that must stay open
+
+Every non-admin `/api/v1/*` request is checked against the channel-access rule after its channel is resolved: an anonymous request is accepted only on a channel open to anonymous visitors (`403 SALES_CHANNEL_SIGN_IN_REQUIRED` otherwise), a customer request only on a channel assigned to the customer's Organization (`403 SALES_CHANNEL_NOT_PERMITTED` otherwise). Administrator and API-key requests are not checked. A route of yours is therefore refused on a closed store unless it says otherwise.
+
+A route whose caller is not a shopper of the store — or has to reach it to become one — declares that on the route:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+**Declare it on every provider callback your module receives** — a payment gateway's notification, a carrier's status webhook, a return URL a provider redirects a browser to. Those requests arrive without a session and usually without a storefront channel, so they are anonymous requests on the system-default channel: the moment an operator closes that channel to anonymous visitors, an undeclared callback is refused with `403` and the provider's notifications stop arriving. The same applies to links in e-mails that must work for someone who is not signed in (confirmation, unsubscribe) and to anything a sign-in or registration form needs before the visitor has an account.
+
+Do not declare it on anything that shows or changes a store's catalogue, prices, basket or orders: those are exactly what the rule protects. Individual (B2C) self-registration is deliberately *not* open, because it signs the visitor in at once.
+
+`'open'` skips the access step only. The request is still resolved to a channel (an unknown or inactive channel is still refused), and the route's own guards — `requireCustomer`, `requireAdmin`, a signature check — still run. In this repository the set of open routes is held by `backend/test/contract/sales_channels/channel-access-open-routes.test.ts` against the ledger `backend/test/helpers/channel-access-open-routes.ts`, which gives a reason for each route; adding an open route means adding its ledger entry.
+
+### Checking the rule yourself
+
+A path that creates a customer session outside the shared sign-in routes must refuse before it creates one. Resolve the `salesChannelAccessPort` from the container, typed with `SalesChannelAccessPort` from `@endora-commerce/platform/kernel`:
+
+```ts
+const { salesChannelAccessPort } = ctx.cradle<YourCradle>();
+
+// Throws the 403 SALES_CHANNEL_NOT_PERMITTED refusal, with details.channelCode.
+await salesChannelAccessPort.assertCustomerMayUse(account.organizationId, channel.id);
+
+// Or read the decision, or the channels an Organization may use (cached).
+const decision = await salesChannelAccessPort.decide(actor, channel);
+const permitted = await salesChannelAccessPort.permittedChannelIds(organizationId);
+```
+
+The port is provided by the kernel; it needs no manifest dependency.
+
+### Where assignments live
+
+The assignment is the channel's `organization` membership — the `sales_channel_organizations` bridge — written only through `salesChannelMembershipPort`, which also drops the access cache for the Organization before it reports the change. When the caller passes its transaction's `em`, the drop waits until that transaction's EventBus scope has succeeded — for a Command, its commit — and still runs before the event is dispatched (`EventBus.afterScope`, issue #1926). The per-customer record (`sales_channel_customer_accounts`) takes no part in access: it stays registered as a bridge and is neither read nor written by the rule. Grant access by assigning the customer's Organization, never by writing a per-customer row.
+
 ## Adding a channel-scoped entity to your module
 
 Channel scoping has two layers:
 
 1. **Schema** — the entity gains a many-to-many relationship to `sales_channels` via a new bridge table `sales_channel_<entity>` (composite primary key on both ids, `ON DELETE CASCADE` on both sides). Add the table in your module's next migration.
-2. **Service** — every read path of the entity that should be filtered by channel takes a `salesChannelId` parameter and joins through the bridge table. Every create / update path that lands a new entity calls `bindToDefaultIfEmpty(entityType, entity.id)` on the `salesChannelMembershipPort` after `persistAndFlush` so newly-created entities default to the system-default channel.
+2. **Service** — every read path of the entity that should be filtered by channel takes a `salesChannelId` parameter and joins through the bridge table. Every create / update path that lands a new entity calls `bindToDefaultIfEmpty(entityType, entity.id)` on the `salesChannelMembershipPort` after `persist(entity).flush()` so newly-created entities default to the system-default channel.
 
 Then add the member to the contract's `ChannelMemberEntityTypeSchema` enum, and **declare the bridge from your own module**: export the `{ entityType, table, entityIdColumn }` triple from `src/backend/index.ts` and register it from a boot hook —
 
@@ -74,7 +117,7 @@ Membership add / remove operations are idempotent by construction and do not bum
 
 ## Audit hooks
 
-Every identity change, lifecycle change, and membership change writes one `audit_log_entries` row synchronously inside the same transaction. Action codes live in `@endora-commerce/contracts`:
+Every identity change, lifecycle change, and membership change writes one `audit_log_entries` row synchronously. A membership change made on a caller's transactional `em` records its row on that `em` (`AuditPort.recordWithin`), so a rolled-back caller leaves no entry behind (issue #1926). Action codes live in `@endora-commerce/contracts`:
 
 ```ts
 import { SALES_CHANNEL_AUDIT_ACTIONS } from '@endora-commerce/contracts';
@@ -97,6 +140,38 @@ Use the constants — never hardcode the strings — so a future enum / type ren
 Both drop the shared Redis entry first and the local one second, with the key marked for the whole operation so a concurrent read cannot re-pin the pre-change channel — and so a failed Redis drop leaves reads falling through to PostgreSQL rather than being served the value the invalidation was meant to remove. The `EventBus` is in-process, so a second instance converges through the local layer's 30 s window instead.
 
 Membership lookups go through MikroORM directly (no cache layer); if you need them faster, add a Redis layer keyed by `(entityType, entityId)` with a short TTL — the hooks are already in place.
+
+## Contributing a panel to the channel edit page
+
+The edit page of an existing channel mounts the admin zone `sales_channel.editor.after` below the
+identity form, with the props `{ channelId, saveSession }`. `saveSession` is the page's one Save
+(issue #407, `specs/180-one-save-zone-editors/`): a panel that registers its staged changes with it
+is counted by the form's Save and written after the channel, in zone order, and a panel that does
+not keeps writing on its own — as `inventory`'s warehouse routing does, under an *Applies
+immediately* badge. The create form runs no session.
+
+## Storefront URLs and the language prefix {#storefront-urls}
+
+Every storefront page URL carries the language as its first segment. Never compose one by
+hand — the derivation lives in `@endora-commerce/contracts`:
+
+- `channelUrlLanguages(channel)` / `channelUrlLanguageAliases(channel)` — the derived
+  prefix of every channel language (and split aliases). `channel` is any
+  `ChannelUrlFacts` (`languages`, `defaultLanguage`, `prefixDefaultLanguage`); the cached
+  channel (`getResolvedChannel()`, `SalesChannelResolutionPort`) satisfies it.
+- `storefrontPagePath({ path, languageCode, channel })` — a logical path (`/c/tools`,
+  `/verify?token=…`) under the language's prefix; throws on a language the channel lacks.
+- `storefrontPagePathFor({ path, channel, requestedLanguage })` — for messages: the
+  requested language when the channel serves it, else the channel default; the logical
+  path when no channel is known. **Every e-mail, redirect or feed that links a storefront
+  page goes through this or `productPath`.**
+- `productPath({ key, languageCode, channel })` — a product page. It used to take
+  `channelDefaultLanguage` and append `?lang=`; it now takes `channel` and never appends
+  `?lang=`. `productDefaultPath(key)` is the unprefixed `x-default` target.
+
+`GET /api/v1/storefront/sales-channel` answers `prefixDefaultLanguage`, `urlLanguages` and
+`urlLanguageAliases`, so a headless storefront never re-derives them. The admin channel
+shapes carry `prefixDefaultLanguage`; it is written by the audited identity Command.
 
 ## Testing your channel-aware code
 

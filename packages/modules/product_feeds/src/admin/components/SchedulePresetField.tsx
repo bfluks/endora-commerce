@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { formatDateTime } from '@endora-commerce/admin-kit/lib';
 import {
   SCHEDULE_PRESETS,
   builderFromCron,
@@ -7,7 +8,7 @@ import {
   presetForCron,
 } from '@endora-commerce/contracts';
 import { Input, Label, Select } from '@endora-commerce/admin-kit/ui';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { CronBuilderField } from './CronBuilderField.js';
 
 /**
@@ -50,6 +51,7 @@ export interface SchedulePresetFieldProps {
 
 const NEVER = 'never';
 const CUSTOM = 'custom';
+const CUSTOM_MODES = ['build', 'write'] as const;
 
 /**
  * A short, curated list. The platform default is the one the operator's own
@@ -69,6 +71,7 @@ export function defaultTimezone(): string {
 export function SchedulePresetField(props: SchedulePresetFieldProps): ReactNode {
   const { value, onChange, nextRunAt = null, tooTight = false, disabled = false } = props;
   const t = useTranslation('product_feeds');
+  const { language } = useTranslationContext();
 
   const activePreset = value === null ? NEVER : (presetForCron(value.cron) ?? CUSTOM);
   const [mode, setMode] = useState<string>(activePreset);
@@ -164,23 +167,27 @@ export function SchedulePresetField(props: SchedulePresetFieldProps): ReactNode 
           {/* Two ways in, because the two audiences are different: an operator
               who does not know cron needs the dropdowns, and one who does finds
               them slower than typing. Neither is hidden behind the other. */}
-          <div className="b2b-tabs-scroll">
-            <div className="b2b-tabs" role="tablist">
-              {(['build', 'write'] as const).map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={customMode === id}
-                  className={`b2b-tab ${customMode === id ? 'is-active' : ''}`}
-                  disabled={disabled}
-                  onClick={(): void => setCustomMode(id)}
-                >
+          <fieldset>
+            {/* A choice of input method, not a page section: a radio group, with
+                the browser's own arrow keys (issue #1491). It sits inside the
+                feed page's Settings tab, where a second tab strip is not allowed. */}
+            <legend className="mb-1.5 text-sm font-medium">{t('feeds.schedule.custom.mode')}</legend>
+            <div className="flex flex-wrap gap-x-6">
+              {CUSTOM_MODES.map((id) => (
+                <label key={id} className="flex min-h-11 items-center gap-2 text-sm sm:min-h-8">
+                  <input
+                    type="radio"
+                    name="feed-schedule-custom-mode"
+                    className="h-4 w-4 accent-primary"
+                    checked={customMode === id}
+                    disabled={disabled}
+                    onChange={(): void => setCustomMode(id)}
+                  />
                   {t(`feeds.schedule.custom.${id}`)}
-                </button>
+                </label>
               ))}
             </div>
-          </div>
+          </fieldset>
 
           {customMode === 'build' ? (
             <CronBuilderField
@@ -236,7 +243,7 @@ export function SchedulePresetField(props: SchedulePresetFieldProps): ReactNode 
         {mode === NEVER
           ? t('feeds.schedule.nextRun.manual')
           : nextRunAt
-            ? t('feeds.schedule.nextRun', { when: new Date(nextRunAt).toLocaleString() })
+            ? t('feeds.schedule.nextRun', { when: formatDateTime(nextRunAt, language) })
             : t('feeds.schedule.nextRun.unknown')}
       </p>
 

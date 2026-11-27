@@ -10,7 +10,7 @@ import { defineModuleManifest } from '@endora-commerce/contracts';
  */
 export const manifest = defineModuleManifest({
   id: 'credit_limits',
-  name: 'Credit Limits',
+  name: 'Credit limits',
   description:
     'Per-organization credit limits and credit-check enforcement at checkout.',
   version: '1.0.0',
@@ -76,7 +76,8 @@ export const manifest = defineModuleManifest({
       icon: 'CreditCard',
       targetRoute: '/credit-limits',
       requiredPermission: 'credit_limits:manage',
-      keywords: ['credit', 'limit', 'limits', 'balance', 'terms', 'limity kredytowe', 'saldo'],
+      keywords: ['credit', 'limit', 'limits', 'balance', 'terms'],
+      keywordsKey: 'actions.openCreditLimits.keywords',
       weight: 400,
     },
   ],

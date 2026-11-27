@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { SavedListView } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 import { installOffsetParentShim } from '../../helpers/layout-shim';
 import en from '../../../../packages/modules/_i18n/i18n/en.json';
 
@@ -35,7 +36,6 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
   );
   return {
     ...actual,
-    usePageSizePreference: () => ({ pageSize: 20 as const, setPageSize: vi.fn() }),
     apiClient: {
       get: (...args: unknown[]) => api.get(...args),
       post: (...args: unknown[]) => api.post(...args),
@@ -122,6 +122,7 @@ beforeEach(() => {
       return { data: { statuses: [{ code: 'new', name: { en: 'New' } }, { code: 'pending', name: { en: 'Pending' } }] } };
     }
     if (path.startsWith(ENDPOINT)) return { data: VIEWS };
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) return { data: [] };
     if (path.startsWith('/api/v1/admin/orders')) {
       return { data: [row('o1', 'ORD-1')], pagination: { page: 1, pageSize: 20, total: 1 }, counts: { new: 1 } };
     }
@@ -149,9 +150,13 @@ async function renderList(): Promise<ReturnType<typeof userEvent.setup>> {
   const user = userEvent.setup();
   renderWithI18n(
     <StrictMode>
-      <MemoryRouter>
-        <OrdersList />
-      </MemoryRouter>
+      {withSession(
+        <MemoryRouter>
+          <OrdersList />
+        </MemoryRouter>,
+        // The kit pager reads the admin's remembered page size, inside the session (issue #1500).
+        { session: adminSession({ permissions: ['*'] }) },
+      )}
     </StrictMode>,
     { core: en as Record<string, string> },
   );

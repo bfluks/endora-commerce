@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `sales_channels` |
-| Name | Sales Channels |
+| Name | Sales channels |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-sales-channels` |
 | Licence | `MIT` |
@@ -29,6 +29,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `dictionaries` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 

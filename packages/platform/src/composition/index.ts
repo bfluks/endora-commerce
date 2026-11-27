@@ -83,12 +83,17 @@ export {
   type ComposeAppOptions,
   type ComposedAppContext,
 } from './compose-app.js';
+// Issue #497 — the cursor seal both composition roots register as the
+// `cursorSeal` value. A module never builds one: it resolves the value and
+// declares the narrow shape it uses in its own cradle, which is why the
+// `CursorSeal` type is not here (R3.1a: no consumer outside the platform names it).
+export { createCursorSeal } from './cursor-seal.js';
 
 // --- http ---------------------------------------------------------------
 // What an entry point does with a refusal: print the sentence, exit 1
-// (`overlay/overlay-schema.ts`). Here because the three wiring files that call
-// them already import this barrel.
-export { exitOnRefusal, refuseOverlaySchema } from '../overlay/overlay-schema.js';
+// (`overlay/overlay-schema.ts`). Here because the wiring files that call it
+// already import this barrel.
+export { exitOnRefusal } from '../overlay/overlay-schema.js';
 
 export { buildServer, type ModulePlugin } from '../http/server.js';
 export { ApiInterceptorRegistry } from '../http/interceptors/index.js';
@@ -170,6 +175,43 @@ export { activationDeclarationsFrom } from '../kernel/lifecycle/activation-resol
 // belongs on it no more than a name nobody published.
 export { capabilityRegistryFrom } from '../kernel/lifecycle/capability-registry.js';
 export { requiredModulesFrom } from '../kernel/lifecycle/required-modules.js';
+// `specs/176-command-hooks-outbox/` P2 — the command-hook registry a root builds
+// once, hands its `CommandBus` and `composeModules`, and the two derivations it
+// seals the registry against. Beside `requiredModulesFrom` for its reason: a
+// root derives them from the manifests it resolved, and a module never does —
+// it registers through `ctx.commandHooks`.
+export { CommandHookRegistry } from '../commands/hooks/registry.js';
+export {
+  commandMiddlewareFrom,
+  hookableActionsFrom,
+  moduleDependencyClosureFrom,
+} from '../kernel/lifecycle/command-hook-inputs.js';
+// `specs/189-command-middleware/` P1 — the command-middleware registry a root
+// builds once and hands its `CommandBus` and `composeModules`, beside the hook
+// registry for the hook registry's reason; `commandMiddlewareFrom` (above) is
+// the declarations it is sealed against.
+export { CommandMiddlewareRegistry } from '../commands/middleware/registry.js';
+// `specs/187-side-table-extensions/` B1 — the side-table loader registry a root
+// builds once from its manifests' `extends` and hands `composeModules`, and the
+// reads service it registers as `entityExtensionReads` over it. The test kit's
+// `composeTestServer` is the consumer outside this package.
+export {
+  EntityExtensionLoaderRegistry,
+  entityExtensionDeclarationsFrom,
+} from '../kernel/entity-extensions/registry.js';
+export { createEntityExtensionReads } from '../kernel/entity-extensions/reads.js';
+// `specs/176-command-hooks-outbox/` P3 — the outbox's host half. The wake-up
+// is what both roots hand their `CommandBus`; the entity class is here for
+// `ModuleRegistration`'s reason (the generated entity registry names it, and no
+// module may); the store, the drain and one tick are what a test drives
+// against Postgres without a worker, which is how the shared test server runs.
+// `PermanentOutboxFailure`, the one name a handler author needs, is on
+// `./commands`.
+export { createCommandOutboxWake } from '../commands/outbox/wake.js';
+export { CommandOutboxEntry } from '../commands/outbox/command-outbox-entry.entity.js';
+export { PostgresOutboxStore } from '../commands/outbox/store.js';
+export { drainCommandOutbox } from '../commands/outbox/drain.js';
+export { runCommandOutboxDrainTick } from '../commands/outbox/drain-worker.js';
 // `specs/110-instance-repository/` T119c. The platform-availability row itself —
 // the entity class `module_registrations` is mapped by. It is here and **not** on
 // `./kernel`, and that is `host-package.md` §1.3's **A** classification applied
@@ -187,10 +229,16 @@ export { requiredModulesFrom } from '../kernel/lifecycle/required-modules.js';
 // already — to the same spelling, so this single export is what let all six
 // become bare specifiers and all six shims go.
 export { ModuleRegistration } from '../kernel/lifecycle/module-registration.entity.js';
+// The `schema_extensions` ledger row (`specs/178-extensible-columns/` FR-022) —
+// here for `ModuleRegistration`'s reason: the generated entity registry has to
+// name it, and no module may (the ledger is written by the generated migration
+// step and the audited drop command only).
+export { SchemaExtensionElement } from '../kernel/schema-extensions/schema-extension-element.entity.js';
 
 // --- kernel: the sub-kernels a root composes ------------------------------
 export { composeSettingsKernel, type SettingsKernel } from '../kernel/settings/compose.js';
 export { ManifestReconciler } from '../kernel/settings/manifest-reconciler.js';
+export { backfillPlaintextSecrets } from '../kernel/settings/plaintext-secret-backfill.js';
 export {
   composeSalesChannelsKernel,
   type SalesChannelsKernel,
@@ -205,6 +253,7 @@ export { DefaultChannelReconciler } from '../kernel/sales-channels/default-chann
 // composition root's to construct.
 export { composeErrorEnvelopeOptions } from '../kernel/i18n/error-envelope-options.js';
 export { AuditLogService } from '../kernel/audit/audit-log-service.js';
+export { AuditRedactionService } from '../kernel/audit/audit-redaction-service.js';
 
 // --- tenancy: establishing and forking a context --------------------------
 export { forkScopedEm } from '../tenancy/scoped-em.js';

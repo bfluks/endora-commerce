@@ -7,7 +7,10 @@ import { AuditLogService } from '@endora-commerce/platform/composition';
 
 import { CartAuditService } from '../../../../packages/modules/carts/src/backend/services/cart-audit-service.js';
 
-import { CartAbandonmentWorker } from '../../../../packages/modules/carts/src/backend/services/cart-abandonment-worker.js';
+import {
+  CartAbandonmentWorker,
+  ORPHANED_WORKING_BASKET_MINUTES,
+} from '../../../../packages/modules/carts/src/backend/services/cart-abandonment-worker.js';
 
 
 /**
@@ -19,6 +22,8 @@ import { CartAbandonmentWorker } from '../../../../packages/modules/carts/src/ba
  *   - idempotency: a second sweep tick is a no-op
  *   - inactivityMinutes <= 0 disables the sweep
  *   - notification recipient empty → no dispatch
+ *   - working baskets orphaned past the safe age are removed (issue #602),
+ *     and nothing else is
  */
 
 type DispatchNotification = NonNullable<
@@ -71,7 +76,7 @@ describe('CartAbandonmentWorker.sweep', () => {
       salesChannelId: systemDefaultChannelId,
       lastActivityAt: new Date(Date.now() - 30 * 60_000), // 30 min ago
     });
-    await em.persistAndFlush(cart);
+    await em.persist(cart).flush();
     em.create(CartItem, {
       cartId: cart.id,
       productId: '00000000-0000-4000-8000-000000000101',
@@ -118,7 +123,7 @@ describe('CartAbandonmentWorker.sweep', () => {
       salesChannelId: systemDefaultChannelId,
       lastActivityAt: new Date(Date.now() - 30 * 60_000),
     });
-    await em.persistAndFlush(cart);
+    await em.persist(cart).flush();
     em.create(CartItem, {
       cartId: cart.id,
       productId: '00000000-0000-4000-8000-000000000101',
@@ -176,6 +181,131 @@ describe('CartAbandonmentWorker.sweep', () => {
     expect(result.abandonedCount).toBe(0);
   });
 
+  describe('orphaned working baskets (issue #602)', () => {
+    /** A basket in `status`, created `ageMinutes` ago, with one line. */
+    async function basket(status: 'working' | 'active', ageMinutes: number, tag: string) {
+      const em = db.em();
+      const cart = em.create(Cart, {
+        anonymousCartToken: `anon-orphan-${Date.now()}-${tag}`,
+        salesChannelId: systemDefaultChannelId,
+        status,
+        lastActivityAt: new Date(),
+      });
+      await em.persist(cart).flush();
+      em.create(CartItem, {
+        cartId: cart.id,
+        productId: '00000000-0000-4000-8000-000000000101',
+        quantity: 1,
+        unitPrice: '5.00',
+        currency: 'PLN',
+      });
+      await em.flush();
+      // `createdAt` is stamped on insert, so the age is written afterwards.
+      await em.nativeUpdate(
+        Cart,
+        { id: cart.id },
+        { createdAt: new Date(Date.now() - ageMinutes * 60_000) },
+      );
+      em.clear();
+      return cart.id;
+    }
+
+    it('removes a working basket older than the safe age, lines included', async () => {
+      const orphan = await basket('working', ORPHANED_WORKING_BASKET_MINUTES + 5, 'old');
+
+      const result = await worker.sweep();
+      expect(result.workingBasketsRemoved).toBe(1);
+
+      const em = db.em();
+      expect(await em.findOne(Cart, { id: orphan })).toBeNull();
+      expect(await em.count(CartItem, { cartId: orphan })).toBe(0);
+    });
+
+    it('leaves a working basket younger than the safe age alone', async () => {
+      const inFlight = await basket('working', ORPHANED_WORKING_BASKET_MINUTES - 5, 'young');
+
+      const result = await worker.sweep();
+      expect(result.workingBasketsRemoved).toBe(0);
+      expect(await db.em().findOne(Cart, { id: inFlight })).not.toBeNull();
+    });
+
+    it('never removes a basket that is not a working one, however old', async () => {
+      const buyers = await basket('active', ORPHANED_WORKING_BASKET_MINUTES * 1000, 'active');
+
+      const result = await worker.sweep();
+      expect(result.workingBasketsRemoved).toBe(0);
+      expect(await db.em().findOne(Cart, { id: buyers })).not.toBeNull();
+    });
+
+    it('still removes orphans when the abandonment sweep itself is disabled', async () => {
+      resolveInactivity = vi.fn().mockResolvedValue(0);
+      const orphan = await basket('working', ORPHANED_WORKING_BASKET_MINUTES + 5, 'disabled');
+
+      const result = await worker.sweep();
+      expect(result.abandonedCount).toBe(0);
+      expect(result.workingBasketsRemoved).toBe(1);
+      expect(await db.em().findOne(Cart, { id: orphan })).toBeNull();
+    });
+  });
+
+  describe('hasSweepWork — the scheduled tick\'s question (issue #1119)', () => {
+    /** A cart in `status`, created and last active `ageMinutes` ago. */
+    async function cartAged(status: 'working' | 'active', ageMinutes: number, tag: string) {
+      const em = db.em();
+      const at = new Date(Date.now() - ageMinutes * 60_000);
+      const cart = em.create(Cart, {
+        anonymousCartToken: `anon-probe-${Date.now()}-${tag}`,
+        salesChannelId: systemDefaultChannelId,
+        status,
+        lastActivityAt: at,
+      });
+      await em.persist(cart).flush();
+      await em.nativeUpdate(Cart, { id: cart.id }, { createdAt: at });
+      em.clear();
+      return cart.id;
+    }
+
+    /** What a pass would do, without letting it: the sweep runs and the transaction rolls back after the test. */
+    const passDoesSomething = async (): Promise<boolean> => {
+      const result = await worker.sweep();
+      return result.abandonedCount + result.workingBasketsRemoved > 0;
+    };
+
+    it('answers yes for an orphaned working basket', async () => {
+      await cartAged('working', ORPHANED_WORKING_BASKET_MINUTES + 5, 'orphan');
+      expect(await worker.hasSweepWork()).toBe(true);
+    });
+
+    it('answers yes for an orphaned working basket while the abandonment threshold is disabled', async () => {
+      resolveInactivity = vi.fn().mockResolvedValue(0);
+      await cartAged('working', ORPHANED_WORKING_BASKET_MINUTES + 5, 'orphan-disabled');
+      expect(await worker.hasSweepWork()).toBe(true);
+    });
+
+    it('answers yes for an active cart idle past the threshold', async () => {
+      await cartAged('active', 30, 'idle');
+      expect(await worker.hasSweepWork()).toBe(true);
+    });
+
+    it('does not count an idle active cart while the threshold is disabled', async () => {
+      resolveInactivity = vi.fn().mockResolvedValue(0);
+      await cartAged('active', 30, 'idle-disabled');
+      expect(await worker.hasSweepWork()).toBe(await passDoesSomething());
+    });
+
+    it('agrees with the pass over carts it must not touch — fresh, young working, already notified', async () => {
+      await cartAged('active', 5, 'fresh');
+      await cartAged('working', ORPHANED_WORKING_BASKET_MINUTES - 5, 'young');
+      const notified = await cartAged('active', 30, 'notified');
+      await db.em().nativeUpdate(Cart, { id: notified }, { abandonmentNotifiedAt: new Date() });
+
+      const asked = await worker.hasSweepWork();
+      expect(asked).toBe(await passDoesSomething());
+      // And after a pass there is nothing left to ask about.
+      expect(await worker.hasSweepWork()).toBe(false);
+    });
+  });
+
   it('suppresses the e-mail when the notification recipient is empty', async () => {
     resolveRecipient = vi.fn().mockResolvedValue('');
     const em = db.em();
@@ -184,7 +314,7 @@ describe('CartAbandonmentWorker.sweep', () => {
       salesChannelId: systemDefaultChannelId,
       lastActivityAt: new Date(Date.now() - 30 * 60_000),
     });
-    await em.persistAndFlush(cart);
+    await em.persist(cart).flush();
     em.create(CartItem, {
       cartId: cart.id,
       productId: '00000000-0000-4000-8000-000000000101',

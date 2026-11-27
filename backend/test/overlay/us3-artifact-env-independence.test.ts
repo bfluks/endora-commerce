@@ -3,6 +3,17 @@ import { generatedArtifactPaths, renderAll } from '../../scripts/generate-compos
 import { coveredArtifactPaths } from '../../scripts/check-overlay-determinism.js';
 
 /**
+ * A full render of every artefact is the slow step here: the first case renders
+ * twice and the second once, and both outran the 30 s default.
+ *  - In CI, backend-suite run 45136913927 took 25.7 s for the whole file.
+ *  - In run 45156849521, shard 1 ran half again as long and the first case
+ *    timed out without finding any difference.
+ *  - On a 16-thread developer machine the two cases take 48.7 s and 25.0 s.
+ * The limit covers the render, not a wait.
+ */
+const RENDER_TIMEOUT_MS = 180_000;
+
+/**
  * T-E — every generated artefact renders identically with and without
  * `DEPLOYMENT` set (D-104).
  *
@@ -51,7 +62,7 @@ describe('T-E — the generated artefacts are environment-independent', () => {
     for (const artefact of bareCore) expect(artefact.content.length).toBeGreaterThan(0);
 
     expect(withDeployment).toEqual(bareCore);
-  });
+  }, RENDER_TIMEOUT_MS);
 
   it('names nothing from a deployment tree, in any committed artefact', async () => {
     const artefacts = await renderAll();
@@ -60,13 +71,13 @@ describe('T-E — the generated artefacts are environment-independent', () => {
     // whole-run total would have hidden that behind the five that still read.
     const inspected = artefacts.map(({ label, content }) => ({
       label,
-      lines: assertNamesNoDeployment(label, content),
+      lines: assertNamesNoDeployment(label, content, deploymentCarrierOf(label)),
     }));
     expect(inspected).toHaveLength(generatedArtifactPaths().length);
     for (const { label, lines } of inspected) {
       expect(lines, `${label} contributed no inspected line`).toBeGreaterThan(0);
     }
-  });
+  }, RENDER_TIMEOUT_MS);
 
   describe('the refusal itself', () => {
     // Issue #130: one proof per shape the assertion refuses, each entering at
@@ -169,6 +180,29 @@ describe('T-E — the generated artefacts are environment-independent', () => {
         '];',
       ].join('\n');
       expect(() => assertNamesNoDeployment('manifest-index', nested)).toThrow(
+        /names a deployment tree/,
+      );
+    });
+
+    it("refuses a deployment registry importing another deployment's layer, and bare core's importing any", () => {
+      // FR-080 / SC-004 at the artefact: the one carrier a deployment registry
+      // may spend is its own deployment's admin layers.
+      const own =
+        "import { contributions as contributions0 } from '../../../backend/src/apps/example/modules/a/admin/index.js';";
+      const other =
+        "import { contributions as contributions0 } from '../../../backend/src/apps/acceptance/modules/a/admin/index.js';";
+      const label = 'deployment-admin-registry (example)';
+      expect(assertNamesNoDeployment(label, own, deploymentCarrierOf(label))).toBe(1);
+      expect(() => assertNamesNoDeployment(label, other, deploymentCarrierOf(label))).toThrow(
+        /names a deployment tree/,
+      );
+      const none = 'deployment-admin-registry (none)';
+      expect(() => assertNamesNoDeployment(none, own, deploymentCarrierOf(none))).toThrow(
+        /names a deployment tree/,
+      );
+      // And the stylesheet's `@source` is the only line of it that may.
+      const css = '@import "../../backend/src/apps/example/x.css";';
+      expect(() => assertNamesNoDeployment('admin-tailwind', css, deploymentCarrierOf('admin-tailwind'))).toThrow(
         /names a deployment tree/,
       );
     });
@@ -299,12 +333,44 @@ function emittedLines(content: string): readonly string[] {
  *
  * Returns the number of lines inspected, so a caller can say what it read.
  */
-function assertNamesNoDeployment(label: string, content: string): number {
+function assertNamesNoDeployment(
+  label: string,
+  content: string,
+  carries: (line: string) => boolean = () => false,
+): number {
   const lines = emittedLines(content);
   expect(lines.length, `${label} emitted nothing`).toBeGreaterThan(0);
   for (const line of lines) {
+    if (carries(line)) continue;
     expect(line, `${label} names a deployment tree`).not.toContain('/apps/');
     expect(line, `${label} names the example overlay module`).not.toContain('example_overlay');
   }
   return lines.length;
+}
+
+/**
+ * The lines D-297 lets an artefact spend on a deployment tree, and nothing wider
+ * (`specs/190-overlay-full-modules/` FR-080, FR-082, #1855).
+ *
+ * An overlay admin layer has to reach the admin bundle from a file, and Vite and
+ * Tailwind are static, so two families name deployment trees by design — and both
+ * are still rendered over **every** deployment on disk, which is what the first
+ * case of this file holds: byte-identical whatever `DEPLOYMENT` says.
+ *
+ *   - `deployment-admin-registry (<d>)` imports `<d>`'s overlay layers, and only
+ *     `<d>`'s: an import of another deployment's tree is still refused here, which
+ *     is SC-004 at the artefact. Bare core's `none` carries nothing.
+ *   - `admin-tailwind` carries one `@source` per overlay admin layer; any other
+ *     line of it naming a deployment is still refused.
+ */
+function deploymentCarrierOf(label: string): (line: string) => boolean {
+  const registry = /^deployment-admin-registry \((.+)\)$/.exec(label);
+  if (registry !== null && registry[1] !== 'none') {
+    const own = new RegExp(`^import \\{ contributions as contributions\\d+ \\} from '[./]*backend/src/apps/${registry[1]}/modules/[a-z0-9_]+/admin/index\\.js';$`);
+    return (line) => own.test(line.trim()) || /^\{ moduleId: '[a-z0-9_]+', contributions: contributions\d+ \},$/.test(line.trim());
+  }
+  if (label === 'admin-tailwind') {
+    return (line) => /^@source "[./]*backend\/src\/apps\/[a-z0-9_-]+\/modules\/[a-z0-9_]+\/admin";$/.test(line.trim());
+  }
+  return () => false;
 }

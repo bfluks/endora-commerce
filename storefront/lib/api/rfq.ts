@@ -1,6 +1,7 @@
 import { storefrontQuoteRequestNegotiationSchema } from '@endora-commerce/contracts';
 import { apiGetAuthed, apiMutate } from './mutations';
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 
 /**
  * Storefront Quote Requests bindings — feature 008 workflow.
@@ -39,6 +40,17 @@ export interface RfqItem {
   discountPercent: number | null;
   /** VAT rate (fraction, e.g. 0.23) applied to this line's net price. */
   taxRate?: number;
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId?: string | null;
+  /** Feature 159 — order within the line's section. */
+  position?: number;
+}
+
+/** Feature 159 — a group of a quote's lines, as the customer reply carries it (non-empty ones only). */
+export interface RfqItemGroup {
+  id: string;
+  name: string;
+  position: number;
 }
 
 export interface RfqEvent {
@@ -57,14 +69,17 @@ export type RfqDiffEntry =
       kind: 'line_added';
       productId: string;
       productName: string;
+      /** Feature 159 — present only for a product on several lines; `null` = ungrouped. */
+      groupName?: string | null;
       quantity: number;
       agreedUnitPrice: number | null;
     }
-  | { kind: 'line_removed'; productId: string; productName: string }
+  | { kind: 'line_removed'; productId: string; productName: string; groupName?: string | null }
   | {
       kind: 'line_quantity';
       productId: string;
       productName: string;
+      groupName?: string | null;
       before: number;
       after: number;
     }
@@ -72,9 +87,12 @@ export type RfqDiffEntry =
       kind: 'line_agreed_unit_price';
       productId: string;
       productName: string;
+      groupName?: string | null;
       before: number | null;
       after: number | null;
-    };
+    }
+  /** Feature 159 — the arrangement of the lines changed; names nothing. */
+  | { kind: 'grouping' };
 
 export interface RfqComparison {
   diff: RfqDiffEntry[];
@@ -93,6 +111,9 @@ export interface RfqDetail {
   lastCustomerSeenRevisionNumber: number;
   headerNote: string | null;
   cancellationReason: string | null;
+  /** Feature 159 — the groups holding a line, in order; absent on an older backend. */
+  itemGroups?: RfqItemGroup[];
+  /** In display order. */
   items: RfqItem[];
   events: RfqEvent[];
   comparisonAgainstLastSeen: RfqComparison | null;
@@ -283,6 +304,7 @@ export async function getStorefrontQuoteRequestSettings(): Promise<{
   const baseUrl = backendBaseUrl();
   try {
     const res = await fetch(`${baseUrl}/api/v1/storefront/settings/quote-requests`, {
+      headers: await activeChannelHeaders(),
       cache: 'no-store',
     });
     if (!res.ok) return { showAddToQuoteOnCard: true, showAddToQuoteOnPdp: true };

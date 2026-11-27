@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import type { DictionaryLanguagesPageResponse } from '@endora-commerce/contracts';
 import { ApiError, apiClient, statusBadgeStyle } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { StatusTransitionGraph } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { ModalDialog, StatusTransitionGraph, useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
+import { orderStatusName } from '../lib/status-name.js';
 import { ORDER_STATUS_DEFAULT_COLOR } from '@endora-commerce/contracts';
 import { StatusColorPicker } from '../components/StatusColorPicker.js';
 
@@ -50,24 +50,20 @@ interface ActiveLanguage {
   label: string;
 }
 
-/** Resolve the admin-facing label: default name → English → first → code. */
-function statusLabel(s: StatusDef): string {
-  return s.defaultName || s.name['en'] || Object.values(s.name)[0] || s.code;
-}
 
 export function OrderStatusConfigPage(): ReactNode {
   const t = useTranslation('core');
+  const tOrders = useTranslation('orders');
+  const { language } = useTranslationContext();
+  // Issue #1809 — the operator's name for the status in the admin's language.
+  const statusLabel = useCallback((s: StatusDef): string => orderStatusName(s, language), [language]);
   const [graph, setGraph] = useState<StatusGraph | null>(null);
   const [languages, setLanguages] = useState<ActiveLanguage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Add-status form.
-  const [newCode, setNewCode] = useState('');
-  const [newDefaultName, setNewDefaultName] = useState('');
-  const [newNames, setNewNames] = useState<Record<string, string>>({});
-  const [newTerminal, setNewTerminal] = useState(false);
-  const [newColor, setNewColor] = useState(ORDER_STATUS_DEFAULT_COLOR);
+  // The add-status dialog (issue #1439, DS-05): opened from the statuses card's header.
+  const [adding, setAdding] = useState(false);
 
   // Inline edit of an existing status's names.
   const [editCode, setEditCode] = useState<string | null>(null);
@@ -76,7 +72,7 @@ export function OrderStatusConfigPage(): ReactNode {
   const [editColor, setEditColor] = useState(ORDER_STATUS_DEFAULT_COLOR);
 
   // Status pending deletion — drives the confirmation dialog.
-  const [pendingDelete, setPendingDelete] = useState<StatusDef | null>(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -119,29 +115,6 @@ export function OrderStatusConfigPage(): ReactNode {
     [load],
   );
 
-  /** Drop empty per-language entries before sending. */
-  const cleanNames = (names: Record<string, string>): Record<string, string> =>
-    Object.fromEntries(Object.entries(names).filter(([, v]) => v.trim().length > 0));
-
-  const addStatus = (): void => {
-    if (!newCode.trim()) return;
-    const defaultName = newDefaultName.trim() || newCode.trim();
-    void run(async () => {
-      await apiClient.post('/api/v1/admin/orders/statuses', {
-        code: newCode.trim(),
-        name: cleanNames(newNames),
-        defaultName,
-        isTerminal: newTerminal,
-        color: newColor,
-      });
-      setNewCode('');
-      setNewDefaultName('');
-      setNewNames({});
-      setNewTerminal(false);
-      setNewColor(ORDER_STATUS_DEFAULT_COLOR);
-    });
-  };
-
   const startEdit = (s: StatusDef): void => {
     setEditCode(s.code);
     setEditDefaultName(s.defaultName);
@@ -162,11 +135,16 @@ export function OrderStatusConfigPage(): ReactNode {
     });
   };
 
-  const confirmDelete = (): void => {
-    const code = pendingDelete?.code;
-    if (!code) return;
-    setPendingDelete(null);
-    void run(() => apiClient.delete(`/api/v1/admin/orders/statuses/${code}`));
+  // Issue #1474 (SALES-09) — asked in the kit's dialog, focus on *Cancel*.
+  const confirmDelete = async (status: StatusDef): Promise<void> => {
+    const ok = await confirm({
+      title: t('orderStatusConfig.deleteConfirm.title'),
+      message: t('orderStatusConfig.deleteConfirm.body', { name: statusLabel(status) }),
+      confirmLabel: t('common.action.delete'),
+      destructive: true,
+    });
+    if (!ok) return;
+    void run(() => apiClient.delete(`/api/v1/admin/orders/statuses/${status.code}`));
   };
 
   const addTransition = (from: string, to: string): void => {
@@ -196,16 +174,8 @@ export function OrderStatusConfigPage(): ReactNode {
   return (
     <>
       <PageHeader
+        back={{ label: t('orders.page.title'), to: '/orders' }}
         title={t('orderStatusConfig.title')}
-        description={t('orderStatusConfig.description')}
-        actions={
-          <Button asChild variant="outline">
-            <Link to="/orders">
-              <ArrowLeft />
-              {t('common.action.back')}
-            </Link>
-          </Button>
-        }
       />
 
       {error ? (
@@ -215,8 +185,15 @@ export function OrderStatusConfigPage(): ReactNode {
       ) : null}
 
       <Card className="mb-4">
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle>{t('orderStatusConfig.statuses')}</CardTitle>
+          {/* Outline, not filled: the screen configures two things and neither add is its one
+              primary (issue #1441, DS-07). It opens a dialog instead of a form drawn open under
+              the table (issue #1439, DS-05; Hick). */}
+          <Button variant="outline" size="sm" onClick={(): void => setAdding(true)}>
+            <Plus />
+            {t('orderStatusConfig.addStatus')}
+          </Button>
         </CardHeader>
         <CardContent>
           <Table>
@@ -226,7 +203,9 @@ export function OrderStatusConfigPage(): ReactNode {
                 <TableHead>{t('orderStatusConfig.col.name')}</TableHead>
                 <TableHead>{t('orderStatusConfig.col.flags')}</TableHead>
                 <TableHead>{t('orderStatusConfig.col.inUse')}</TableHead>
-                <TableHead aria-label="actions" />
+                <TableHead>
+                  <span className="sr-only">{tOrders('statusConfig.column.actions')}</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -243,9 +222,9 @@ export function OrderStatusConfigPage(): ReactNode {
                             <Label htmlFor={`dn-${s.code}`}>
                               {t('orderStatusConfig.field.defaultName')}
                             </Label>
-                            <input
+                            <Input
                               id={`dn-${s.code}`}
-                              className="h-8 w-full rounded-md border px-2 text-sm"
+                              className="h-8 px-2"
                               value={editDefaultName}
                               onChange={(e): void => setEditDefaultName(e.target.value)}
                             />
@@ -253,9 +232,9 @@ export function OrderStatusConfigPage(): ReactNode {
                           {languages.map((lang) => (
                             <div key={lang.code} className="space-y-1">
                               <Label htmlFor={`n-${s.code}-${lang.code}`}>{lang.label}</Label>
-                              <input
+                              <Input
                                 id={`n-${s.code}-${lang.code}`}
-                                className="h-8 w-full rounded-md border px-2 text-sm"
+                                className="h-8 px-2"
                                 value={editNames[lang.code] ?? ''}
                                 placeholder={s.defaultName}
                                 onChange={(e): void =>
@@ -302,7 +281,7 @@ export function OrderStatusConfigPage(): ReactNode {
                       <Button
                         variant="ghost"
                         size="sm"
-                        aria-label={`edit-${s.code}`}
+                        aria-label={tOrders('statusConfig.action.edit', { name: statusLabel(s) })}
                         onClick={(): void => startEdit(s)}
                       >
                         <Pencil />
@@ -311,8 +290,8 @@ export function OrderStatusConfigPage(): ReactNode {
                         variant="ghost"
                         size="sm"
                         disabled={locked}
-                        aria-label={`delete-${s.code}`}
-                        onClick={(): void => setPendingDelete(s)}
+                        aria-label={tOrders('statusConfig.action.delete', { name: statusLabel(s) })}
+                        onClick={(): void => void confirmDelete(s)}
                       >
                         <Trash2 />
                       </Button>
@@ -323,61 +302,6 @@ export function OrderStatusConfigPage(): ReactNode {
             </TableBody>
           </Table>
 
-          <div className="mt-4 flex flex-wrap items-end gap-3 border-t pt-4">
-            <div className="space-y-1">
-              <Label htmlFor="newCode">{t('orderStatusConfig.col.code')}</Label>
-              <input
-                id="newCode"
-                className="h-9 rounded-md border px-3 text-sm"
-                value={newCode}
-                onChange={(e): void => setNewCode(e.target.value)}
-                placeholder="awaiting_stock"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="newDefaultName">{t('orderStatusConfig.field.defaultName')}</Label>
-              <input
-                id="newDefaultName"
-                className="h-9 rounded-md border px-3 text-sm"
-                value={newDefaultName}
-                onChange={(e): void => setNewDefaultName(e.target.value)}
-              />
-            </div>
-            {languages.map((lang) => (
-              <div key={lang.code} className="space-y-1">
-                <Label htmlFor={`newName-${lang.code}`}>{lang.label}</Label>
-                <input
-                  id={`newName-${lang.code}`}
-                  className="h-9 rounded-md border px-3 text-sm"
-                  value={newNames[lang.code] ?? ''}
-                  onChange={(e): void =>
-                    setNewNames((prev) => ({ ...prev, [lang.code]: e.target.value }))
-                  }
-                />
-              </div>
-            ))}
-            <div className="space-y-1">
-              <Label>{t('orderStatusConfig.field.color')}</Label>
-              <StatusColorPicker
-                value={newColor}
-                onChange={setNewColor}
-                label={t('orderStatusConfig.field.color')}
-                customLabel={t('orderStatusConfig.color.custom')}
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={newTerminal}
-                onChange={(e): void => setNewTerminal(e.target.checked)}
-              />
-              {t('orderStatusConfig.flag.terminal')}
-            </label>
-            <Button onClick={addStatus} disabled={!newCode.trim()}>
-              <Plus />
-              {t('orderStatusConfig.addStatus')}
-            </Button>
-          </div>
         </CardContent>
       </Card>
 
@@ -396,32 +320,136 @@ export function OrderStatusConfigPage(): ReactNode {
         </CardContent>
       </Card>
 
-      {pendingDelete ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-md rounded-lg bg-background p-6 shadow-lg">
-            <h2 className="mb-2 text-lg font-semibold">
-              {t('orderStatusConfig.deleteConfirm.title')}
-            </h2>
-            <p className="mb-6 text-sm text-muted-foreground">
-              {t('orderStatusConfig.deleteConfirm.body', { name: statusLabel(pendingDelete) })}
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={(): void => setPendingDelete(null)}>
-                {t('common.action.cancel')}
-              </Button>
-              <Button variant="destructive" aria-label="confirm-delete" onClick={confirmDelete}>
-                <Trash2 />
-                {t('common.action.delete')}
-              </Button>
-            </div>
-          </div>
-        </div>
+      {adding ? (
+        <AddStatusDialog
+          languages={languages}
+          onClose={(): void => setAdding(false)}
+          onCreated={async (): Promise<void> => {
+            setAdding(false);
+            await load();
+          }}
+        />
       ) : null}
+      {confirmDialog}
     </>
+  );
+}
+
+/** Drop empty per-language entries before sending. */
+function cleanNames(names: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(names).filter(([, v]) => v.trim().length > 0));
+}
+
+/**
+ * The new-status form, in the kit's dialog (issue #1439, DS-05). A refusal is
+ * shown inside the dialog and keeps what was typed; the scrim does not dismiss
+ * it, so a stray click cannot throw the input away.
+ */
+function AddStatusDialog(props: {
+  languages: ActiveLanguage[];
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}): ReactNode {
+  const { languages, onClose, onCreated } = props;
+  const t = useTranslation('core');
+  const tOrders = useTranslation('orders');
+  const id = useId();
+  const [code, setCode] = useState('');
+  const [defaultName, setDefaultName] = useState('');
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [terminal, setTerminal] = useState(false);
+  const [color, setColor] = useState(ORDER_STATUS_DEFAULT_COLOR);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiClient.post('/api/v1/admin/orders/statuses', {
+        code: trimmed,
+        name: cleanNames(names),
+        defaultName: defaultName.trim() || trimmed,
+        isTerminal: terminal,
+        color,
+      });
+      await onCreated();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.envelope.error.message : t('common.state.error'));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalDialog
+      title={tOrders('statusConfig.newStatus.title')}
+      busy={busy}
+      dismissOnScrim={false}
+      onClose={onClose}
+    >
+      <form noValidate className="space-y-4" onSubmit={(event): void => void submit(event)}>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-code`}>{t('orderStatusConfig.col.code')}</Label>
+          <Input
+            id={`${id}-code`}
+            className="font-mono"
+            value={code}
+            autoFocus
+            onChange={(e): void => setCode(e.target.value)}
+            placeholder="awaiting_stock"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-defaultName`}>{t('orderStatusConfig.field.defaultName')}</Label>
+          <Input
+            id={`${id}-defaultName`}
+            value={defaultName}
+            onChange={(e): void => setDefaultName(e.target.value)}
+          />
+        </div>
+        {languages.map((lang) => (
+          <div key={lang.code} className="space-y-1">
+            <Label htmlFor={`${id}-name-${lang.code}`}>{lang.label}</Label>
+            <Input
+              id={`${id}-name-${lang.code}`}
+              value={names[lang.code] ?? ''}
+              placeholder={defaultName}
+              onChange={(e): void => setNames((prev) => ({ ...prev, [lang.code]: e.target.value }))}
+            />
+          </div>
+        ))}
+        <div className="space-y-1">
+          <Label>{t('orderStatusConfig.field.color')}</Label>
+          <StatusColorPicker
+            value={color}
+            onChange={setColor}
+            label={t('orderStatusConfig.field.color')}
+            customLabel={t('orderStatusConfig.color.custom')}
+          />
+        </div>
+        <label className="flex min-h-9 items-center gap-2 text-sm">
+          <Checkbox checked={terminal} onChange={(e): void => setTerminal(e.target.checked)} />
+          {t('orderStatusConfig.flag.terminal')}
+        </label>
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          <Button className="min-h-11 sm:min-h-9" type="button" variant="outline" disabled={busy} onClick={onClose}>
+            {t('common.action.cancel')}
+          </Button>
+          <Button className="min-h-11 sm:min-h-9" type="submit" disabled={busy || !code.trim()} aria-busy={busy}>
+            <Plus />
+            {busy ? t('common.state.saving') : t('orderStatusConfig.addStatus')}
+          </Button>
+        </div>
+      </form>
+    </ModalDialog>
   );
 }
 

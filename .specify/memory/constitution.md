@@ -1,6 +1,177 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 4.3.0 → 4.4.0
+Rationale: MINOR. Principle XIII's thin layer gains one sentence and Principle
+XV's two overlay bullets are extended, as specified by
+`specs/189-command-middleware/contracts/guard-seam-narrowing.md` §6 and ratified
+by the owner on 2026-11-23 (D-296.9). The amendment lands with the 0.113.0
+deprecation (189 P2): declared command middleware joins the bounded overridable
+surface, and XV's existing "never a guard seam" is stated against the four guard
+seams a composition root supplies, which D-296 narrows D-156.4 for.
+
+MINOR, not MAJOR. No compliant work becomes non-compliant in this release: an
+overlay's decoration of a guard seam still composes in 0.113.0 and is warned,
+and it is refused from 0.114.0 behind a versioned upgrade note. XV already said
+an override never swaps a guard seam; this names the seams. Not PATCH: XV's
+surface list gains a member and XIII gains a rule about what middleware may do,
+which is a material expansion of guidance rather than a clarification.
+
+Modified sections:
+  - XIII. Uniform Write Auditing via Command Bus — declared command middleware
+    (`admit`, `observe`) is part of the thin layer: a refused Command writes
+    nothing and records no audit entry, and an observer cannot change a write.
+  - XV. Untouched Core & Per-Deployment Overlay — "Overlays are ordinary
+    participants" names the four guard seams no module decorates and routes
+    cross-cutting behaviour on Commands to declared command middleware;
+    "Bounded overridable surface" names declared command middleware and says
+    what bounds it.
+
+Added sections:
+  - (none)
+
+Removed sections:
+  - (none)
+
+Templates / artifacts requiring alignment:
+  - ✅ specs/conventions/overlay-modules.md — *Decorating across owners* states
+       the deprecation for the four guard seams (189 T074).
+  - ⏳ docs/docs/architecture/overlay-pattern.md, customisation-ladder.md and
+       the upgrade page (+ Polish twins) — `specs/190-overlay-full-modules/`
+       (#1857), which also rewrites XV around these sentences and keeps their
+       substance.
+  - ✅ AGENTS.md — its summaries of XIII ("admin/domain writes run through
+       `CommandBus.run`") and XV ("a deployment customises through an overlay
+       module") stay true; not edited.
+  - ✅ .specify/templates/* — none restates XIII's thin-layer bullet or XV's
+       surface list; verified by grep.
+
+Deferred items / TODOs:
+  - `specs/188-policy-points/` carries an XV amendment of its own that has not
+    landed; whichever merges second re-bumps the version and rebases on the
+    first (188 plan, XV row).
+
+--- The 4.3.0 report follows unchanged.
+
+SYNC IMPACT REPORT
+==================
+Version change: 4.2.0 → 4.3.0
+Rationale: MINOR. Principle XIII gains one bullet and Principle XV's bounded
+overridable surface names one more member, both specified by
+`specs/176-command-hooks-outbox/` (FR-042), and ratified by the owner on
+2026-11-13 in the merge request that ships them (#1080). OD-7 (2026-11-10) put
+command hooks and the outbox in scope; the wording is this amendment's.
+
+MINOR, not MAJOR. No compliant work becomes non-compliant: the Command Bus still
+writes exactly one audit entry per Command, and an outbox row is written inside
+the same transaction, so "one unit" holds. Not PATCH: XIII's "no bespoke command
+queue" could be read to forbid the outbox, and XV's surface list gains a member,
+which is a material expansion of guidance rather than a clarification.
+
+Modified sections:
+  - XIII. Uniform Write Auditing via Command Bus — a transactional outbox for
+    post-commit delivery is durable event dispatch, not a bespoke command queue;
+    its rows carry names-only values (`audit-state.md` list 1) and its operator
+    actions are Commands.
+  - XV. Untouched Core & Per-Deployment Overlay — the bounded overridable
+    surface names declared command hooks, and says what bounds one: a
+    `beforeCommit` hook's position is fixed by the dependency graph or
+    `commandHookOrder`, an `afterCommit` one runs after the commit.
+
+Added sections:
+  - (none)
+
+Removed sections:
+  - (none)
+
+Templates / artifacts requiring alignment:
+  - ✅ docs/docs/architecture/command-bus.md (+ Polish twin) — the hooks and
+       outbox sections (P2, P3) and the operator screen (P4).
+  - ✅ docs/docs/architecture/customisation-ladder.md (+ Polish twin) — the
+       command-hook seam (P2).
+  - ✅ docs/docs/architecture/kernel.md (+ Polish twin) — the contribution-seam
+       row for `ctx.commandHooks` (P4).
+  - ✅ AGENTS.md — its summaries of XIII ("admin/domain writes run through
+       `CommandBus.run`") and XV ("a deployment customises through an overlay
+       module") stay true; not edited.
+  - ✅ .specify/templates/* — none restates XIII's thin-layer bullet or XV's
+       surface list; verified by grep.
+
+Deferred items / TODOs:
+  - Spec 177 is on the same release train; whichever constitution amendment
+    merges second re-bumps the version (176 plan risk 7).
+
+--- The 4.2.0 report follows unchanged.
+
+SYNC IMPACT REPORT
+==================
+Version change: 4.1.0 → 4.2.0
+Rationale: MINOR. Principle I is materially expanded with column-granular
+ownership, Principle XV's bounded schema surface is restated, and Principle
+XIV gains one sentence. Owner rulings of 2026-11-10 on the instance-
+extensibility review (OD-13 b, OD-14 a, OD-15, OD-16, OD-17 b, OD-29), recorded
+as decision D-291 and specified by `specs/178-extensible-columns/` (FR-090):
+an installed module package may declare additive `x_<moduleId>_*` columns on
+an extensible host table — every custom-field host table, derived from the
+custom-field binding registry — and then owns exactly those columns. The
+platform generates their DDL from the declaration, records it in a ledger,
+verifies it at migrate and at boot, and refuses a package migration that
+writes another module's table.
+
+MINOR, not MAJOR. No compliant work becomes non-compliant: until this
+amendment a module could not write another module's table at all, and it
+still cannot except through the declared, platform-generated path; no core
+module gains or loses a column. Not PATCH: Principle I's ownership rule gains
+a granularity it did not have, which is a material expansion of guidance.
+
+Modified sections:
+  - I. Modular Architecture — column-granular ownership on extensible tables
+    (OD-16): what the declaring module owns, what the host keeps, the
+    dependency it must declare, and that DDL is generated, never hand-written
+    across a module boundary (OD-13 b, OD-17 b).
+  - XIV. Entity-Agnostic Extensibility & Runtime Custom Fields — a
+    developer-declared extension column is not an operator runtime extension.
+  - XV. Untouched Core & Per-Deployment Overlay — the bounded overridable
+    surface names the schema rungs (side table, declared columns on an
+    extensible table, owner-provided variants) and the prohibition (never an
+    override of a core column, constraint or entity metadata); overlays still
+    ship no schema.
+
+Added sections:
+  - (none)
+
+Removed sections:
+  - (none)
+
+Templates / artifacts requiring alignment:
+  - ✅ docs/docs/architecture/customisation-ladder.md (+ Polish twin) —
+       "Never a rung: schema" replaced by the data ladder (FR-091).
+  - ✅ docs/docs/architecture/migrations.md (+ Polish twin) — the generated
+       step, the foreign-schema guard and the column-ownership exception
+       (FR-092).
+  - ✅ specs/conventions/module-migrations.md — R2's exception for a
+       module's own `x_` columns; specs/conventions/module-activation.md —
+       extension columns are inert while their module is off (FR-092).
+  - ✅ AGENTS.md — its summary of Principle I ("a module owns its entities,
+       … never import another module's internals") stays true and carries no
+       second statement of the column rule; the operation is routed through
+       `specs/conventions/module-migrations.md`, which the Migrations row
+       already points to. Not edited.
+  - ✅ .specify/templates/plan-template.md / spec-template.md /
+       tasks-template.md — none restates Principle I's ownership text;
+       verified by grep.
+
+Deferred items / TODOs:
+  - Phase D of `specs/178-extensible-columns/` (the other eight hosts) ships in
+    a later release (OD-178-4); the principle text is written against the
+    derived list and needs no edit then.
+  - Specs 176 and 177 are in flight on the same release train; whichever
+    constitution amendment merges second re-bumps the version (plan risk 7).
+
+--- The 4.1.0 report follows unchanged.
+
+SYNC IMPACT REPORT
+==================
 Version change: 4.0.2 → 4.1.0
 Rationale: MINOR. The Documentation Requirements' README clause obliged every
 merge request adding a backend module to update the root `README.md`, and
@@ -82,7 +253,7 @@ principle mandated and describing them as ones that "do NOT yet exist and must
 be built by the implementing feature". Feature 073 built all four, verified
 against the tree:
 
-  (a) the operator-activation axis — `admin/src/modules/platform/ModuleActivationControl.tsx`,
+  (a) the operator-activation axis — `packages/admin-shell/src/modules/platform/ModuleActivationControl.tsx`,
       on the kernel-served `/platform/modules` screen that belongs to no module;
   (b) the effective-state resolver — `packages/platform/src/kernel/lifecycle/effective-state.ts`,
       read by every gating seam;
@@ -394,6 +565,21 @@ minimal blast radius: cross-module calls MUST go through explicit, documented
 module interfaces (services or events), never through direct imports of another
 module's internals. A module MUST be removable from the codebase without leaving
 dangling references in unrelated modules.
+
+**Ownership is column-granular on an extensible table.** A table is owned by the
+module whose entity maps it, and only that module's code and migrations write it
+— with one sanctioned exception. An **extensible table** is every custom-field host
+table, derived from the custom-field host binding registry rather than declared a
+second time. An installed module package MAY declare additive columns on one, named
+`x_<moduleId>_<column>`, through the platform's declaration API; it then **owns
+those columns** and only its own code writes them, through the platform's accessor
+and inside a Command or command hook (Principle XIII). The host keeps the table, its
+constraints, its indexes and every column not so declared; the declaring module MUST
+depend on the host; the DDL is generated by the platform from the declaration,
+recorded and verified — never hand-written in a migration that crosses a module
+boundary, and a package migration that writes another module's table MUST be
+refused. Uninstalling the declaring module keeps its columns until an explicit,
+audited drop.
 
 **Rationale**: The product is a multi-tenant B2B platform whose feature set will
 grow over time (catalog, quotes, orders, customers, pricing, integrations).
@@ -816,7 +1002,16 @@ existed anywhere. The following are binding for every backend feature that perfo
 - **Thin layer.** The Command Bus MUST wrap existing services and the existing audit + event
   infrastructure — **no CQRS, no separate read model, no bespoke command queue, no speculative
   redo** (Principle IV). Reversible bulk operations reuse the durable queue path (Principle X);
-  large undos run through the separable worker entrypoint, never inline.
+  large undos run through the separable worker entrypoint, never inline. Declared command
+  middleware (`admit`, `observe`) is part of this layer, not a wrapper around it: a refused
+  Command writes nothing and records no audit entry, and an observer cannot change a write.
+- **The outbox is event dispatch, not a command queue.** A **transactional outbox** for
+  post-commit delivery — one row per `afterCommit` handler, written by the bus on the Command's
+  own transaction after its audit entry, and drained at least once on the durable queue path
+  (Principle X) — is durable event dispatch, not the bespoke command queue the bullet above
+  forbids. It never re-runs or defers the Command, which has already committed and audited; its
+  rows carry names-only values (`audit-state.md` list 1), never the write's values; and an
+  operator action on it, such as retrying a dead delivery, is itself a Command.
 - **Incremental migration is bounded.** Rollout is module by module, starting with the
   highest-regret writes (bulk operations, catalog, pricing, credit limits). An un-migrated
   module MAY retain hand-written audit calls, but each such write MUST still audit; the coverage
@@ -877,6 +1072,10 @@ runtime-defined data:
   given field is a first-class column or a runtime custom field; this principle governs *how* a
   runtime-defined field behaves once that choice is made. Do not make everything runtime-configurable
   to avoid a migration you should simply write.
+- **A developer-declared extension is not a runtime extension.** Declared extension columns
+  (Principle I's column-granular ownership) are schema a module package ships, governed by
+  Principles I and XV; they do not satisfy this principle's "data, not DDL" requirement, and a
+  field an operator must add at deployment time stays a runtime custom field.
 
 **Rationale**: The platform's entity set grows and clients need to extend core entities
 (Organization, Order, Customer, Category, QuoteRequest) at deployment time without a code change.
@@ -932,12 +1131,24 @@ capability meant to be per-deployment overridable:
   participants (install / uninstall / reconcile), MUST register their permissions and pass the
   permission-inventory check **per deployment**, and MUST run under the same tenant-isolation guard
   (Principle XI), sales-channel scoping (Principle XII), and Command-Bus auditing (Principle XIII)
-  as core — an override swaps an **implementation**, never a guard seam.
+  as core — an override swaps an **implementation**, never a guard seam: no module, an overlay
+  module included, decorates the guard seams a composition root supplies (`commandBus`,
+  `auditLogService`, `eventBus`, `emFactory`), and cross-cutting behaviour on Commands is
+  contributed as declared command middleware.
 - **Bounded overridable surface (YAGNI).** The overridable surface is **services, routes, config,
-  and whole new modules**; schema / entity / migration overrides of existing core units are **out
-  of scope** until a deployment actually demands them (a deployment needing new schema ships it as a
-  client-only overlay module that owns its own tables). Resolution MUST be a build/composition-time
-  concern on the **existing toolchain** — no new runtime dependency (Principle IV).
+  declared command hooks, declared command middleware, and whole new modules**. A command hook
+  runs only on an action its owning module declares hookable: a `beforeCommit` hook at a position
+  the dependency graph — or the deployment's declared `commandHookOrder` — fixes, an `afterCommit`
+  one after the Command commits. It extends the owner's write and never replaces it. Command
+  middleware runs on every Command whose action matches its declared filter: `admit` before the
+  Command does anything, which may only pass or refuse; `observe` after the run, read-only. It
+  never transforms a Command's input. Overlay modules ship no schema. A deployment needing new schema ships it
+  in an installed module package, on one of three rungs: a **side table** the package owns, **declared
+  extension columns** on an extensible table (Principle I), or a **variant the owning module
+  provides**. Schema, entity or migration overrides of existing core units — a core column, a
+  constraint, an index or entity metadata — are never offered. Resolution MUST be a
+  build/composition-time concern on the **existing toolchain** — no new runtime dependency
+  (Principle IV).
 
 **Rationale**: The product is confirmed multi-deployment, but modules are wired by a
 hand-maintained static registry plus manual composition, and there is no overlay directory or
@@ -1434,4 +1645,4 @@ corrective issues for any drift.
 to constitutional weight lives in `README.md` and the generated project
 documentation site.
 
-**Version**: 4.1.0 | **Ratified**: 2026-04-23 | **Last Amended**: 2026-09-28
+**Version**: 4.4.0 | **Ratified**: 2026-04-23 | **Last Amended**: 2026-11-27

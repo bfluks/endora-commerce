@@ -69,7 +69,10 @@ export type AssertionId =
   | 'A14'
   | 'A15'
   | 'A16'
-  | 'A17';
+  | 'A17'
+  | 'A18'
+  | 'A19'
+  | 'A20';
 
 /**
  * What each assertion is, independently of any run.
@@ -98,6 +101,9 @@ export const ASSERTION_CATALOGUE: Readonly<Record<AssertionId, string>> = {
   A15: "the instance's own CLI creates an administrator, and the instance answers that administrator's login with a session",
   A16: 'the module packages the instance installs are exactly the ones its own manifests declare, whichever supply route it took',
   A17: 'a request is confined to what its authenticated actor may reach: a customer to its organization, an admin to the scope its role resolves to, a bound API key to its binding',
+  A18: 'a compiled overlay that no longer matches its sources, or one that breaks the module layout, is refused before it runs, and a clean build composes',
+  A19: 'an overlay module that owns a table: `setup` passes over it, applies its migration, and its route serves the row it seeded',
+  A20: "an overlay module's admin layer is in the admin built for its deployment, and in no admin built without it",
 };
 
 export const ASSERTION_IDS = Object.keys(ASSERTION_CATALOGUE) as readonly AssertionId[];
@@ -718,6 +724,27 @@ export interface AdminBundleObservation {
   readonly installed: readonly string[];
   /** Bytes of JavaScript read, so a bundle that is there and empty is visible. */
   readonly bytes: number;
+}
+
+/**
+ * The module ids a built admin bundle's contribution registry names — A5's
+ * evidence, and A7's bundle half.
+ *
+ * The generated registry is `{ moduleId: '<id>', contributions: … }`, and the
+ * property survives minification because esbuild and Vite do not mangle a
+ * plain object key. The **quote** does not: Vite 8 prints string literals as
+ * template literals (`{moduleId:`admin_roles`,…}`), so every quoting a
+ * minifier prints is read, with the closing mark matching the opening one.
+ * Only an entry whose next key is `contributions` counts: other code carries a
+ * `moduleId` key too (audit_logs' filter writes `{ action, moduleId: 'core' }`),
+ * and that is not a module the bundle composes.
+ */
+export function registryModuleIds(text: string): readonly string[] {
+  const named = new Set<string>();
+  for (const match of text.matchAll(/\bmoduleId\s*:\s*(["'`])([a-z0-9_]+)\1\s*,\s*contributions\s*:/g)) {
+    named.add(match[2]!);
+  }
+  return [...named].sort();
 }
 
 /**
@@ -2402,3 +2429,231 @@ export function evaluateA17(observed: ActorScopeObservation): AssertionResult {
       'naming that administrator',
   };
 }
+
+/** One A18 case: the tree changed one way, and what the probe answered. */
+export interface OverlayBuildCase {
+  readonly kind: 'stale' | 'unbuilt' | 'orphan' | 'package-in-disguise';
+  /** Which of the instance's own processes was asked. */
+  readonly probe: 'module:status' | 'api';
+  readonly code: number;
+  readonly output: string;
+}
+
+/** What A18's probe measured (`specs/190-overlay-full-modules/` T021). */
+export interface OverlayBuildObservation {
+  readonly cases: readonly OverlayBuildCase[];
+  /** `module:status` over the restored, rebuilt tree; `null` when it was not run. */
+  readonly clean: { readonly code: number; readonly output: string } | null;
+  /** Why nothing could be probed, when nothing could. */
+  readonly failure?: string;
+}
+
+/**
+ * A18 — a stale or malformed overlay build is refused, a clean one composes (#1848, FR-015,
+ * FR-003).
+ *
+ * Each case has to be refused **by name**: a non-zero exit that does not say `[<kind>]` is some
+ * other refusal and proves nothing about this one — a missing `DATABASE_URL` would pass every
+ * case otherwise. The clean run is the other half, because a guard that refused everything would
+ * pass the four cases too.
+ */
+export function evaluateA18(observed: OverlayBuildObservation): AssertionResult {
+  if (observed.failure !== undefined) return { id: 'A18', state: 'unmeasured', detail: observed.failure };
+  if (observed.cases.length === 0) {
+    return { id: 'A18', state: 'unmeasured', detail: 'no case was probed' };
+  }
+  const missed = observed.cases.filter(
+    (entry) => entry.code === 0 || !entry.output.includes(`[${entry.kind}]`),
+  );
+  if (missed.length > 0) {
+    return {
+      id: 'A18',
+      state: 'fail',
+      detail:
+        `${missed.map((entry) => `${entry.kind} (${entry.probe}, exit ${String(entry.code)})`).join(', ')} ` +
+        'ran or was refused for another reason: a process imported overlay code that does not match ' +
+        `\`apps/\` — ${failureExcerpt(missed[0]!.output, 3)}`,
+    };
+  }
+  if (observed.clean === null || observed.clean.code !== 0) {
+    return {
+      id: 'A18',
+      state: 'fail',
+      detail:
+        'every broken tree was refused, and so was the clean rebuild: a guard that refuses ' +
+        `everything — ${observed.clean === null ? 'the clean run was not made' : failureExcerpt(observed.clean.output, 3)}`,
+    };
+  }
+  const kinds = [...new Set(observed.cases.map((entry) => entry.kind))];
+  const probes = [...new Set(observed.cases.map((entry) => entry.probe))];
+  return {
+    id: 'A18',
+    state: 'pass',
+    detail:
+      `${kinds.join(', ')} were each refused by name before any overlay code ran (asked of ` +
+      `${probes.join(' and ')}), and the restored tree, rebuilt, composed`,
+  };
+}
+
+/** What A19's probe read (`specs/190-overlay-full-modules/` T080, #1850). */
+export interface OverlaySchemaObservation {
+  readonly moduleId: string;
+  /** The class the fixture's one migration file exports. */
+  readonly migrationName: string;
+  /** The body that migration inserts into the module's own table. */
+  readonly seeded: string;
+  readonly built: { readonly code: number; readonly output: string } | null;
+  /** The instance's own `setup` — `generate`, `build`, `typecheck`, `migrate`, `module:install --all`. */
+  readonly migrated: { readonly code: number; readonly output: string } | null;
+  /** `mikro_orm_migrations`' names after `setup`; `null` when it could not be read. */
+  readonly applied: readonly string[] | null;
+  /** The fixture route's answer; `null` when the instance never answered. */
+  readonly probe: { readonly status: number; readonly body: unknown } | null;
+  /** Why nothing could be measured, when nothing could. */
+  readonly failure?: string;
+}
+
+/**
+ * A19 — an overlay module owns a table in a created instance (US1, SC-001).
+ *
+ * Three facts, each by a different author: `setup` exits 0 over the overlay — its `typecheck` and
+ * its `migrate` among them — the
+ * database records the fixture's migration under its class name, and the fixture's route — reading
+ * through the entity its `backend.ts` exports — answers with the row that migration inserted. A
+ * route that answered without the row is the ORM mapping the class to no table, which is the
+ * silent state the `entities` export exists to prevent.
+ */
+export function evaluateA19(observed: OverlaySchemaObservation): AssertionResult {
+  if (observed.failure !== undefined) return { id: 'A19', state: 'unmeasured', detail: observed.failure };
+  if (observed.built === null || observed.built.code !== 0) {
+    return {
+      id: 'A19',
+      state: 'unmeasured',
+      detail:
+        `the backend member's own \`build\` did not compile the overlay module ` +
+        `'${observed.moduleId}'${observed.built === null ? '' : `: ${failureExcerpt(observed.built.output, 3)}`}`,
+    };
+  }
+  if (observed.migrated === null || observed.migrated.code !== 0) {
+    return {
+      id: 'A19',
+      state: 'fail',
+      detail:
+        `\`setup\` ${observed.migrated === null ? 'was not run' : `exited ${String(observed.migrated.code)}`} ` +
+        `over an overlay module that owns a table${observed.migrated === null ? '' : `: ${failureExcerpt(observed.migrated.output, 3)}`}`,
+    };
+  }
+  if (observed.applied === null || !observed.applied.includes(observed.migrationName)) {
+    return {
+      id: 'A19',
+      state: 'fail',
+      detail:
+        `\`setup\` exited 0 and ${observed.applied === null ? 'the migrations table could not be read' : `recorded no '${observed.migrationName}'`}: ` +
+        `the overlay module's migration was not applied`,
+    };
+  }
+  if (observed.probe === null) {
+    return { id: 'A19', state: 'unmeasured', detail: 'the instance never answered, so the route was not asked' };
+  }
+  const bodies = (observed.probe.body as { bodies?: unknown } | null)?.bodies;
+  if (observed.probe.status !== 200 || !Array.isArray(bodies) || !bodies.includes(observed.seeded)) {
+    return {
+      id: 'A19',
+      state: 'fail',
+      detail:
+        `'${observed.migrationName}' is applied, and the module's route answered ${String(observed.probe.status)} ` +
+        `with ${JSON.stringify(observed.probe.body).slice(0, 160)} rather than the row it seeded`,
+    };
+  }
+  return {
+    id: 'A19',
+    state: 'pass',
+    detail:
+      `'${observed.moduleId}' owns a table: the instance's own \`setup\` passed over it and applied ` +
+      `'${observed.migrationName}' out of the compiled overlay, and its route answered 200 with the row ` +
+      `that migration seeded, read through the entity its backend exports`,
+  };
+}
+
+/** What A20's probe read (`specs/190-overlay-full-modules/` T049, #1855). */
+export interface OverlayAdminObservation {
+  readonly moduleId: string;
+  readonly deployment: string;
+  /** The string the fixture's screen renders, searched for in each bundle. */
+  readonly marker: string;
+  /** The instance's own `generate`, over the tree carrying the fixture. */
+  readonly generated: { readonly code: number; readonly output: string } | null;
+  /** The admin member's own `build`, with `DEPLOYMENT` set to the deployment. */
+  readonly deploymentBuild: { readonly code: number; readonly output: string } | null;
+  readonly deploymentHolds: boolean | null;
+  /** The same build with `DEPLOYMENT` blank: bare core. */
+  readonly bareBuild: { readonly code: number; readonly output: string } | null;
+  readonly bareHolds: boolean | null;
+  /**
+   * The admin member's own `typecheck`, whose program includes `../apps/*\/modules/*\/admin`.
+   * Reported, not judged: in a created instance it does not pass over the admin's own
+   * `src/main.tsx` either, because the admin member installs no React types — measured on
+   * 2026-11-26 (#1855), and a defect of the template's admin dependencies rather than of FR-083.
+   */
+  readonly typecheck: { readonly code: number; readonly output: string } | null;
+  readonly failure?: string;
+}
+
+/**
+ * A20 — an overlay admin layer in a created instance (US3, FR-080 – FR-084, SC-004).
+ *
+ * Three facts: `generate` renders the deployment registries without refusing the
+ * tree (palette coverage included), the admin built with `DEPLOYMENT` set ships
+ * the fixture's screen, and the admin built without it does not. The screen
+ * imports the kit, so a bundle that holds it resolved the kit from outside the
+ * admin member (`resolve.dedupe`, FR-084). The admin `typecheck` is run and its
+ * exit is reported beside the verdict — see {@link OverlayAdminObservation.typecheck}.
+ */
+export function evaluateA20(observed: OverlayAdminObservation): AssertionResult {
+  if (observed.failure !== undefined) return { id: 'A20', state: 'unmeasured', detail: observed.failure };
+  const fail = (detail: string): AssertionResult => ({ id: 'A20', state: 'fail', detail });
+  if (observed.generated === null || observed.generated.code !== 0) {
+    return fail(
+      `\`generate\` ${observed.generated === null ? 'was not run' : `exited ${String(observed.generated.code)}`} ` +
+        `over the overlay admin layer of '${observed.moduleId}'` +
+        (observed.generated === null ? '' : `: ${failureExcerpt(observed.generated.output, 3)}`),
+    );
+  }
+  if (observed.deploymentBuild === null || observed.deploymentBuild.code !== 0) {
+    return fail(
+      `the admin member's \`build\` with DEPLOYMENT=${observed.deployment} ` +
+        `${observed.deploymentBuild === null ? 'was not run' : `exited ${String(observed.deploymentBuild.code)}: ${failureExcerpt(observed.deploymentBuild.output, 3)}`}`,
+    );
+  }
+  if (observed.deploymentHolds !== true) {
+    return fail(
+      `the admin built with DEPLOYMENT=${observed.deployment} holds no '${observed.marker}': the overlay ` +
+        `admin layer of '${observed.moduleId}' did not reach the bundle`,
+    );
+  }
+  if (observed.bareBuild === null || observed.bareBuild.code !== 0 || observed.bareHolds !== false) {
+    return fail(
+      observed.bareBuild === null || observed.bareBuild.code !== 0
+        ? `the admin built for bare core (DEPLOYMENT blank) did not build` +
+            (observed.bareBuild === null ? '' : `: ${failureExcerpt(observed.bareBuild.output, 3)}`)
+        : `the admin built for bare core (DEPLOYMENT blank) holds '${observed.marker}' too: a ` +
+            `deployment's overlay screen reached a bundle that was not built for it (SC-004)`,
+    );
+  }
+  const typecheck =
+    observed.typecheck === null
+      ? 'the admin `typecheck` was not run'
+      : observed.typecheck.code === 0
+        ? 'the admin `typecheck` passed over it'
+        : `the admin \`typecheck\` exited ${String(observed.typecheck.code)} (reported, not judged: ` +
+          `the admin member installs no React types)`;
+  return {
+    id: 'A20',
+    state: 'pass',
+    detail:
+      `the admin built with DEPLOYMENT=${observed.deployment} ships '${observed.moduleId}'s screen, ` +
+      `rendered through the kit it resolves from outside the admin member; the admin built for bare ` +
+      `core ships none of it; \`generate\` passed over it; ${typecheck}`,
+  };
+}
+

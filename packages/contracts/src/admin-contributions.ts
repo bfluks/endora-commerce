@@ -27,6 +27,9 @@
  * the `AdminRouteDeclaration` interface.
  */
 import { z } from 'zod';
+import type { ScopeRef } from './product-scope-model.js';
+import type { ScopedValuesData } from './product-scoped-values.js';
+import type { ScopedWriteOp } from './scoped-write-encoding.js';
 
 import { KnownIconNameSchema } from './admin-actions.js';
 import { blockNameRe } from './cms.js';
@@ -97,6 +100,11 @@ export const AdminNavSectionNameSchema = z.enum([
   // R-19): the CRM screens get a group of their own. The section is the
   // shell's, declared here and in `AppShell.tsx`; the `crm` module joins it.
   'crm',
+  // `specs/163-projects-and-tasks/` research R-16: Projects and Tasks get a
+  // group of their own, after CRM — they are not a sales or CRM sub-feature,
+  // and Tasks is meant for every module. The `projects` and `tasks` modules
+  // join it.
+  'work',
   'catalog',
   'inventory',
   'pricing',
@@ -106,6 +114,20 @@ export const AdminNavSectionNameSchema = z.enum([
   'messaging',
   'newsletter',
   'analyticsAds',
+  // Issue #1519 (UX audit SHELL-11, owner decision DEC-02): the eighteen-row
+  // *System* section is split in two. *Access* is who may sign in and what
+  // they may do — users, roles, API keys, credentials, the audit log.
+  // *Platform* is how the instance is configured and extended — modules,
+  // settings, webhooks, custom fields, import/export and the like.
+  'access',
+  'platform',
+  /**
+   * @deprecated Since issue #1519 — name `'access'` or `'platform'`. Kept so a
+   * separately shipped module that still declares it keeps rendering: the
+   * shell files a `'system'` entry under *Platform*, the section every former
+   * System row that is not about access now lives in. Removing the member is a
+   * breaking change for such a module and waits for a major release.
+   */
   'system',
 ]);
 
@@ -202,6 +224,17 @@ export const AdminZoneNameSchema = z.enum([
    */
   'payment_method.list.integrations',
   /**
+   * The products list's header actions, before *New product* — issue #1455
+   * (UX audit CAT-02). The list's Import and Export buttons had no handler; the
+   * screen that does both belongs to `import_export`, so the host names the
+   * place and that module contributes its own link, gated by its own presence
+   * and permission, and `catalog` names no other module.
+   *
+   * Mounted **once** per list screen and carrying no props.
+   * Props: {@link ProductListActionsZoneProps}.
+   */
+  'product.list.actions',
+  /**
    * Below the invoice detail's totals column, at the end of the right-hand
    * stack.
    *
@@ -224,11 +257,18 @@ export const AdminZoneNameSchema = z.enum([
    */
   'invoice.detail.after',
   /**
-   * The end of the category editor's form, after its save/cancel row.
+   * The end of the category editor's form, before its save row.
+   *
+   * Feature 180 (FR-052) places the mount above the Save / Cancel row, so what
+   * the Save covers sits above it; the name is kept. Until the category editor
+   * adopts the one Save (WP-6), `CategoriesTree.tsx` still renders it after the
+   * row.
    *
    * Mounted **once** per open category, and named from the host's own word for
    * the place (Z14): `catalog`'s `CategoriesTree.tsx` is the editor, and the
-   * place is *after* everything the editor itself offers. Props:
+   * place is the end of its form, after the editor's own fields and before its
+   * Save row — what the Save covers sits above it (feature 180, FR-052; the
+   * name predates the move and was kept). Props:
    * {@link CategoryEditorZoneProps}.
    *
    * The first member whose contributor is `price_lists`. `catalog` imported
@@ -262,6 +302,15 @@ export const AdminZoneNameSchema = z.enum([
    * label is the host's own vocabulary.
    */
   'product.editor.channels',
+  /**
+   * The product editor's SEO section at the editor scope (feature 174, FR-090…FR-092,
+   * `contracts/editor-ui.md` §5). Replaces 163's `product.editor.seo.after`.
+   *
+   * Mounted **once** per editor. Props: {@link ProductEditorSeoZoneProps}. `seo` contributes
+   * its fields here, staged into catalog's one Save; `catalog` renders the SEO tab only when the
+   * zone has a contributor, so with `seo` off there is no tab, no request and no error.
+   */
+  'product.editor.seo',
   /**
    * Below the sales-channel editor's identity form.
    *
@@ -298,8 +347,29 @@ export const AdminZoneNameSchema = z.enum([
    * `unrendered-zone` refusal is computed per member, so one host's mount would
    * cover another host's absence. `customer.detail.after` is the twin, and the
    * cost of keeping them apart is one four-line wrapper in `quick_order`.
+   *
+   * It is the **Commerce** tab's stack: a panel about how the organization
+   * buys belongs here; a panel about who sells to it belongs in
+   * `organization.detail.sales` (issue #1452, UX audit DS-20).
    */
   'organization.detail.after',
+  /**
+   * The **body** of the organization detail's Sales tab, after the host's own
+   * sales-rep section.
+   *
+   * Mounted **once** per organization, and named from the host's own word for
+   * the place (Z14): `organizations`' `OrganizationDetail.tsx` calls the tab
+   * `sales`. Props: {@link OrganizationDetailSalesZoneProps} — the id and **no**
+   * save session, because the Sales tab is not part of the Commerce tab's one
+   * Save, and a zone of such a host carries no handle.
+   *
+   * The tab is shown while the admin may assign sales reps **or**
+   * `useAdminZone(name, props).length > 0` (Z15), so it is never drawn empty.
+   * The first contributors are `crm`'s opportunities and `projects`' projects
+   * of the organization, which sat in the Commerce tab until issue #1452 (UX
+   * audit DS-20); `organizations` names no contributor and gains no edge.
+   */
+  'organization.detail.sales',
   /**
    * The stack of panels a customer's detail screen ends with.
    *
@@ -340,10 +410,27 @@ export const AdminZoneNameSchema = z.enum([
    *
    * It is not `order.detail.payment`: that member is the body of one tab and
    * is named for what fills it. This one is for a module that has something to
-   * say about the order as a whole. The first contributor is `crm`'s
-   * linked-opportunity panel; `orders` names no contributor and gains no edge.
+   * say about the order as a whole: content about the record that needs the
+   * page's width. A short fact list belongs in `order.detail.sidebar`, where
+   * `crm`, `projects` and `tasks` moved in issue #1452 (UX audit DS-20); this
+   * member stays declared and rendered for the contributors that keep it.
    */
   'order.detail.after',
+  /**
+   * The order detail's sidebar card.
+   *
+   * Mounted **once** per order. Every contribution is a **section** of one
+   * card — an `EditorSection` takes the zone's `chrome="section"` — never a
+   * card in a card, and it has a sidebar's width (20rem). The host draws the
+   * sidebar column only while `useAdminZone(name, props).length > 0`, so an
+   * empty zone leaves the screen identical to one without the member. Props:
+   * {@link OrderDetailZoneProps}, the order's id and nothing else (Z3).
+   *
+   * The first contributors are `crm`'s linked opportunity, `projects`' Project
+   * and `tasks`' Tasks (issue #1452, UX audit DS-20); `orders` names no
+   * contributor and gains no edge.
+   */
+  'order.detail.sidebar',
   /**
    * The stack of panels a quote request's detail screen ends with.
    *
@@ -355,10 +442,79 @@ export const AdminZoneNameSchema = z.enum([
    * without the member. Props: {@link QuoteRequestDetailZoneProps}, the
    * request's id and nothing else (Z3).
    *
-   * The first contributor is `crm`'s linked-opportunity panel;
-   * `quote_requests` names no contributor and gains no edge.
+   * Content about the record that needs the page's width; a short fact list
+   * belongs in `quote_request.detail.sidebar`, where `crm`, `projects` and
+   * `tasks` moved in issue #1452 (UX audit DS-20). This member stays declared
+   * and rendered for the contributors that keep it.
    */
   'quote_request.detail.after',
+  /**
+   * The quote request detail's sidebar card.
+   *
+   * Mounted **once** per quote request, on `order.detail.sidebar`'s terms and
+   * for its reasons: every contribution is a section of one card, and the
+   * column is drawn only while the zone has a contribution. Props:
+   * {@link QuoteRequestDetailZoneProps}, the request's id and nothing else
+   * (Z3).
+   *
+   * The first contributors are `crm`'s linked opportunity, `projects`' Project
+   * and `tasks`' Tasks (issue #1452, UX audit DS-20); `quote_requests` names no
+   * contributor and gains no edge.
+   */
+  'quote_request.detail.sidebar',
+  /**
+   * The stack of panels an Opportunity's detail screen ends with.
+   *
+   * Mounted **once** per Opportunity, after the card that holds its tabs, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link OpportunityDetailZoneProps}, the
+   * Opportunity's id and nothing else (Z3).
+   *
+   * Content about the record that needs the page's width; a short fact list
+   * belongs in `opportunity.detail.sidebar`, where `projects` and `tasks`
+   * moved in issue #1452 (UX audit DS-20, WORK-12). This member stays declared
+   * and rendered for the contributors that keep it.
+   */
+  'opportunity.detail.after',
+  /**
+   * The panels other modules add about an Opportunity, last in its sidebar.
+   *
+   * Mounted **once** per Opportunity, as the last sections of the
+   * `OpportunitySidebar` card, on `task.detail.after`'s terms: every
+   * contribution is a **section** of that card, never a card in a card, and an
+   * empty zone renders nothing at all. Props: {@link OpportunityDetailZoneProps},
+   * the Opportunity's id and nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project (issue #1452, UX audit
+   * DS-20); `tasks`' Tasks sat here until they became a tab of the record in
+   * `opportunity.detail.tabs` (`specs/183-record-tab-contributions/`, issue
+   * #1526, WORK-12). `crm` names no contributor and gains no edge.
+   */
+  'opportunity.detail.sidebar',
+  /**
+   * The tabs other modules add to an Opportunity's tab strip — the first
+   * **record-tab zone** (`specs/183-record-tab-contributions/contracts/record-tab-zone.md`).
+   *
+   * A record-tab zone is a member listed in {@link RECORD_TAB_ZONE_NAMES}:
+   * its contributions are **whole tabs** of the host's `RecordTabs`, each one
+   * button with a label and an optional count, plus one panel, and every
+   * contribution carries {@link RecordTabDeclarationSchema} data in `tab`
+   * (RT1, RT2). The host draws the strip, decides where in it the contributed
+   * tabs go — here after Events and before Notes, "what is planned for it" —
+   * and owns `?tab=`; the contributions order themselves by weight, then
+   * module id. It enumerates the zone with `useRecordTabZone(name, props)`,
+   * which decides both presence axes, the permission and `match` before any
+   * chunk or count loads, so a tab the reader cannot see costs nothing (RT3,
+   * RT4). A contributed id that equals a host tab's id is not drawn.
+   *
+   * Mounted **once** per Opportunity. Props: {@link OpportunityDetailZoneProps},
+   * the Opportunity's id and nothing else (Z3). The first contributor is
+   * `tasks`' *Tasks* tab, counting the open Tasks; `crm` names no contributor
+   * and gains no edge.
+   */
+  'opportunity.detail.tabs',
   /**
    * The per-row action cell of the order detail's Delivery tab.
    *
@@ -485,6 +641,27 @@ export const AdminZoneNameSchema = z.enum([
    */
   'category.content.editor',
   /**
+   * The editor of one product content attribute's Page Builder document, one
+   * language at a time (`specs/172-product-content-attributes/`).
+   *
+   * Mounted **once** on `catalog`'s product content screen
+   * (`ProductContentPage.tsx`), named from the host's own words for the place
+   * (Z14): the screen is the product's *content*, the place is its *editor*.
+   * Props: {@link ProductContentEditorZoneProps}.
+   *
+   * **The direction is inverted, as on `category.content.editor` and for the
+   * same reason.** `catalog` is `nonDeactivatable` and `cms` is switchable, so
+   * `catalog` can neither declare an edge to the Page Builder's owner (it would
+   * make `cms.enabled` a dead switch) nor import it undeclared. The host owns
+   * the document, its storage and its save; whoever owns a Page Builder
+   * contributes the canvas and reports edits through `onChange`. `catalog`
+   * names no module. A platform with no contributor shows the host's own
+   * notice (Z15) and offers no save, and the stored content stays stored —
+   * unlike category content it is not rendered on the storefront while the
+   * CMS is off (spec FR-051, owner ruling OR-7).
+   */
+  'product.content.editor',
+  /**
    * Below the field of one setting on the Settings screen.
    *
    * Mounted **once per setting row** by `settings`' row editor
@@ -512,17 +689,160 @@ export const AdminZoneNameSchema = z.enum([
    * contribution of that module, through the renderer's own presence filter.
    */
   'settings.setting.after',
+  /**
+   * The panels other modules add about a Task, last in its sidebar.
+   *
+   * Mounted **once** per Task, as the last section of the screen's sidebar
+   * card (issue #1524, UX audit 2026-11-17 WORK-02): every contribution is a
+   * **section** of that card — an `EditorSection` takes the zone's
+   * `chrome="section"` — never a card in a card, and it has a sidebar's
+   * width. An empty zone renders nothing at all, so the screen is identical
+   * to one without the member. Props: {@link TaskDetailZoneProps}, the Task's
+   * id and nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `tasks`
+   * names no contributor and gains no edge.
+   *
+   * This is the Task's **sidebar** zone, the twin of `order.detail.sidebar`
+   * and `opportunity.detail.sidebar`; it keeps its `.after` name because a
+   * rename is a removal, breaking for contributors (issue #1452).
+   */
+  'task.detail.after',
+  /**
+   * The stack of panels a Project's detail screen ends with (issue #1905).
+   *
+   * Mounted **once** per Project, after the card that holds its tabs, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link ProjectDetailZoneProps}, the Project's
+   * id and nothing else (Z3).
+   *
+   * Content about the record that needs the page's width; a short fact list
+   * belongs in `project.detail.sidebar`. No contributor yet; `projects` names
+   * none and gains no edge.
+   *
+   * There is **no** `project.detail.tabs`: the Project's tab strip adopts no
+   * contributed tab (`specs/183-record-tab-contributions/research.md`), and a
+   * record-tab zone for it is an open owner question, not this member.
+   */
+  'project.detail.after',
+  /**
+   * The Project detail's sidebar card (issue #1905).
+   *
+   * Mounted **once** per Project, on `order.detail.sidebar`'s terms and for its
+   * reasons: every contribution is a **section** of one card — an
+   * `EditorSection` takes the zone's `chrome="section"` — never a card in a
+   * card, at a sidebar's width (20rem), and the host draws the sidebar column
+   * only while `useAdminZone(name, props).length > 0`, so with nothing
+   * contributed the screen is the single column it was. Props:
+   * {@link ProjectDetailZoneProps}, the Project's id and nothing else (Z3).
+   *
+   * No contributor yet; `projects` names none and gains no edge.
+   */
+  'project.detail.sidebar',
+  /**
+   * The **body** of the signed-in admin's Profile *Security* tab
+   * (`/profile/security`) — issue #1519 (UX audit SHELL-11, DEC-02): personal
+   * two-step verification is about the admin's own account, so it lives under
+   * Profile rather than in a sidebar section about the platform.
+   *
+   * Mounted **once**, by `admin-shell`'s `ProfilePage`, and named from the
+   * host's own word for the place (Z14). The host keeps the tab strip and the
+   * tab's label and stops knowing which module fills it, on
+   * `order.detail.payment`'s terms: the tab is shown by
+   * `useAdminZone(name, props).length > 0`, which has already applied both
+   * presence axes and the contributor's permission, so with `mfa` off there is
+   * no tab and `/profile/security` falls back to the profile.
+   *
+   * **No save session, on purpose.** The contribution's every write — enabling,
+   * confirming, regenerating recovery codes, switching off — is an immediate
+   * write confirmed with a one-time code, which cannot be staged into a Save;
+   * and the tab is a separate view from the profile form, whose one Save covers
+   * only that form. Props: {@link ProfileSecurityZoneProps}.
+   */
+  'profile.security',
 ])
 
 export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
+
+/**
+ * The members of {@link AdminZoneNameSchema} that are **record-tab zones**
+ * (`specs/183-record-tab-contributions/` research R1): their contributions
+ * are whole tabs of a host's record tab strip, not panels of a stack.
+ *
+ * Closed and exported, so the contribution schema (tab data required here and
+ * forbidden elsewhere) and the kit's helper types (`zoneComponent` refuses
+ * these, `recordTabComponent` takes nothing else) tell the two kinds apart
+ * from one list rather than from a second registry. One member per host,
+ * named `<host>.detail.tabs` (Z13, Z14).
+ */
+export const RECORD_TAB_ZONE_NAMES = ['opportunity.detail.tabs'] as const satisfies readonly AdminZoneName[];
+
+/** A zone whose contributions are whole tabs of the host's record tab strip. */
+export type RecordTabZoneName = (typeof RECORD_TAB_ZONE_NAMES)[number];
+
+/** Whether `zone` is a record-tab zone. */
+export function isRecordTabZoneName(zone: string): zone is RecordTabZoneName {
+  return (RECORD_TAB_ZONE_NAMES as readonly string[]).includes(zone);
+}
 
 // ---------------------------------------------------------------------------
 // Zone props
 // ---------------------------------------------------------------------------
 
+/**
+ * The host editor's save session, as a zone contribution sees it (feature 180,
+ * `specs/180-one-save-zone-editors/contracts/save-participation.md` §1, FR-002).
+ *
+ * **Opaque, and carrying no function, on purpose.** The host's
+ * `SaveSessionProvider` (`@endora-commerce/admin-kit/lib`) creates it, keeps it
+ * stable for the session's life — so `AdminZone`'s per-factory lazy components
+ * do not remount — and resolves it back to the live session when a
+ * contribution calls `useSaveParticipant(handle, …)`. A function-typed member
+ * here would pull React's types into this package.
+ *
+ * It is a prop of exactly the zones whose host editor has one Save covering its
+ * panels (`spec.md` § *Editors that adopt the one Save*). A zone without it
+ * offers no session, so a contribution there that tries to take part is a
+ * `tsc` error rather than a draft nothing ever saves.
+ */
+export interface EditorSaveSessionHandle {
+  readonly sessionId: string;
+}
+
 /** A zone mounted once per product editor. */
 export interface ProductEditorZoneProps {
   readonly productId: string;
+  /** Feature 180 — the product editor's one Save (FR-002). */
+  readonly saveSession: EditorSaveSessionHandle;
+}
+
+/**
+ * The product editor's SEO zone (feature 174, `contracts/editor-ui.md` §5): the editor scope,
+ * the SEO block of the scoped-values read, and the staging callback into catalog's one Save.
+ */
+export interface ProductEditorSeoZoneProps {
+  readonly productId: string;
+  readonly scope: ScopeRef;
+  /** "Global", "<channel>" or "<channel> · <language>", already translated. */
+  readonly scopeLabel: string;
+  /** The scope one level up, already translated; `null` at Global. */
+  readonly parentScopeLabel: string | null;
+  readonly view: ScopedValuesData['seo'];
+  /** The staged SEO cells, keyed by field (`title`, `description`, …). */
+  readonly staged: ReadonlyMap<string, ScopedWriteOp<string>>;
+  onStage(field: string, op: ScopedWriteOp<string> | undefined): void;
+  readonly readOnly: boolean;
+  /** Field → translated error message from the last save. */
+  readonly errors: Readonly<Record<string, string>>;
+  /**
+   * The product's scope version (`scoped-values-api.md` R7) of the editor's last read, Save or
+   * copy; `null` before the first read. A change means saved values moved, so the zone re-reads
+   * what it derives from them.
+   */
+  readonly version: string | null;
 }
 
 /**
@@ -538,6 +858,15 @@ export interface DeliveryMethodIntegrationsZoneProps {}
 
 /** The payment-method integrations mount carries no host-owned data. */
 export interface PaymentMethodIntegrationsZoneProps {}
+
+/** The products list's header-actions mount carries no host-owned data. */
+export interface ProductListActionsZoneProps {}
+
+/**
+ * The Profile *Security* tab carries no host-owned data: its subject is the
+ * signed-in admin, whom every contributor already reads from the session.
+ */
+export interface ProfileSecurityZoneProps {}
 
 /**
  * A zone mounted once at the end of the invoice detail's totals column.
@@ -558,7 +887,8 @@ export interface InvoiceDetailZoneProps {
 }
 
 /**
- * A zone mounted once at the end of the category editor's form.
+ * A zone mounted once at the end of the category editor's form, before its save
+ * row (feature 180, FR-052).
  *
  * The entity's own id and nothing else, which is what the one contribution
  * reads: `DisplayModeOverrideRow` takes a scope and a target id, and the scope
@@ -567,6 +897,8 @@ export interface InvoiceDetailZoneProps {
  */
 export interface CategoryEditorZoneProps {
   readonly categoryId: string;
+  /** Feature 180 — the category editor's Save (FR-002, FR-050). */
+  readonly saveSession: EditorSaveSessionHandle;
 }
 
 /**
@@ -591,6 +923,26 @@ export interface CategoryContentEditorZoneProps {
 }
 
 /**
+ * A zone mounted once on the product content screen, around one content
+ * attribute's Page Builder document in one language.
+ *
+ * {@link CategoryContentEditorZoneProps}' terms: the document is `unknown` on
+ * both sides of the seam, the host re-mounts the zone per language, and the
+ * contributor reports every edit through `onChange` and never saves.
+ */
+export interface ProductContentEditorZoneProps {
+  readonly productId: string;
+  /** The content attribute being edited (its immutable key). */
+  readonly attributeKey: string;
+  /** The content language being edited — a key of the stored envelope. */
+  readonly language: string;
+  /** That language's Page Builder document, or `null` when none is stored. */
+  readonly data: unknown;
+  /** Reports the edited document. The host saves; the contributor never does. */
+  readonly onChange: (data: unknown) => void;
+}
+
+/**
  * A zone mounted once below the sales-channel editor's identity form.
  *
  * The channel's **id**, not its code: every route the one contribution calls is
@@ -599,6 +951,8 @@ export interface CategoryContentEditorZoneProps {
  */
 export interface SalesChannelEditorZoneProps {
   readonly channelId: string;
+  /** Feature 180 — the identity form's Save (FR-002, FR-070). */
+  readonly saveSession: EditorSaveSessionHandle;
 }
 
 /**
@@ -613,6 +967,19 @@ export interface SalesChannelEditorZoneProps {
  */
 export interface OrganizationDetailZoneProps {
   readonly organizationId: string;
+  /** Feature 180 — the organization screen's one Save (FR-002, FR-060). */
+  readonly saveSession: EditorSaveSessionHandle;
+}
+
+/**
+ * A zone mounted once as the body of an organization detail's Sales tab.
+ *
+ * The organization's id and nothing else. Not {@link OrganizationDetailZoneProps}:
+ * the Sales tab is outside the Commerce tab's one Save, so the mount carries no
+ * save session and a contribution that reaches for one is a `tsc` error.
+ */
+export interface OrganizationDetailSalesZoneProps {
+  readonly organizationId: string;
 }
 
 /**
@@ -625,6 +992,8 @@ export interface OrganizationDetailZoneProps {
  */
 export interface CustomerDetailZoneProps {
   readonly customerId: string;
+  /** Feature 180 — the customer screen's one Save (FR-002, FR-060). */
+  readonly saveSession: EditorSaveSessionHandle;
 }
 
 /**
@@ -646,6 +1015,39 @@ export interface OrderDetailZoneProps {
  */
 export interface QuoteRequestDetailZoneProps {
   readonly quoteRequestId: string;
+}
+
+/**
+ * A zone mounted once per Opportunity, at the end of its detail screen.
+ *
+ * The Opportunity's own id and nothing else: a contribution reads what it
+ * shows through routes of its own, and the host hands over none of its data.
+ */
+export interface OpportunityDetailZoneProps {
+  readonly opportunityId: string;
+}
+
+/**
+ * A zone mounted once per Task, last in its detail screen's sidebar.
+ *
+ * The Task's own id and nothing else: a contribution reads what it shows
+ * through routes of its own, and the host hands over none of its data.
+ */
+export interface TaskDetailZoneProps {
+  readonly taskId: string;
+}
+
+/**
+ * A zone mounted once per Project — after its tabs, or in its sidebar (issue
+ * #1905).
+ *
+ * The Project's own id and nothing else: a contribution reads what it shows
+ * through routes or ports of its own, and the host hands over none of its
+ * data — not the Project's Organizations either, which a contribution reads
+ * through `projectReadPort` or a route of its own, under the reader's access.
+ */
+export interface ProjectDetailZoneProps {
+  readonly projectId: string;
 }
 
 /**
@@ -752,8 +1154,13 @@ export interface ProductEditorFieldZoneProps {
    */
   readonly fieldPath: string;
   /**
+   * Feature 174 (FR-106) — the editor scope the field is shown at. Optional: a contributor
+   * that ignores it keeps working.
+   */
+  readonly scope?: ScopeRef;
+  /**
    * The locales this field is edited in, or `null` for a field that is not
-   * language-scoped.
+   * language-scoped. Feature 174: the host passes `null` (protection is whole-field, FR-046).
    *
    * The host passes the set; a contributor that wants one control per locale
    * fans out over it. That is what collapses the two `LOCALES.map(...)` loops
@@ -763,6 +1170,8 @@ export interface ProductEditorFieldZoneProps {
    * {@link AdminZoneNameSchema}'s contract.
    */
   readonly languageCodes: readonly string[] | null;
+  /** Feature 180 — the product editor's one Save (FR-002). */
+  readonly saveSession: EditorSaveSessionHandle;
 }
 
 /**
@@ -790,24 +1199,37 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   'product.editor.field.after': ProductEditorFieldZoneProps;
   'delivery_method.list.integrations': DeliveryMethodIntegrationsZoneProps;
   'payment_method.list.integrations': PaymentMethodIntegrationsZoneProps;
+  'product.list.actions': ProductListActionsZoneProps;
   'invoice.detail.after': InvoiceDetailZoneProps;
   'category.editor.after': CategoryEditorZoneProps;
   // Reused, not aliased: a props type is the shape the mount carries, and two
   // places in one editor that both carry a product id carry the same shape.
   'product.editor.pricing.after': ProductEditorZoneProps;
   'product.editor.channels': ProductEditorZoneProps;
+  'product.editor.seo': ProductEditorSeoZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
+  'organization.detail.sales': OrganizationDetailSalesZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
   'order.detail.payment': OrderDetailZoneProps;
   'order.detail.after': OrderDetailZoneProps;
+  'order.detail.sidebar': OrderDetailZoneProps;
   'quote_request.detail.after': QuoteRequestDetailZoneProps;
+  'quote_request.detail.sidebar': QuoteRequestDetailZoneProps;
+  'opportunity.detail.after': OpportunityDetailZoneProps;
+  'opportunity.detail.sidebar': OpportunityDetailZoneProps;
+  'opportunity.detail.tabs': OpportunityDetailZoneProps;
   'order.shipment.row.actions': OrderShipmentRowZoneProps;
   'order.shipments.tab.actions': OrderShipmentsActionsZoneProps;
   'order.entry.tabs': OrderEntryTabsZoneProps;
   'ledger.section.tabs': LedgerSectionTabsZoneProps;
   'category.content.editor': CategoryContentEditorZoneProps;
+  'product.content.editor': ProductContentEditorZoneProps;
   'settings.setting.after': SettingsSettingAfterZoneProps;
+  'task.detail.after': TaskDetailZoneProps;
+  'project.detail.after': ProjectDetailZoneProps;
+  'project.detail.sidebar': ProjectDetailZoneProps;
+  'profile.security': ProfileSecurityZoneProps;
 }
 
 /** The props of one zone, by name. */
@@ -866,11 +1288,49 @@ export const AdminNavDeclarationSchema = z.object({
 });
 
 /**
+ * A tab id: lowercase, URL-safe, short — it is part of the host's `?tab=`, so
+ * renaming one breaks every link somebody saved.
+ */
+const recordTabIdRe = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * The tab a contribution to a record-tab zone adds to the host's strip
+ * (`specs/183-record-tab-contributions/data-model.md`, FR-002).
+ *
+ * Both keys are resolved in the **contributing** module's bundle — the module
+ * is the registry entry's key (D-142), never a declared field.
+ * `countLabelKey` is a template taking `{label}` and `{count}` that starts
+ * with `{label}` (WCAG 2.5.3, as the kit's `TabItem.countLabel`); absent, the
+ * kit names a counted tab "<label>, items: <n>".
+ */
+export const RecordTabDeclarationSchema = z.object({
+  id: z.string().regex(recordTabIdRe, 'Tab id must be a lowercase URL token of at most 32 characters'),
+  labelKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(translationKeyRe, 'Translation key must be dot-separated camelCase namespaces'),
+  countLabelKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(translationKeyRe, 'Translation key must be dot-separated camelCase namespaces')
+    .optional(),
+});
+
+export type RecordTabDeclaration = z.infer<typeof RecordTabDeclarationSchema>;
+
+/**
  * The data half of a contribution into another module's screen.
  *
  * A contribution declares **one** zone, so a component appearing in two zones
  * is two contributions — and only the one that needs narrowing carries a
  * {@link AdminZoneContributionSchema.shape.match}.
+ *
+ * `tab` is present exactly when the zone is a record-tab zone
+ * ({@link RECORD_TAB_ZONE_NAMES}) and absent on every other one (FR-003): a
+ * tab declared on a stack zone would render nowhere, and a record tab without
+ * one has no label for the host's strip.
  */
 export const AdminZoneContributionSchema = z.object({
   zone: AdminZoneNameSchema,
@@ -897,6 +1357,24 @@ export const AdminZoneContributionSchema = z.object({
   match: z
     .record(z.string(), z.union([z.string(), z.array(z.string()).readonly()]))
     .optional(),
+  /** The tab this contribution adds — on a record-tab zone, and only there. */
+  tab: RecordTabDeclarationSchema.optional(),
+}).superRefine((contribution, context) => {
+  const tabZone = isRecordTabZoneName(contribution.zone);
+  if (tabZone && contribution.tab === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['tab'],
+      message: `A contribution to the record-tab zone '${contribution.zone}' must declare its tab`,
+    });
+  }
+  if (!tabZone && contribution.tab !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['tab'],
+      message: `'${contribution.zone}' is not a record-tab zone; a tab declared there renders nowhere`,
+    });
+  }
 });
 
 /**
@@ -950,9 +1428,25 @@ export interface AdminRouteDeclaration extends z.infer<typeof AdminRouteDeclarat
 /** A sidebar entry a module adds. */
 export type AdminNavDeclaration = z.infer<typeof AdminNavDeclarationSchema>;
 
+/**
+ * A lazily-loaded count loader for a record tab (`specs/183-record-tab-contributions/`
+ * research R4).
+ *
+ * Structural, on {@link AdminComponentFactory}'s terms: the kit's
+ * `recordTabComponent()` constrains the default export to
+ * `(props: AdminZoneProps<Z>, signal: AbortSignal) => Promise<number>`.
+ */
+export type AdminCountFactory = () => Promise<{ readonly default: unknown }>;
+
 /** A contribution a module makes into a zone another module's screen renders. */
 export interface AdminZoneContribution extends z.infer<typeof AdminZoneContributionSchema> {
   readonly component: AdminComponentFactory;
+  /**
+   * The tab's count, for a contribution to a record-tab zone — a second
+   * dynamic-import factory, fetched only for a tab that survives presence and
+   * permission, so a tab nobody may see downloads nothing (091 FR-013).
+   */
+  readonly count?: AdminCountFactory;
 }
 
 /**

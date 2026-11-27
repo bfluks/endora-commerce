@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import {
   upsertLanguageRequestSchema,
+  type Currency,
   type CurrencyReadPort,
   type CurrencyRecord,
+  type I18nConfigResponse,
+  type Language as LanguageView,
+  type LanguageListResponse,
 } from '@endora-commerce/contracts';
 import type { LanguageService } from './services/language-service.js';
 import type { Language } from './entities/language.entity.js';
@@ -38,7 +42,9 @@ export async function registerI18nRoutes(
   const { languageService, currencyRead, requireAdmin, onConfigChange } = deps;
 
   // ---- Public (storefront + admin) i18n config ----
-  app.get('/api/v1/i18n/config', async () => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides: the
+  // sign-in pages of both UIs read the languages before anybody is signed in.
+  app.get('/api/v1/i18n/config', { config: { salesChannelAccess: 'open' } }, async (): Promise<{ data: I18nConfigResponse }> => {
     const [languages, currencies, defaultLanguage, defaultCurrency] = await Promise.all([
       languageService.listActive(),
       currencyRead.listActive(),
@@ -59,7 +65,7 @@ export async function registerI18nRoutes(
   app.get(
     '/api/v1/admin/languages',
     { preHandler: requireAdmin('catalog:write') },
-    async () => {
+    async (): Promise<LanguageListResponse> => {
       const rows = await languageService.list();
       return { data: rows.map(serializeLanguage) };
     },
@@ -71,7 +77,7 @@ export async function registerI18nRoutes(
       preHandler: requireAdmin('catalog:write'),
       schema: { body: upsertLanguageRequestSchema },
     },
-    async (request) => {
+    async (request): Promise<{ data: LanguageView }> => {
       const body = upsertLanguageRequestSchema.parse(request.body);
       const row = await languageService.upsert({
         code: request.params.code,
@@ -87,7 +93,7 @@ export async function registerI18nRoutes(
   app.post<{ Params: { code: string } }>(
     '/api/v1/admin/languages/:code/default',
     { preHandler: requireAdmin('catalog:write') },
-    async (request) => {
+    async (request): Promise<{ data: LanguageView }> => {
       const row = await languageService.setDefault(request.params.code);
       onConfigChange?.();
       return { data: serializeLanguage(row) };
@@ -105,7 +111,8 @@ export async function registerI18nRoutes(
   );
 }
 
-function serializeLanguage(l: Language): Record<string, unknown> {
+/** The published `languageSchema` (issue #599). */
+function serializeLanguage(l: Language): LanguageView {
   return {
     code: l.code,
     label: l.label,
@@ -117,7 +124,8 @@ function serializeLanguage(l: Language): Record<string, unknown> {
   };
 }
 
-function serializeCurrency(c: CurrencyRecord): Record<string, unknown> {
+/** The published `currencySchema` (issue #599). */
+function serializeCurrency(c: CurrencyRecord): Currency {
   return {
     code: c.code,
     label: c.label,

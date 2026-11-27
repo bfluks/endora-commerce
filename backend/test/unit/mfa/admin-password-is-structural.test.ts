@@ -51,6 +51,7 @@ describe('the admin arm needs no passwordSetAt (issue #222)', () => {
         resolveAdminByEmail,
       },
       auditLog,
+      { admitsNewAccount: async () => true },
     );
 
     const result = await service.signInAdmin({

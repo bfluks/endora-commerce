@@ -1,8 +1,9 @@
 # Installed-package fixtures for the owner-map checks (feature 080, T034)
 
-Four synthetic module packages, in the shape a **published** one has: compiled
-JavaScript behind an `exports` map, no TypeScript sources, and nothing that names
-this repository. They exist so the red proofs of
+Synthetic module packages (the table below lists them), in the shape a
+**published** one has: compiled JavaScript behind an `exports` map, no TypeScript
+sources — `mod-acme-erp` keeps its `src/` beside `lib/` as documentation, never as
+what is installed — and nothing that names this repository. They exist so the red proofs of
 
 - `backend/scripts/check-entity-tenant-classification.ts`,
 - `backend/scripts/check-module-boundary.ts`,
@@ -17,8 +18,9 @@ Node's own resolver, imported, and read for entity metadata — the same path
 a case needs into a throwaway `node_modules` directory **inside the repository**,
 because that is what makes two things true at once: Node resolves the
 `exports` subpaths (the root has to be called `node_modules`), and
-`@mikro-orm/core` resolves out of the host, which is how a real package receives
-its optional peer.
+`@mikro-orm/decorators` (and through it `@mikro-orm/core`) resolves out of the
+host, which is how a real package receives its optional peer. Since MikroORM 7
+(#1866) the entity decorators are imported from `@mikro-orm/decorators/legacy`.
 
 The built output is called `lib/`, not `dist/`: `dist/` is in `.gitignore`, and a
 fixture that is not committed is a red proof nobody else can run.
@@ -30,3 +32,5 @@ fixture that is not committed is a red proof nobody else can run.
 | `mod-schema-without-entities` | `fixture_schema_only` | Ships `./migrations` and a `./backend` that declares no `entities`. Unreadable: its tables would be in no map and its persisted classes in no classification. |
 | `mod-bundled` | `fixture_bundled` | Exports a `registerModule` its own source does not name. Unreadable for the container-name half only. |
 | `mod-instance-surfaces` | `fixture_instance_surfaces` | The **instance** case (`specs/110-instance-repository/` T101, T102). Ships an admin layer behind `./admin` and a `docs/` page at the package root, so the two artefacts a client's instance generates can be rendered over an installed population instead of over workspace members. Read by `backend/test/unit/scripts/instance-artefact-population.test.ts`. |
+| `mod-acme-erp` | `acme_erp` | The worked example of declared extension columns (`specs/178-extensible-columns/quickstart.md`). Ships `src/` beside `lib/` — the TypeScript an author writes, type-checked by `backend/test/unit/fixtures/mod-acme-erp-source.test.ts`, which also installs `lib/` and observes the merge placing its generated step at the head of its block. The integration tests install it into a throwaway instance root (`backend/test/helpers/acme-erp-instance.ts`). |
+| `mod-acme-links` | `acme_links` | The worked example of declared **side tables** (`specs/187-side-table-extensions/`): two entities on its own tables, keyed by `organizations.id` and `orders.id` with cascading foreign keys, declared in the manifest's `extends`, and one bulk loader on `organizations.Organization` registered with `ctx.entityExtensionLoaders` (`extensions.acme_links` on `OrganizationDetailsPort`). Ships `lib/` only. Installed into a throwaway instance root by `backend/test/helpers/acme-links-instance.ts`. |

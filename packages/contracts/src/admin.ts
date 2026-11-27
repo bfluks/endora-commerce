@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { adminPreferencesSchema } from './admin-preferences.js';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { organizationRoleRefSchema } from './organization-roles.js';
 
 /**
  * Admin module contracts (US4) — AdminUser, AdminRole, Impersonation,
@@ -21,15 +23,63 @@ export const adminUserSchema = z.object({
   lastLoginAt: isoDateTimeSchema.nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  /**
+   * Feature 019 — the administrator's Admin UI language, `null` when none is
+   * saved (the UI then opens in its default). Answered by every admin-user read
+   * since 019 and declared here only by issue #599; optional for a client that
+   * predates it.
+   */
+  preferredLanguage: z.string().nullable().optional(),
+  /** Feature 171 (US6) — the author avatar, a library asset. Optional for clients that predate it. */
+  avatarAssetId: uuidSchema.nullable().optional(),
+  /** Feature 171 (US6) — the author biography per language. */
+  bio: z.record(z.string(), z.string()).nullable().optional(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
+
+/**
+ * Feature 171 (US6) — an administrator's public author profile: the avatar (one
+ * library asset, the same in every language) and the biography per language, each
+ * at most {@link ADMIN_USER_BIO_MAX_LENGTH} characters. `null` clears either.
+ */
+export const ADMIN_USER_BIO_MAX_LENGTH = 2000;
+const adminUserAuthorProfileFields = {
+  avatarAssetId: uuidSchema.nullable().optional(),
+  bio: z.record(z.string().min(2).max(16), z.string().max(ADMIN_USER_BIO_MAX_LENGTH)).nullable().optional(),
+};
+
+const REQUIRES_TWO_FACTOR_DESCRIPTION =
+  'Whether holders of this role must sign in with a second factor. Read by `mfa` at sign-in: ' +
+  'a holder with no enrolled factor is asked to set one up, an enrolled holder is challenged. ' +
+  'Has no effect while `mfa` is off (sign-in is then password-only), nor while `mfa` has no ' +
+  'encryption key (no second factor is asked for at all; see `twoFactorNotice`), and `mfa` ' +
+  'cannot be switched off while any role sets it.';
+
+/**
+ * Issue #948 — a role's `requiresTwoFactor` that is set and not in force, as
+ * the Settings read's `notice` says it of `mfa.admin.totp_enforced` (issue
+ * #930). `code` is the token the Roles screen looks up in `admin_users`'
+ * bundle (`roles.twoFactor.notice.<code>`); `message` is the English sentence
+ * it falls back to.
+ */
+export const adminRoleTwoFactorNoticeSchema = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+});
+export type AdminRoleTwoFactorNotice = z.infer<typeof adminRoleTwoFactorNoticeSchema>;
 
 export const adminRoleSchema = z.object({
   id: uuidSchema,
   code: z.string(),
   name: z.string(),
   permissions: z.array(z.string()),
-  requiresTwoFactor: z.boolean(),
+  requiresTwoFactor: z.boolean().describe(REQUIRES_TWO_FACTOR_DESCRIPTION),
+  /**
+   * Present only while `requiresTwoFactor` is set and not applied — `mfa` has
+   * no encryption key (`code: 'encryption_key_missing'`). Absent otherwise,
+   * and absent on a read that does not compute it.
+   */
+  twoFactorNotice: adminRoleTwoFactorNoticeSchema.optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -53,6 +103,12 @@ export const adminMeResponseSchema = z.object({
   role: adminRoleSchema.nullable(),
   permissions: z.array(z.string()),
   idleLogoutMinutes: z.number().positive().nullable(),
+  /**
+   * The signed-in admin's own preferences (feature 164, FR-016). `null` when the
+   * server could not read them; the Admin UI then opens with the defaults and
+   * saves nothing (FR-018).
+   */
+  preferences: adminPreferencesSchema.nullable(),
 });
 export type AdminMeResponse = z.infer<typeof adminMeResponseSchema>;
 
@@ -60,6 +116,20 @@ export const adminLoginRequestSchema = z.object({
   email: z.string().email(),
   password: z.string(),
 });
+
+/**
+ * `POST /api/v1/auth/admin/login` — the first sign-in step (issue #599). Only
+ * `authenticated` sets the session cookie and names the administrator; the
+ * other two arms hand the client the opaque ticket its second step takes.
+ */
+export const adminLoginResponseSchema = z.object({
+  data: z.discriminatedUnion('status', [
+    z.object({ status: z.literal('authenticated'), adminUser: adminUserSchema }),
+    z.object({ status: z.literal('mfaRequired'), challengeId: z.string().min(1) }),
+    z.object({ status: z.literal('mfaSetupRequired'), setupTicket: z.string().min(1) }),
+  ]),
+});
+export type AdminLoginResponse = z.infer<typeof adminLoginResponseSchema>;
 
 export const impersonationRequestSchema = z.object({
   customerAccountId: uuidSchema,
@@ -74,7 +144,11 @@ export const impersonationStartResponseSchema = z.object({
     email: z.string().email(),
     firstName: z.string(),
     lastName: z.string(),
-    role: z.enum(['organization_admin', 'regular_user']),
+    /**
+     * The impersonated member's role — whose permissions the impersonation acts
+     * under (spec *Impersonation*); it replaced the legacy `role` (FR-073).
+     */
+    organizationRole: organizationRoleRefSchema,
   }),
 });
 export type ImpersonationStartResponse = z.infer<typeof impersonationStartResponseSchema>;
@@ -96,6 +170,7 @@ export const updateAdminUserRequestSchema = z
     lastName: z.string().min(1).max(120).optional(),
     adminRoleId: uuidSchema.nullable().optional(),
     status: z.enum(['active', 'inactive']).optional(),
+    ...adminUserAuthorProfileFields,
   })
   .strict();
 export type UpdateAdminUserRequest = z.infer<typeof updateAdminUserRequestSchema>;
@@ -123,6 +198,7 @@ export const updateAdminUserSelfRequestSchema = z
     lastName: z.string().min(1).max(120).optional(),
     password: z.string().min(12).max(120).optional(),
     currentPassword: z.string().min(1).max(256).optional(),
+    ...adminUserAuthorProfileFields,
   })
   .strict()
   .superRefine((body, ctx) => {
@@ -160,9 +236,40 @@ export const upsertAdminRoleRequestSchema = z.object({
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(160),
   permissions: z.array(z.string().min(1).max(120)),
-  requiresTwoFactor: z.boolean().optional(),
+  requiresTwoFactor: z
+    .boolean()
+    .optional()
+    .describe(
+      `${REQUIRES_TWO_FACTOR_DESCRIPTION} Turning it on is refused with 409 ` +
+        '`MFA_REQUIRED_FOR_ROLE_TWO_FACTOR` while `mfa` is off or has no encryption key; ' +
+        'turning it off is always allowed.',
+    ),
 });
 export type UpsertAdminRoleRequest = z.infer<typeof upsertAdminRoleRequestSchema>;
+
+/**
+ * `PUT /api/v1/admin/admin-roles/:code` — the role as saved, plus how many of
+ * its holders were signed out by the save (issue #349).
+ *
+ * Non-zero only when the save turned `requiresTwoFactor` on: the holders with
+ * no enrolled second factor had sessions opened without one, and those end.
+ * The acting administrator's own current session is kept.
+ */
+export const adminRoleWriteResultSchema = adminRoleSchema.extend({
+  signedOutAdministrators: z.number().int().nonnegative(),
+});
+export type AdminRoleWriteResult = z.infer<typeof adminRoleWriteResultSchema>;
+
+/**
+ * `GET /api/v1/admin/admin-roles/:code/two-factor-impact` — how many holders of
+ * the role have no enrolled second factor, so the editor can say how many will
+ * be signed out before it turns the requirement on. `null` while `mfa` is off,
+ * when no session would be ended and the requirement cannot be turned on.
+ */
+export const adminRoleTwoFactorImpactSchema = z.object({
+  unprotectedAdministrators: z.number().int().nonnegative().nullable(),
+});
+export type AdminRoleTwoFactorImpact = z.infer<typeof adminRoleTwoFactorImpactSchema>;
 
 /** Optional per-module permission declaration on `ModuleManifest.permissions`. */
 export const modulePermissionDeclarationSchema = z.object({
@@ -305,6 +412,14 @@ export const auditLogEntrySchema = z.object({
   id: uuidSchema,
   actorAdminUserId: uuidSchema.nullable(),
   impersonatedCustomerAccountId: uuidSchema.nullable(),
+  /**
+   * The customer who acted for themselves — a storefront Organization
+   * administrator managing roles, invitations or members
+   * (`specs/170-organization-roles/` FR-065, R-21; issue #741). `null` for an
+   * admin, under impersonation, and for the system. Optional so a payload from
+   * a server that predates the column still parses.
+   */
+  actorCustomerAccountId: uuidSchema.nullable().optional(),
   actedAt: isoDateTimeSchema,
   action: z.string(),
   objectType: z.string(),
@@ -315,4 +430,24 @@ export const auditLogEntrySchema = z.object({
   userAgent: z.string().nullable(),
   requestId: z.string().nullable(),
 });
-export type AuditLogEntry = z.infer<typeof auditLogEntrySchema>;
+export type AuditLogEntryResponse = z.infer<typeof auditLogEntrySchema>;
+
+/**
+ * `GET /api/v1/admin/audit-log/facets` (issue #1555): the actions the log
+ * holds and the object types they were recorded for, so the viewer's filters
+ * offer them instead of asking for a code. `moduleId` names the bundle that
+ * labels an action (`auditLog.<action>`), the same one the list answers per
+ * row as `actionModuleId`. Both lists sorted by code.
+ */
+export const auditLogFacetsSchema = z.object({
+  actions: z.array(z.object({ action: z.string(), moduleId: z.string() })),
+  objectTypes: z.array(z.string()),
+});
+export type AuditLogFacetsResponse = z.infer<typeof auditLogFacetsSchema>;
+/**
+ * @deprecated Use {@link AuditLogEntryResponse}. `@endora-commerce/platform/kernel`
+ * publishes `AuditLogEntry` as the MikroORM entity of an `audit_logs` row, a
+ * different thing under the same name (issue #84). This alias is removed in the
+ * next minor release.
+ */
+export type AuditLogEntry = AuditLogEntryResponse;

@@ -1,8 +1,16 @@
 import { z } from 'zod';
-import { isoDateTimeSchema } from './common.js';
+import { calendarDateSchema, isoDateTimeSchema } from './common.js';
 import { collectionEnvelope, dataEnvelope } from './envelopes.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import { customFieldFilterSchema, customFieldValuesSchema } from './custom-fields.js';
+import type { AggregateCommandOptions, CustomFieldMerge } from './aggregate-ports.js';
+import type { SupportedLanguage } from './platform-language.js';
 import type { QuoteRequestStatus } from './quote-requests.js';
+import { twoDecimalAmountString } from './money-input.js';
+import {
+  RecordReferenceSchema as OpportunityReferenceSchema,
+  recordReferenceTypeSchema,
+  type RecordReferenceType,
+} from './record-references.js';
 
 /**
  * CRM — Sales Opportunities (`specs/143-crm-sales-opportunities/`).
@@ -85,12 +93,13 @@ export const opportunityCommentKindSchema = z.enum(['note', 'message']);
 export type OpportunityCommentKind = z.infer<typeof opportunityCommentKindSchema>;
 
 /**
- * What a free text can refer to. `admin_user` is a person — a user of the Admin
- * UI, under the name the platform has for one everywhere else (the bell's
- * audience, `assignedAdminUserId`); `user` alone would also read as a customer.
+ * What a free text can refer to — the shared reference types of
+ * `record-references.ts` (`specs/163-projects-and-tasks/` research R-14): a
+ * Product, an Order, a person (`admin_user`), and since that feature a Quote
+ * Request and a Task. An alias, not a copy: CRM and Projects read one grammar.
  */
-export const opportunityReferenceTypeSchema = z.enum(['product', 'order', 'admin_user']);
-export type OpportunityReferenceType = z.infer<typeof opportunityReferenceTypeSchema>;
+export const opportunityReferenceTypeSchema = recordReferenceTypeSchema;
+export type OpportunityReferenceType = RecordReferenceType;
 
 /** The six `QuoteRequestStatus` values — a fixed union, unlike Order statuses. */
 export const QUOTE_REQUEST_STATUS_VALUES = [
@@ -115,24 +124,15 @@ const currencyCodeSchema = z
   .string()
   .regex(/^[A-Z]{3}$/, 'Currency must be an ISO 4217 code, e.g. PLN');
 
-/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
-function isCalendarDate(value: string): boolean {
-  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
-  if (year < 1) return false;
-  const date = new Date(0);
-  date.setUTCFullYear(year, month - 1, day);
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
-const calendarDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-  .refine(isCalendarDate, 'Not a date of the calendar');
-
-/** A non-negative decimal held as a string, as `numeric(14,2)` money is everywhere. */
-const decimalAmountSchema = z
-  .string()
-  .regex(/^\d{1,12}(\.\d{1,2})?$/, 'Amount must be a non-negative decimal with at most two places');
+/**
+ * A non-negative decimal held as a string, as `numeric(14,2)` money is
+ * everywhere: the shape here, and more than two decimal places refused with the
+ * platform's one precision code (`money-input.ts`, issue #417).
+ */
+const decimalAmountSchema = twoDecimalAmountString(z.string(), {
+  pattern: /^\d{1,12}(\.\d+)?$/,
+  message: 'Amount must be a non-negative decimal with at most two places',
+});
 
 const isoTimestampSchema = z.string();
 
@@ -154,90 +154,27 @@ const statusNameSchema = z.record(z.string().min(2).max(16), z.string().min(1).m
 // ---------------------------------------------------------------------------
 
 /**
- * The reference-token grammar: `[[product:<uuid>]]`, `[[order:<uuid>]]`,
- * `[[admin_user:<uuid>]]`.
+ * The reference-token grammar: `[[<type>:<uuid>]]` for the five types of
+ * {@link opportunityReferenceTypeSchema}.
  *
- * Free text (`description`, a comment `body`) is stored as plain text carrying
- * these tokens. This is the one place the grammar is written; the backend
- * extracts with it and the admin's composer inserts with it. What a person
- * types to get one — `@`, `@@`, `@@@` — is the composer's and is never stored.
+ * Written once, in `record-references.ts` (`specs/163-projects-and-tasks/`
+ * research R-14, FR-044), and exported here under the names CRM has always
+ * exported — each an **alias** of the shared function or schema, never a copy,
+ * so CRM and Projects cannot drift. What a person types to get one — `@`, `@@`,
+ * `@@@` — is the composer's and is never stored.
  */
-const REFERENCE_TOKEN_SOURCE =
-  '\\[\\[(product|order|admin_user):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\]\\]';
-
-export interface OpportunityReferenceToken {
-  type: OpportunityReferenceType;
-  id: string;
-}
-
-export function formatOpportunityReferenceToken(type: OpportunityReferenceType, id: string): string {
-  return `[[${type}:${id}]]`;
-}
-
-/** Every well-formed token in `text`, in first-appearance order, each target once. */
-export function extractOpportunityReferenceTokens(text: string): OpportunityReferenceToken[] {
-  const seen = new Set<string>();
-  const tokens: OpportunityReferenceToken[] = [];
-  // A fresh expression per call: a shared global one carries `lastIndex`.
-  for (const match of text.matchAll(new RegExp(REFERENCE_TOKEN_SOURCE, 'g'))) {
-    const type = match[1] as OpportunityReferenceType;
-    const id = (match[2] as string).toLowerCase();
-    const key = `${type}:${id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tokens.push({ type, id });
-  }
-  return tokens;
-}
-
-/** A stretch of plain text, or one well-formed token, in the order they appear. */
-export type OpportunityReferenceTextPart =
-  | { kind: 'text'; text: string }
-  | ({ kind: 'reference' } & OpportunityReferenceToken);
-
-/**
- * `text` cut at its well-formed tokens, for a screen that shows each token as
- * a link: the parts, joined back, are the text. A malformed token stays text.
- */
-export function splitOpportunityReferenceText(text: string): OpportunityReferenceTextPart[] {
-  const parts: OpportunityReferenceTextPart[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(new RegExp(REFERENCE_TOKEN_SOURCE, 'g'))) {
-    const start = match.index ?? 0;
-    if (start > cursor) parts.push({ kind: 'text', text: text.slice(cursor, start) });
-    parts.push({
-      kind: 'reference',
-      type: match[1] as OpportunityReferenceType,
-      id: (match[2] as string).toLowerCase(),
-    });
-    cursor = start + match[0].length;
-  }
-  if (cursor < text.length) parts.push({ kind: 'text', text: text.slice(cursor) });
-  return parts;
-}
-
-/** The people a text mentions, each once, in first-appearance order. */
-export function mentionedAdminUserIds(text: string | null | undefined): string[] {
-  if (!text) return [];
-  return extractOpportunityReferenceTokens(text)
-    .filter((token) => token.type === 'admin_user')
-    .map((token) => token.id);
-}
-
-/**
- * A resolved reference, returned beside every free-text field. A target the
- * reader may not see, or that is gone, is `available: false` with no label.
- * A person has a `label` — their name — and never a `url`: the screen of an
- * administrator is `admin_users`', behind a permission of its own.
- */
-export const OpportunityReferenceSchema = z.object({
-  type: opportunityReferenceTypeSchema,
-  id: z.string().uuid(),
-  available: z.boolean(),
-  label: z.string().nullable(),
-  url: z.string().nullable(),
-});
-export type OpportunityReference = z.infer<typeof OpportunityReferenceSchema>;
+export {
+  extractRecordReferenceTokens as extractOpportunityReferenceTokens,
+  formatRecordReferenceToken as formatOpportunityReferenceToken,
+  mentionedAdminUserIds,
+  RecordReferenceOrderSchema as OpportunityReferenceOrderSchema,
+  RecordReferenceSchema as OpportunityReferenceSchema,
+  splitRecordReferenceText as splitOpportunityReferenceText,
+  type RecordReference as OpportunityReference,
+  type RecordReferenceOrder as OpportunityReferenceOrder,
+  type RecordReferenceTextPart as OpportunityReferenceTextPart,
+  type RecordReferenceToken as OpportunityReferenceToken,
+} from './record-references.js';
 
 // ---------------------------------------------------------------------------
 // §1 Opportunities
@@ -357,24 +294,17 @@ export type OpportunityBoardCardConfig = z.infer<typeof OpportunityBoardCardConf
 
 export const OpportunityBoardCardConfigResponseSchema = dataEnvelope(OpportunityBoardCardConfigSchema);
 
-/** A bound of a number or an amount, as a decimal string. */
-const fieldFilterNumberSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
-
 /**
  * One field's filter: the operators of every kind in one object. Which of them
- * apply is the field's kind to say; the others are ignored by the server.
+ * apply is the field's kind to say. The board ignores the others; the
+ * Opportunities list refuses them on a `custom:` reference with 400
+ * `VALIDATION_FAILED`, as it refuses an inverted range.
+ *
+ * The same object as the admin lists' custom-field filter
+ * (`specs/157-custom-fields-list-filters/`), so a board filter and a list
+ * filter read one grammar.
  */
-export const OpportunityFieldFilterSchema = z
-  .object({
-    contains: z.string().trim().min(1).max(200).optional(),
-    in: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
-    is: z.boolean().optional(),
-    min: fieldFilterNumberSchema.optional(),
-    max: fieldFilterNumberSchema.optional(),
-    from: calendarDateSchema.optional(),
-    to: calendarDateSchema.optional(),
-  })
-  .strict();
+export const OpportunityFieldFilterSchema = customFieldFilterSchema;
 export type OpportunityFieldFilter = z.infer<typeof OpportunityFieldFilterSchema>;
 
 export const OpportunityFieldFiltersSchema = z
@@ -417,7 +347,20 @@ const opportunityFilterShape = {
   tagId: repeatable(z.string().uuid()),
   createdFrom: calendarDateSchema.optional(),
   createdTo: calendarDateSchema.optional(),
-  /** §12c — filters on the fields the board card shows; a field that is not shown is ignored. */
+  /**
+   * §12c — filters on fields, in one of two modes.
+   *
+   * - On the board, and on the list with `cardValues=true` (a board lane's
+   *   continuation): the card rule — a field the card does not show is ignored.
+   * - On the list otherwise: a `custom:` reference is governed by the
+   *   definition's list-filter option — filtered when it is on, whether or not
+   *   the card shows the field, and refused with 400
+   *   `CUSTOM_FIELD_FILTER_UNAVAILABLE` when it is off; `builtin:` references
+   *   keep the card rule.
+   *
+   * `cardValues` is a mode switch, never a security boundary: both modes run in
+   * the same tenant-scoped, assignment-scoped statement.
+   */
   fieldFilters: fieldFiltersParamSchema,
 };
 
@@ -540,6 +483,12 @@ export const OpportunityLinkSchema = z.object({
   status: z.string().optional(),
   total: z.string().optional(),
   currency: z.string().optional(),
+  /**
+   * A Quote Request's link only, while available — how far its lines are
+   * agreed (issue #456, `quoteRequestAmountSchema`). `total` is absent when
+   * no line has a price.
+   */
+  agreement: z.enum(['agreed', 'partial', 'none']).optional(),
   syncStatus: z.boolean(),
   linkSource: opportunityLinkSourceSchema,
   createdAt: isoTimestampSchema,
@@ -649,6 +598,18 @@ export const UpdateOpportunityStatusRequestSchema = CreateOpportunityStatusReque
   .partial()
   .strict();
 export type UpdateOpportunityStatusRequest = z.infer<typeof UpdateOpportunityStatusRequestSchema>;
+
+/**
+ * `PUT /crm/statuses/order` (issue #1560) — the whole status list in its new
+ * order, one Command. `orderedCodes` must be exactly the configured codes,
+ * each once: anything else — a code that is not configured, a status left out,
+ * one named twice — answers 409 `ORDER_STALE` (the list changed under the
+ * caller; reload it). Duplicates are therefore not refused by the schema.
+ */
+export const ReorderOpportunityStatusesRequestSchema = z
+  .object({ orderedCodes: z.array(opportunityStatusCodeSchema).min(1).max(500) })
+  .strict();
+export type ReorderOpportunityStatusesRequest = z.infer<typeof ReorderOpportunityStatusesRequestSchema>;
 
 export const OpportunityTransitionEdgeSchema = z
   .object({
@@ -1012,6 +973,21 @@ export type OpportunityQuoteRequestLookupQuery = z.infer<
   typeof OpportunityQuoteRequestLookupQuerySchema
 >;
 
+/**
+ * `GET /crm/lookups/documents` — the `@@` document list of an Opportunity's
+ * texts (`specs/163-projects-and-tasks/` FR-044). The answer is the shared
+ * `RecordDocumentLookupResponse` (`record-references.ts`), the one Projects
+ * serves too. Orders and Quote Requests are those of the Opportunity's
+ * Organization — or, on the create form before there is an Opportunity, of the
+ * Organization chosen there; with neither, the list offers Tasks only.
+ */
+export const OpportunityDocumentLookupQuerySchema = z.object({
+  opportunityId: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+  q: lookupSearchSchema,
+});
+export type OpportunityDocumentLookupQuery = z.infer<typeof OpportunityDocumentLookupQuerySchema>;
+
 export const OpportunityQuoteRequestOptionSchema = z.object({
   id: z.string().uuid(),
   number: z.string(),
@@ -1122,15 +1098,26 @@ export const OpportunityAverageValueRowSchema = z.object({
 });
 export type OpportunityAverageValueRow = z.infer<typeof OpportunityAverageValueRowSchema>;
 
-export const OpportunityHandlingTimeResponseSchema = dataEnvelope(OpportunityHandlingTimeSchema);
-export const OpportunityTimeInStatusResponseSchema = dataEnvelope(
+/**
+ * Every analytics figure answers in this envelope: the figure, and the time
+ * zone its days and months were counted in (issues #474, #475) — the
+ * `analytics` module's reporting time zone, or `UTC` while that module is off.
+ * An IANA name. Additive: `data` is where it always was, and a reply without
+ * the zone parses as before.
+ */
+export function opportunityAnalyticsEnvelope<T extends z.ZodTypeAny>(data: T) {
+  return z.object({ data, timeZone: z.string().min(1).optional() });
+}
+
+export const OpportunityHandlingTimeResponseSchema = opportunityAnalyticsEnvelope(OpportunityHandlingTimeSchema);
+export const OpportunityTimeInStatusResponseSchema = opportunityAnalyticsEnvelope(
   z.array(OpportunityTimeInStatusRowSchema),
 );
-export const OpportunityRepEffectivenessResponseSchema = dataEnvelope(
+export const OpportunityRepEffectivenessResponseSchema = opportunityAnalyticsEnvelope(
   z.array(OpportunityRepEffectivenessRowSchema),
 );
-export const TopOpportunitiesResponseSchema = dataEnvelope(z.array(OpportunitySummarySchema));
-export const OpportunityAverageValueResponseSchema = dataEnvelope(
+export const TopOpportunitiesResponseSchema = opportunityAnalyticsEnvelope(z.array(OpportunitySummarySchema));
+export const OpportunityAverageValueResponseSchema = opportunityAnalyticsEnvelope(
   z.array(OpportunityAverageValueRowSchema),
 );
 
@@ -1619,6 +1606,14 @@ export interface OpportunityRecord {
   closedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * The operator-defined field values (User Story 15), keyed by definition key
+   * — the bag `opportunityCommandPort.setCustomFieldValues` writes
+   * (`specs/186-aggregate-ports/` R-8). Always filled by `crm`; optional on the
+   * type so a record built by a consumer's test double before 0.113.0 still
+   * compiles (research R-21.4).
+   */
+  customFieldValues?: Record<string, unknown>;
 }
 
 /**
@@ -1635,7 +1630,97 @@ export interface OpportunityReadPort {
   findById(id: string): Promise<OpportunityRecord | null>;
   findByDocument(kind: OpportunityDocumentKind, documentId: string): Promise<OpportunityRecord | null>;
   listOpenForOrganization(organizationId: string): Promise<OpportunityRecord[]>;
+  /**
+   * The Opportunities of `ids` in the caller's tenant scope, in no particular
+   * order — a missing or malformed id is simply absent. One query for a page of
+   * references (`specs/165-task-management/` R-5). Checks no permission: the
+   * caller checks `crm:read`, as for every other method.
+   */
+  findByIds(ids: readonly string[]): Promise<OpportunityRecord[]>;
+  /**
+   * Opportunities in the caller's tenant scope whose number or title contains
+   * `q` (case-insensitively; every one for an empty `q`), newest first, at most
+   * `limit` (≤ 20) — the Opportunities group of the `@@` list and the Tasks
+   * link picker (R-5, R-16).
+   */
+  search(query: OpportunitySearchQuery): Promise<OpportunityRecord[]>;
+  /**
+   * A status's name in `language`, by this module's own rule: the operator's
+   * name in that language, else the status's default name, else the code (a
+   * status the workflow no longer holds). Published for issue #455, so that a
+   * module showing a linked Opportunity names its status as `crm` does rather
+   * than showing `statusCode`. Reads no Opportunity, so it checks no
+   * permission.
+   */
+  statusName(code: string, language: SupportedLanguage): Promise<string>;
+  /**
+   * The notes written on the Opportunities in the caller's tenant scope, one
+   * page at a time, oldest first — for a cross-record notes list or an export
+   * (issue #1905). Narrowed by Organization, author and creation time, all
+   * optional and combined with *and*. A note is a `note` comment that has not
+   * been deleted; the internal **messages** of an Opportunity are not notes
+   * and are never listed.
+   *
+   * The reach is the one every other method has: the caller's ambient tenant
+   * scope, so a note of an Opportunity whose Organization the caller may not
+   * reach is absent, as one that does not exist is — a sales representative
+   * sees the notes of the Organizations their scope reaches. A malformed
+   * `organizationId` or `authorAdminUserId` selects nothing. A `cursor` this
+   * port did not issue, or an invalid `Date`, is refused with 422
+   * `VALIDATION_FAILED`. Checks no permission: the caller checks `crm:read`.
+   */
+  listNotes(query: OpportunityNoteQuery): Promise<OpportunityNotePage>;
 }
+
+/** What `OpportunityReadPort.search` is asked. */
+export interface OpportunitySearchQuery {
+  q?: string;
+  /** At most {@link OPPORTUNITY_READ_PORT_SEARCH_MAX}. */
+  limit: number;
+}
+
+/** The most Opportunities one `OpportunityReadPort.search` answers. */
+export const OPPORTUNITY_READ_PORT_SEARCH_MAX = 20;
+
+/** A note on an Opportunity as it crosses a module boundary — a plain shape, never the entity. */
+export interface OpportunityNoteRecord {
+  id: string;
+  opportunityId: string;
+  /** The Opportunity's Organization — a note has none of its own. */
+  organizationId: string;
+  /** Who wrote it; `name` is `''` for an administrator `admin_users` no longer knows. */
+  author: { id: string; name: string };
+  /** The text as stored, reference tokens included. */
+  body: string;
+  createdAt: Date;
+  /** When its author last edited it; `null` for a note never edited. */
+  editedAt: Date | null;
+}
+
+/** What `OpportunityReadPort.listNotes` is asked. */
+export interface OpportunityNoteQuery {
+  /** Only the notes of this Organization's Opportunities. */
+  organizationId?: string | undefined;
+  /** Only the notes this administrator wrote. */
+  authorAdminUserId?: string | undefined;
+  /** Only notes created at or after this instant. */
+  createdFrom?: Date | undefined;
+  /** Only notes created strictly before this instant. */
+  createdBefore?: Date | undefined;
+  /** The previous page's `nextCursor`; absent or `null` for the first page. */
+  cursor?: string | null | undefined;
+  /** At most {@link OPPORTUNITY_READ_PORT_NOTES_MAX}; `0` answers an empty page. */
+  limit: number;
+}
+
+/** One page of `OpportunityReadPort.listNotes`; `nextCursor` is `null` on the last. */
+export interface OpportunityNotePage {
+  items: OpportunityNoteRecord[];
+  nextCursor: string | null;
+}
+
+/** The most notes one `OpportunityReadPort.listNotes` page answers. */
+export const OPPORTUNITY_READ_PORT_NOTES_MAX = 100;
 
 /** Why a requested transition did not happen. */
 export const OPPORTUNITY_TRANSITION_REFUSALS = [
@@ -1670,10 +1755,129 @@ export type OpportunityTransitionOutcome =
  * must not wrap the call in a bare `catch`.
  */
 export interface OpportunityTransitionPort {
+  /**
+   * @deprecated since 0.113.0; use {@link OpportunityCommandPort.transition} instead.
+   *
+   * Delegates to it: the same Command, guards, events and outcome. `actor` is
+   * no longer read — the actor is the ambient one, as on every aggregate port
+   * (`specs/186-aggregate-ports/` R-4, research R-21.2).
+   */
   applyStatus(input: {
     opportunityId: string;
     to: string;
     actor: OpportunityStatusActor;
     reason?: string | null;
   }): Promise<OpportunityTransitionOutcome>;
+}
+
+/** What `opportunityCommandPort.transition` is asked: the route's body. */
+export interface OpportunityTransitionInput {
+  to: string;
+  reason?: string | null;
+}
+
+/**
+ * Container name: `opportunityCommandPort`. Owner: `crm`
+ * (`specs/186-aggregate-ports/`, D-293, issue #1827).
+ *
+ * The Opportunity aggregate's write port: each method runs one audited
+ * Command, the one the admin route for the same operation runs, with the
+ * ambient actor — an administrator inside an admin request (or under
+ * `withSystemScopeActingFor`), the `system` actor under `withSystemScope` in a
+ * worker. **No permission is checked** — the caller is the gate; never resolve
+ * it for a customer-facing route. Call it after your own commit: each call is a
+ * transaction of its own.
+ *
+ * What the route does beside its write happens here too: the domain events
+ * (`crm.opportunity.created.v1`, `.assigned.v1`, `.document_linked.v1`, the
+ * status events) dispatched on commit, the assignee's and the mentioned
+ * people's notices, the value recalculation after a link changes or the mode
+ * becomes `computed`, and — for a transition — the guards, the linked Orders
+ * asked to follow, and the after-events.
+ *
+ * **Inputs and refusals are the admin route's.** Each input is the body the
+ * route validates, parsed with the same schema — an invalid one is refused
+ * `422 VALIDATION_FAILED` — and each refusal is the route's `HttpError` with
+ * its `code`: `404 CRM_OPPORTUNITY_NOT_FOUND` for an unknown, malformed or
+ * out-of-reach id, `422 CRM_ASSIGNEE_INVALID`, `422 CUSTOM_FIELD_VALUE_INVALID`,
+ * `409 CRM_DOCUMENT_ALREADY_LINKED`, `422 CRM_LINK_ORGANIZATION_MISMATCH`, and
+ * the others the routes answer. **`transition` is the exception** (FR-008): it
+ * answers its refusals as an {@link OpportunityTransitionOutcome}, as
+ * `opportunityTransitionPort` did, so a caller answering a third party never
+ * reads an HTTP error to learn that a guard vetoed the move.
+ *
+ * **`addComment` needs an ambient administrator.** A note or message has an
+ * author, so under a bare `withSystemScope` it is refused `403 FORBIDDEN`, as
+ * the route refuses a request with no administrator; a worker writes one under
+ * `withSystemScopeActingFor(adminUserId, reason)`, which records that
+ * administrator as author and actor. This is the one method that narrows
+ * FR-005 ("callable from a worker with no administrator", research R-21.3).
+ *
+ * **Options** ({@link AggregateCommandOptions}): `expectedVersion` is honoured
+ * by `update` — the route's `If-Match` — and refused `409 VERSION_CONFLICT`
+ * when the Opportunity has moved on; every other method ignores it, as its
+ * route has no version rule. `source` is recorded as `source` in the audit
+ * entry's `stateAfter` beside the actor — **do not use `manual`, `order` or
+ * `quote_request`**: they are the Opportunity's origin codes, which the create
+ * entry records under the same key, and the Change history tab would read
+ * such a code as the origin (research R-21.7). `extensions`: no `crm` action is
+ * declared hookable, so any key is refused `422 COMMAND_EXTENSION_UNCLAIMED`
+ * before anything is read or written.
+ *
+ * **Not offered, deliberately**: attachments (an upload flow), Events and
+ * their reminders, the retry and dismissal of a refused Order propagation, the
+ * value recalculation, the follow flag of a link — sub-entities and
+ * maintenance, each additive later. The status workflow, tags and order-status
+ * mappings are configuration, not the aggregate.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`; nothing
+ * half-executes. A consumer declares `crm` in `dependencies` (or as a
+ * `nonBindingDependencies` `refuses-without` edge) and never wraps the call in a
+ * bare `catch`.
+ */
+export interface OpportunityCommandPort {
+  /** `crm.opportunity.create` — `POST /opportunities`. An absent `assignedAdminUserId` applies the default rule. */
+  create(input: CreateOpportunityRequest, options?: AggregateCommandOptions): Promise<OpportunityRecord>;
+  /** `crm.opportunity.update` — `PATCH /opportunities/:id`; honours `expectedVersion`. */
+  update(id: string, patch: UpdateOpportunityRequest, options?: AggregateCommandOptions): Promise<OpportunityRecord>;
+  /**
+   * `crm.opportunity.update`, values only — what the route's `PATCH` records
+   * for a body of `customFieldValues` alone. `merge` runs under the
+   * Opportunity's row lock, inside the Command; the caller validates inside it
+   * (`CustomFieldValuePort.validateAndMerge`), and a refusal it throws
+   * propagates unchanged and writes nothing.
+   */
+  setCustomFieldValues(id: string, merge: CustomFieldMerge, options?: AggregateCommandOptions): Promise<OpportunityRecord>;
+  /** `crm.opportunity.assign` — `POST /opportunities/:id/assign`; `null` unassigns, the same assignee writes nothing. */
+  assign(id: string, input: { adminUserId: string | null }, options?: AggregateCommandOptions): Promise<OpportunityRecord>;
+  /**
+   * `crm.opportunity.transition` — `POST /opportunities/:id/transition`, the
+   * guards and events included. A refusal is a value; a concurrent move
+   * (`409 CRM_TRANSITION_CONFLICT`) and the module switched off are thrown.
+   */
+  transition(
+    id: string,
+    input: OpportunityTransitionInput,
+    options?: AggregateCommandOptions,
+  ): Promise<OpportunityTransitionOutcome>;
+  /** `crm.opportunity.tag_set` — `PUT /opportunities/:id/tags`; replaces the whole set. */
+  setTags(id: string, input: { tagIds: readonly string[] }, options?: AggregateCommandOptions): Promise<OpportunityRecord>;
+  /** `crm.opportunity.link_add` — `POST /opportunities/:id/links`. */
+  link(id: string, input: CreateOpportunityLinkRequest, options?: AggregateCommandOptions): Promise<OpportunityLink>;
+  /** `crm.opportunity.link_remove` — `DELETE /opportunities/:id/links/:linkId`. */
+  unlink(id: string, linkId: string, options?: AggregateCommandOptions): Promise<void>;
+  /**
+   * `crm.opportunity.note_add` or `.message_add`, by `kind` — `POST /opportunities/:id/comments`.
+   * Needs an ambient administrator, the author: `403 FORBIDDEN` under a bare
+   * `withSystemScope`; a worker calls it under `withSystemScopeActingFor`
+   * (R-21.3 — narrows FR-005 for this method only).
+   */
+  addComment(
+    id: string,
+    input: CreateOpportunityCommentRequest,
+    options?: AggregateCommandOptions,
+  ): Promise<OpportunityComment>;
+  /** `crm.opportunity.delete` — `DELETE /opportunities/:id`, its children with it. */
+  delete(id: string, options?: AggregateCommandOptions): Promise<void>;
 }

@@ -28,10 +28,9 @@ describe('admin CMS Hooks contract (T067)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
-    await em.persistAndFlush(plOnly);
+    await em.persist(plOnly).flush();
     plOnlyChannelId = plOnly.id;
   });
 
@@ -56,6 +55,34 @@ describe('admin CMS Hooks contract (T067)', () => {
     expect(res.statusCode).toBe(201);
     return (res.json() as { data: { id: string } }).data;
   }
+
+  // Issue #1809 — a seeded hook is named in the reader's language while the operator has not renamed it.
+  it("names the seeded Hooks in the admin's language", async () => {
+    const setPreferredLanguage = async (language: 'en' | 'pl' | null): Promise<void> => {
+      const res = await h.app.inject({
+        method: 'PATCH',
+        url: '/api/v1/admin/me/preferred-language',
+        cookies: adminCookie,
+        payload: { preferredLanguage: language },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    };
+    const searchBottom = async (): Promise<string | undefined> => {
+      const res = await h.app.inject({ method: 'GET', url: '/api/v1/admin/cms/hooks', cookies: adminCookie });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { data: Array<{ code: string; name: string }> }).data.find(
+        (hook) => hook.code === 'search.bottom',
+      )?.name;
+    };
+    try {
+      await setPreferredLanguage('pl');
+      expect(await searchBottom()).toBe('Strona wyszukiwania — dół');
+      await setPreferredLanguage('en');
+      expect(await searchBottom()).toBe('Search Page Bottom');
+    } finally {
+      await setPreferredLanguage(null);
+    }
+  });
 
   it('lists seeded Hooks and protects system Hooks from deletion', async () => {
     const list = await h.app.inject({

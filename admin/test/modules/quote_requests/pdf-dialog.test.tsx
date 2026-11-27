@@ -122,6 +122,31 @@ const templateSelect = () => screen.getByLabelText('Template') as HTMLSelectElem
 const languageSelect = () => screen.getByLabelText('Language') as HTMLSelectElement;
 const pdfUrl = (): URL => new URL(String(fetchSpy.mock.calls.at(-1)![0]));
 
+/**
+ * Clicks `name` in the very microtask its loaded form commits enabled — before
+ * any passive effect of that commit has run, which is the earliest a person (or
+ * a loaded test host's `waitFor`) can reach it. A select whose controlled value
+ * matches no option still *shows* its first option, so the DOM cannot tell a
+ * language that is chosen from one that is merely displayed (issue #524); what
+ * is sent can.
+ */
+async function clickTheMomentItEnables(name: string): Promise<void> {
+  const ready = (): HTMLButtonElement | null => {
+    const button = screen.queryByRole('button', { name }) as HTMLButtonElement | null;
+    return button && !button.disabled && screen.queryByLabelText('Language') ? button : null;
+  };
+  const button = ready() ?? (await new Promise<HTMLButtonElement>((resolve) => {
+    const observer = new MutationObserver(() => {
+      const found = ready();
+      if (!found) return;
+      observer.disconnect();
+      resolve(found);
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+  }));
+  fireEvent.click(button);
+}
+
 describe('the quote request screen', () => {
   function renderDetail(present: string[]): void {
     getSpy.mockImplementation((url: string) =>
@@ -144,14 +169,17 @@ describe('the quote request screen', () => {
 
   it('offers Export PDF and Send PDF to customer while document templates and e-mails are present', async () => {
     renderDetail(['quote_requests', 'document_templates', 'transactional_emails']);
-    expect(await screen.findByRole('button', { name: 'Export PDF' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Send PDF to customer' })).toBeTruthy();
+    // In the header's "More" menu since #1497 (SALES-12).
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /common\.action\.more|^More$/ }), { button: 0, ctrlKey: false });
+    expect(await screen.findByRole('menuitem', { name: 'Export PDF' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Send PDF to customer' })).toBeTruthy();
   });
 
   it('offers no send while the transactional e-mails are absent, and still the export (FR-099)', async () => {
     renderDetail(['quote_requests', 'document_templates']);
-    expect(await screen.findByRole('button', { name: 'Export PDF' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Send PDF to customer' })).toBeNull();
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /common\.action\.more|^More$/ }), { button: 0, ctrlKey: false });
+    expect(await screen.findByRole('menuitem', { name: 'Export PDF' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Send PDF to customer' })).toBeNull();
   });
 
   it('offers neither while document templates are absent (FR-060)', async () => {
@@ -200,6 +228,14 @@ describe('Export PDF', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(pdfUrl().pathname).toBe(`/api/v1/admin/quote-requests/${RFQ_ID}/pdf`);
     expect(pdfUrl().searchParams.get('templateId')).toBeNull();
+    expect(pdfUrl().searchParams.get('language')).toBe('pl-PL');
+  });
+
+  it('sends the preselected language even when Download is clicked the moment it enables (#524)', async () => {
+    answerPdf();
+    const { onClose } = renderDialog('download');
+    await clickTheMomentItEnables('Download PDF');
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(pdfUrl().searchParams.get('language')).toBe('pl-PL');
   });
 
@@ -296,6 +332,14 @@ describe('Send PDF to customer (owner answer Q4)', () => {
       kind: 'warning',
       message: 'The quote PDF was sent to 1 recipient(s). It could not be delivered to: two@example.com.',
     });
+  });
+
+  it('sends the preselected language even when Send is clicked the moment it enables (#524)', async () => {
+    postSpy.mockResolvedValue({ data: { sent: ['buyer@example.com'], failed: [], templateId: T1, templateSource: 'default', requestedTemplateMissing: false } });
+    const { onClose } = renderDialog('send');
+    await clickTheMomentItEnables('Send');
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(postSpy).toHaveBeenCalledWith(`/api/v1/admin/quote-requests/${RFQ_ID}/pdf/send`, { recipients: ['buyer@example.com'], language: 'pl-PL' });
   });
 
   it('says why when the e-mail is switched off, and stays open', async () => {

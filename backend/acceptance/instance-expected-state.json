@@ -159,6 +159,18 @@
         "A17": {
           "status": "pass",
           "reason": "MEASURED, AS THE RUN THAT ADDED IT PRINTED IT: \"a customer administering one organization and an API key bound to it each read that organization's order, are refused the other's by id and list only their own; an administrator holding the platform role re-parented an organization, and `organization.set_parent` names that administrator as its actor\". IT IS THE HALF OF PRINCIPLE XI THAT A9 CANNOT SEE. A9 asks the guard, in a process of its own: a read with no tenant context is refused. This asks what context a SERVED request is handed — over the boot A4 started, through the routes a client uses, as the administrator A15 created. The two are independent — the guard can be sound while the context it is handed is not — so neither assertion answers for the other. The mapping from actor to context is the platform's own (`packages/platform/src/kernel/actor-tenant-context.ts`), built over ports the composed modules register, and an instance gets it by calling `composeApp` with nothing but its deployment root. THE CUSTOMER IS AN ORGANIZATION ADMINISTRATOR ON PURPOSE: that role's order reads rely on the ambient tenant filter alone, where a regular member's are pinned by the handler as well, so this is a reading of the context rather than of one handler's own care. THE ORDERS ARE WRITTEN AS ROWS, derived from the table's own definition, because placing one through the API needs a delivery and a payment method and the default module set ships no adapter to configure either with (`backend/scripts/acceptance/instance-actor-scope.ts` says so beside the insert). The `registry` mode is deliberately not given a state for this assertion: that mode measures the last publish rather than this checkout, and its record is meant to arrive from a run."
+        },
+        "A18": {
+          "status": "pass",
+          "reason": "MEASURED, AS THE RUN THAT ADDED IT PRINTED IT: \"stale, unbuilt, orphan, package-in-disguise were each refused by name before any overlay code ran (asked of module:status and api), and the restored tree, rebuilt, composed\". The probe breaks the compiled overlay tree A8 left one way at a time, asks the instance's own processes, and restores it, modification times included (specs/190-overlay-full-modules/ T021, #1848). `migrate` resolves no overlay module until schema discovery (#1850), so it is not asked yet; since #1850 it reads the compiled overlay schema but is handed the compiled deployment root alone, so it compares nothing with the sources and A19 asks it over a tree that was built."
+        },
+        "A19": {
+          "status": "pass",
+          "reason": "MEASURED, AS THE RUN PRINTED IT: \"'instance_acceptance_notes' owns a table: the instance's own `setup` passed over it and applied 'Migration20270101T000000InstanceAcceptanceNotesInit' out of the compiled overlay, and its route answered 200 with the row that migration seeded, read through the entity its backend exports\". The fixture is written after A18 has put A8's tree back: one global entity exported as `entities` from `backend.ts`, one migration file in `migrations/` that creates the table and seeds one row, and a route reading it through `emFactory` (specs/190-overlay-full-modules/ T080, US1, SC-001; #1850). Global, because the subject is the table and its mapping; the cross-tenant half of an overlay table is `backend/test/integration/overlay/overlay-table.test.ts` (T079)."
+        },
+        "A20": {
+          "status": "pass",
+          "reason": "MEASURED, AS THE RUN PRINTED IT: \"the admin built with DEPLOYMENT=instance ships 'instance_acceptance_screens's screen, rendered through the kit it resolves from outside the admin member; the admin built for bare core ships none of it; `generate` passed over it; the admin `typecheck` exited 2 (reported, not judged: the admin member installs no React types)\". The fixture is written after A19: an overlay module with `admin/index.tsx` (one landing route), its palette action in `manifest.ts`, and a screen rendering a marker through `@endora-commerce/admin-kit/ui`. `generate` renders `admin/src/deployments/instance.generated.ts`; the admin member's own `build` runs twice, into directories of its own, so `admin/dist` stays what A5, A7 and A13 read (specs/190-overlay-full-modules/ T049, FR-080 - FR-084, SC-004; #1855). The `typecheck` exit is reported rather than judged because the created admin member installs no `@types/react`, so its own `src/main.tsx` fails the same check with TS7016 (measured on the kept tree, 2026-11-26)."
         }
       }
     },
@@ -506,6 +518,21 @@
     "customer session: the admin order list holds both organizations' orders, the buyer routes are",
     "confined to the customer's, and a re-parent run with both cookies succeeds and records the",
     "administrator. The route decides which session scopes a request. Measured in `tarball` mode on",
-    "the branch that makes it so: the state is unchanged, 16 pass, 0 fail, 1 unmeasured (A12) of 17."
+    "the branch that makes it so: the state is unchanged, 16 pass, 0 fail, 1 unmeasured (A12) of 17.",
+    "",
+    "2026-11-25 — A18. The criterion gains the assertion that a compiled overlay which no longer matches",
+    "`apps/` (stale, unbuilt, orphan) or breaks the module layout (a package in disguise) is refused by name",
+    "before any of it runs, and that the restored tree, rebuilt, composes (#1848). Its first run found the",
+    "layout checked only on the compiled tree, where `tsc` emits no `package.json`; fixed on the same branch.",
+    "Measured in `tarball` mode: 17 pass, 0 fail, 1 unmeasured (A12) of 18. `registry` is left without a",
+    "state for A18, so its first run after the next publish drifts and records it.",
+    "",
+    "2026-11-26 — A20. The criterion gains the assertion that an overlay module's admin layer is in the",
+    "admin built for its deployment and in no admin built without it (#1855): `generate` renders one",
+    "registry per deployment, and the admin member's own `build` runs with DEPLOYMENT set and blank.",
+    "Measured in `tarball` mode: 19 pass, 0 fail, 1 unmeasured (A12) of 20. The admin `typecheck` is",
+    "reported beside it: a created admin member installs no React types, so it fails over",
+    "`src/main.tsx` as well. `registry` is left without a state for A20, so its first run after the",
+    "next publish drifts and records it."
   ]
 }

@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { OpportunitySummary } from '@endora-commerce/contracts';
+import { FigureCard, useFigure } from '@endora-commerce/admin-kit/components';
 import { statusBadgeStyle } from '@endora-commerce/admin-kit/lib';
 import {
   Badge,
@@ -14,11 +15,10 @@ import {
   TableRow,
 } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmAnalyticsApi, type AnalyticsFilters, type TopOpportunitiesBasis } from '../../analytics-api.js';
+import { crmAnalyticsApi, type AnalyticsAnswer, type AnalyticsFilters, type TopOpportunitiesBasis } from '../../analytics-api.js';
 import { AssigneeName } from '../../components/AssigneeName.js';
 import { moneyLabel } from '../../lib/labels.js';
-import { useFigure } from '../../lib/use-figure.js';
-import { FigureCard } from './FigureCard.js';
+import { useReportedTimeZone } from '../../lib/reporting-time-zone.js';
 
 /** How many Opportunities are listed per currency. */
 const PER_CURRENCY = 10;
@@ -42,14 +42,15 @@ export function TopOpportunitiesCard({ filters }: { filters: AnalyticsFilters | 
   const load = useMemo(
     () =>
       filters
-        ? (): Promise<OpportunitySummary[]> => crmAnalyticsApi.topOpportunities(filters, basis, PER_CURRENCY)
+        ? (): Promise<AnalyticsAnswer<OpportunitySummary[]>> => crmAnalyticsApi.topOpportunities(filters, basis, PER_CURRENCY)
         : null,
     [filters, basis],
   );
-  const figure = useFigure(load);
+  const figure = useFigure(useReportedTimeZone(load));
 
   return (
     <FigureCard
+      errorFallback={t('analytics.error.load')}
       title={t('analytics.top.title')}
       description={t('analytics.top.description', { count: PER_CURRENCY })}
       figure={figure}

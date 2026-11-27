@@ -1,9 +1,9 @@
 ---
-title: promotions
+title: Promotions
 description: Cart-level percentage / amount / free-delivery discounts with eligibility filters
 ---
 
-# `promotions`
+# Promotions (`promotions`)
 
 The promotions module is a configurable, rule-driven discount engine
 built on the original cart-discount slice. A **Promotion**
@@ -54,28 +54,142 @@ and surfaces the result in the cart and on the placed order.
    `order_applied_promotions` + `orders.discount_total`, and **finalizes
    usage** inside the placement transaction.
 
+## What a discount is computed on
+
+A discount is an amount the buyer does not pay, taken off the gross total.
+
+- **Percent-off actions** — `percentage_off_cart`, `buy_x_units_percent_off`,
+  `spend_x_percent_off`, `every_nth_product_percent_off` and the legacy
+  `percentage_off` kind — take their percentage of the **gross** the buyer
+  pays for the goods: 10 % off is 10 % of that gross.
+- **Free-unit actions** — `buy_x_get_y_free` and `buy_x_units_y_free` — take
+  off the free units' gross, so a free unit is free VAT included. The cheapest
+  or most expensive unit is the one with the lowest or highest gross price.
+- **Fixed amounts** — `amount_off_cart`, `buy_x_units_amount_off`,
+  `spend_x_amount_off` and the legacy `amount_off` kind — take off the
+  configured amount, capped at the **gross**: a fixed amount can make the goods
+  free, VAT included.
+- **Thresholds** — the "spend X" steps, `minCartSubtotal`, the coupon's
+  minimum-spend check and the rule builder's cart total — compare the
+  **gross** the buyer pays for the goods, before any discount. A coupon refused
+  below its minimum spend reports the gross shortfall.
+
+The gross is VAT per rate on the sum of the line nets, the same figure the cart
+and the order charge. Each line of the `CartSnapshot` carries its VAT rate as
+`taxRate`, a fraction (`0.23`). A line without one carries no VAT. The cart, the
+admin cart detail, the checkout preview and order placement pass the rates
+they charge, so all four show the same discount. A call to
+`POST /api/v1/admin/promotions/preview` must send `taxRate` on each line to get
+the discount an order would take. Until issue #1350 percent-off and free-unit
+actions computed on net prices; until issue #1396 thresholds compared, and
+fixed amounts were capped at, the net subtotal.
+
 ## Usage finalization (race-safe)
 
 `finalizeUsage` runs inside the order-placement transaction. Each applicable
 scope counter is bumped with `UPDATE promotion_usage_counters SET count =
 count + 1 WHERE (scope_type, scope_key) = … AND count < :limit`. Zero rows
-affected means the cap was reached, so a `409 promotion_unavailable` is thrown
-and the whole placement rolls back. Two carts racing for the final use can
-never both succeed.
+affected means the cap was reached, so a `409 PROMOTION_USAGE_LIMIT_REACHED` is
+thrown and the whole placement rolls back. Two carts racing for the final use can
+never both succeed. The buyer reads a sentence that names the coupon they applied
+(`details.code` `with_coupon`, `couponCode`), or the promotion without its name
+when no coupon was applied — never the promotion's id, which travels only as
+`details.promotionId`.
 
 ## Public surface (admin, gated by `promotions:read|write|delete`)
 
 | Verb + Path | Purpose |
 | --- | --- |
 | `GET/POST/PUT/DELETE /api/v1/admin/promotions[/:id]` | Promotion CRUD |
+| `GET /api/v1/admin/promotions?page=&pageSize=` | One page of promotions by name, with `meta: { page, pageSize, total }`; without `pageSize` the whole list (issue #1664) |
 | `GET /api/v1/admin/promotions/action-types` | Action catalogue for the editor |
 | `GET /api/v1/admin/promotions/rule-targets/attributes` | Promo-eligible attributes |
+| `GET /api/v1/admin/promotions/rule-targets/{categories,customer-groups,delivery-methods,organizations,payment-methods,sales-channels}` | The other pickers of the rule editor |
 | `POST /api/v1/admin/promotions/preview` | Apply against a `CartSnapshot` |
 | `GET/POST /api/v1/admin/promotions/:id/coupons` | Single-coupon management |
+| `POST /api/v1/admin/promotions/:id/coupons/bulk-active` | Activate or deactivate many coupons at once |
 | `POST /api/v1/admin/promotions/:id/coupon-batches` | Bulk generator |
 | `GET .../coupon-batches/:batchId/export` | CSV export of generated codes |
 | `GET /api/v1/admin/promotions/:id/stats` | Usage statistics |
+| `GET /api/v1/admin/promotions/coupons/:couponId/stats` | Usage statistics of one coupon |
 | `GET/POST/PUT/DELETE /api/v1/admin/promotion-rules[/:id]` | Named-rule library |
+
+## Hookable actions
+
+Another module — a deployment's overlay module or an installed package — may
+take part in the promotion and coupon writes below through a command hook. It
+registers the hook against the ref in `PROMOTION_HOOKABLE_ACTIONS`
+(`@endora-commerce/contracts`) and must list `promotions` in its manifest
+`dependencies`. A `beforeCommit` hook sees the write on the uncommitted
+transaction. It may write its own tables or run a Command through `ctx.run`, and
+it may refuse the write with a code of its own, which rolls the whole write
+back. How hooks run, are ordered and are refused is on the *Command Bus*
+architecture page.
+
+| Action | Ref | Written by | Hook data |
+| --- | --- | --- | --- |
+| `promotion.create` | `PROMOTION_HOOKABLE_ACTIONS.create` | `POST /api/v1/admin/promotions` | the promotion summary |
+| `promotion.update` | `PROMOTION_HOOKABLE_ACTIONS.update` | `PUT /api/v1/admin/promotions/:id`, and `POST /api/v1/admin/promotions` with a code that already exists | the promotion summary, `changedFields`, `activationChange` |
+| `coupon.create_single` | `PROMOTION_HOOKABLE_ACTIONS.createCoupon` | `POST /api/v1/admin/promotions/:id/coupons` | `promotionId`, `couponId`, `code`, `limitScope` |
+| `coupon.generate_batch` | `PROMOTION_HOOKABLE_ACTIONS.generateCouponBatch` | `POST /api/v1/admin/promotions/:id/coupon-batches` | `promotionId`, `batchId`, `generated`, `limitScope`, `codes` |
+
+The promotion summary is the promotion's ids, codes and type, and never its
+name, description, amounts or action settings. It holds `promotionId`, `code`,
+`kind`, `actionType`, `isActive`, `ruleId`, the targeting ids
+(`organizationId`, `customerGroupId`, `categoryId`, `productId`), `currency`,
+`validFrom` and `validUntil`. It also holds `usageLimitScopes`, which names the
+caps the promotion sets (`global`, `per_organization`, `per_customer`) without
+their limits. There is no separate activation write: switching a promotion on
+or off is an update, and `activationChange` is `activated`, `deactivated` or
+`null`. A new promotion is bound to the default sales channel after its write
+commits, so a hook does not see that binding.
+
+A promotion created already active is reported only by `promotion.create`, with
+`isActive: true`; that write has no `activationChange`. A hook that reacts when a
+promotion becomes active therefore handles both actions: `promotion.create` with
+`isActive: true`, and `promotion.update` with `activationChange: 'activated'`.
+
+All four actions offer both phases. An `afterCommit` handler is delivered
+through the platform's outbox after the write commits, at least once. Its
+`data` carries ids and codes from a closed set only:
+
+- a promotion's `promotionId`, `kind`, `actionType`, `isActive`, `ruleId` and
+  `usageLimitScopes`, plus `changedFields` and `activationChange` on an update;
+- a coupon's `promotionId`, `couponId` and `limitScope`;
+- a batch's `promotionId`, `batchId`, `generated` and `limitScope`.
+
+A promotion or coupon code is free text, so it never reaches the outbox. A
+hook's noted changes appear in the write's single audit entry as names, under
+`extensions.<moduleId>.changedFields`. Both coupon writes are recorded against
+their promotion (`objectType: 'promotion'`), as they were before they became
+Commands. No HTTP body carries extension input (`extensions`) yet.
+
+Not hookable:
+
+- `promotion.delete`, `coupon.set_active_bulk` and the named-rule writes
+  (`promotion_rule.*`), which are not Commands yet (issue #1886);
+- a coupon's redemption, which order placement records in its own transaction.
+  React to it through the in-process `promotion.used.v1` event that order
+  placement emits (issue #1887).
+
+## Refusals
+
+Each refusal has its own code and a sentence in English and Polish, which
+names the values in `details`. They were `VALIDATION_FAILED` with a machine
+token in front of the message until issue #628; the status is unchanged.
+
+| Code | Status | When | `details` |
+| --- | --- | --- | --- |
+| `PROMOTION_USAGE_LIMIT_REACHED` | `409` | `POST /api/v1/orders` — a promotion's usage limit was reached between the cart and placement | `promotionId`; with a coupon, `code: 'with_coupon'` and `couponCode` |
+| `PROMOTION_COUPON_CODE_TAKEN` | `409` | `POST …/coupons` — another coupon has this code | `couponCode` |
+| `PROMOTION_COUPON_SPACE_EXHAUSTED` | `400` | `POST …/coupon-batches` — the length and format hold fewer unique codes than asked for | `requested`, `generated` |
+| `PROMOTION_RULE_NAME_TAKEN` | `409` | `POST`, `PUT /api/v1/admin/promotion-rules[/:id]` — another rule has this name | `name` |
+| `PROMOTION_RULE_IN_USE` | `409` | `DELETE /api/v1/admin/promotion-rules/:id` — promotions use the rule | `ruleId`, `promotionCount` |
+| `PROMOTION_ATTRIBUTE_NOT_ELIGIBLE` | `400` | `POST`, `PUT /api/v1/admin/promotions[/:id]` — a criterion names an attribute not usable in promotion rules | `attributeKey` |
+
+A batch larger than the generator's bound, an unknown action type, rule or
+attribute, an operator the attribute's type does not allow and an option the
+attribute does not have stay `VALIDATION_FAILED`.
 
 Coupon redemption on the storefront flows through the existing cart coupon
 endpoints (`POST /api/v1/cart/coupon`), which resolve the code via the coupon

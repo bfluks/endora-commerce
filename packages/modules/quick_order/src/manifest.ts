@@ -35,7 +35,7 @@ export const DEFAULT_ONE_CLICK_BUY_ENABLED = false;
 
 const settings = defineModuleSettingsManifest({
   moduleCode: 'quick_order',
-  groups: [{ code: 'quick_order', name: 'Quick Order' }],
+  groups: [{ code: 'quick_order', name: 'Quick order' }],
   settings: [
     {
       code: QUICK_ORDER_SETTING_CODES.ONE_CLICK_BUY_ENABLED,
@@ -60,7 +60,7 @@ const settings = defineModuleSettingsManifest({
 
 export const manifest = defineModuleManifest({
   id: 'quick_order',
-  name: 'Quick Order',
+  name: 'Quick order',
   description:
     'Bulk Cart / Quote Request import (CSV + Excel, with variants), quick product search, reorder, default ordering preferences, and one-click buy.',
   version: '2.0.0',
@@ -89,29 +89,6 @@ export const manifest = defineModuleManifest({
     'quote_requests',
     'settings',
   ],
-  // D-44 — real to the container, binding on no operator.
-  nonBindingDependencies: [
-    {
-      moduleId: 'customers',
-      name: 'customerAddressReadPort',
-      kind: 'degrades-without',
-      whenAbsent:
-        'a personal (buyer-owned) address stops being an eligible ordering default; the ' +
-        'organisation’s shared addresses still resolve, and one-click buy hides itself for ' +
-        'buyers whose default was personal',
-      reason:
-        'Issue #216 — the personal-address branch of the default-eligibility check reads ' +
-        '`customers`’ address book, and it is probed on every eligibility question. Failing ' +
-        'closed would answer 503 for the whole preference resolution, and with it one-click ' +
-        'buy for *every* buyer, because a CRM surface was switched off. The degrade is not ' +
-        'invented for the occasion: Principle XVII says an absent module behaves as if never ' +
-        'installed, and on a platform without `customers` there are no personal addresses — ' +
-        'only org-shared ones are eligible. Dropping an ineligible default to null is what ' +
-        'FR-020 already specifies. Reached through a presence probe ahead of the port, per ' +
-        'call, because a closed gate throws rather than answering null and an operator ' +
-        'switching the module back on must not need a restart.',
-    },
-  ],
   // Feature 073 (Constitution XVII) — its own activation control at last.
   // Until T139 this module had no presence of its own: `shopping_lists` mounted
   // its routes, so `shopping_lists.enabled` switched both off together and
@@ -121,6 +98,30 @@ export const manifest = defineModuleManifest({
   // buyers order line by line is an ordinary one.
   activation: { settingCode: 'quick_order.enabled', default: true },
   settings,
+  /**
+   * `specs/170-organization-roles/` (OR-1, OR-6, FR-022, FR-050; issue #653) —
+   * one-click purchase is a permission of its own. It is judged together with
+   * `carts.order_without_approval`, which `carts` declares, so a member whose
+   * carts need approval cannot buy round it. Member-default; the upgrade grants
+   * it to *Member* only where it grants `carts.order_without_approval` too
+   * (FR-071, `organizations`' role migration).
+   */
+  organizationPermissions: [
+    {
+      code: 'quick_order.one_click',
+      label: 'One-click purchase',
+      description:
+        'Buy a product from its page in one click with the default payment and delivery methods and addresses; also needs the permission to place orders without approval.',
+      memberDefault: true,
+    },
+  ],
+  /**
+   * Issue #641 (#86) — one-click buy refused by the setting or the buyer's
+   * defaults, `422 VALIDATION_FAILED` with an English sentence until then. Its
+   * `details.code` token is the eligibility reason `#availability` answers;
+   * the role's reasons are refused earlier, as `ORGANIZATION_PERMISSION_REQUIRED`.
+   */
+  errorCodes: [{ code: 'ONE_CLICK_UNAVAILABLE', tokens: ['setting_disabled', 'missing_defaults'] }],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   actions: [
@@ -132,7 +133,8 @@ export const manifest = defineModuleManifest({
       targetRoute: '/orders/quick-order',
       // The admin quick-order routes are gated on orders:write.
       requiredPermission: 'orders:write',
-      keywords: ['quick order', 'import', 'csv', 'szybkie zamówienie', 'import csv'],
+      keywords: ['quick order', 'import', 'csv', 'import csv'],
+      keywordsKey: 'actions.openQuickOrder.keywords',
       weight: 226,
     },
   ],

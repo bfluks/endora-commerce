@@ -139,6 +139,7 @@ import {
 import { findAliasMember } from './admin-surfaces.js';
 import { readEmitLayout, type EmitLayout } from './module-packages.js';
 import { namedSpecifiers, type SpecifierKind } from './specifiers.js';
+import { withSharedParses } from '@endora-commerce/cli/lib/parsed-source.js';
 import {
   ADMIN_LAYER_DIRECTORY,
   PUBLISHED_COMPONENT_LAYER_DIRECTORY,
@@ -165,6 +166,13 @@ import {
   type WorkspaceFs,
   type WorkspaceMember,
 } from './workspace-packages.js';
+
+/**
+ * The `files` entry that keeps source maps out of every tarball (issue #107).
+ * It covers `.js.map` and `.d.ts.map`; the hand-written published manifests
+ * carry the same string, and `pack-gate` refuses a packed map.
+ */
+export const SOURCE_MAP_EXCLUSION = '!dist/**/*.map';
 
 /** Raised when a manifest cannot be derived. Never a partial answer. */
 export class ModulePackageManifestError extends Error {
@@ -234,6 +242,49 @@ export interface PackageLayer {
  */
 const INSTALL_SURFACE_LAYER_DIRECTORY = 'install';
 
+/**
+ * The two **code** layers of a module's own Page Builder renderers
+ * (`specs/141-module-block-renderers/contracts/block-renderers.md` §1, issue
+ * #124): React the storefront draws a block with, and the React-free functions
+ * that write the same block into an outgoing e-mail.
+ *
+ * Named here rather than in `ui-layer.ts` because neither is an *admin* UI
+ * layer, and `UI_LAYER_DIRECTORIES` means exactly that to every other reader —
+ * the admin's Tailwind `@source` scan and the checks that skip admin screens
+ * among them. What this file needs to know about the storefront layer is
+ * narrower, and is {@link UI_PROGRAM_LAYER_DIRECTORIES}.
+ */
+const STOREFRONT_LAYER_DIRECTORY = 'storefront';
+const EMAIL_LAYER_DIRECTORY = 'email';
+
+/**
+ * The block stylesheet (`block-renderers.md` §6): a **finished** CSS file at the
+ * package root, published on `./blocks.css`. A file rather than a directory under
+ * `src/`, because it is what both surfaces `@import` as it stands — nothing
+ * compiles it — and so it is read off the package root, beside `package.json`,
+ * exactly where the hand-written packages of that contract keep it.
+ */
+const BLOCK_STYLESHEET_FILE = 'blocks.css';
+const BLOCK_STYLESHEET_SUBPATH = `./${BLOCK_STYLESHEET_FILE}`;
+
+/**
+ * The layers compiled by the UI program (`tsconfig.ui.json`: `jsx`, the DOM lib,
+ * no Node types) and **declinable by a consumer** — the two questions have the
+ * same answer, because both are "is this layer React that some runtime other
+ * than the backend imports".
+ *
+ * The admin layers, plus the storefront layer: storefront React needs the same
+ * `jsx`/`lib` pair a screen does and must not see `process` any more than a
+ * screen may, and an instance composing the backend alone never imports
+ * `./storefront`. The e-mail layer is deliberately **not** here — it is plain
+ * string rendering (R3.2) that the module's own `./backend` imports at boot
+ * (§5.3), so it compiles with the backend and what it reaches is owed.
+ */
+const UI_PROGRAM_LAYER_DIRECTORIES: readonly string[] = [
+  ...UI_LAYER_DIRECTORIES,
+  STOREFRONT_LAYER_DIRECTORY,
+];
+
 const LAYER_SUBPATHS: ReadonlyArray<readonly [directory: string, subpath: string]> = [
   ['backend', './backend'],
   ['migrations', './migrations'],
@@ -287,6 +338,15 @@ const LAYER_SUBPATHS: ReadonlyArray<readonly [directory: string, subpath: string
   // — the emitted module exports runtime bindings — which is D-191's own
   // condition and needs no change to that check.
   ['admin-ui', './admin-ui'],
+  // The block-renderer layers of `specs/141-module-block-renderers/` (issue
+  // #124), in the order `block-renderers.md` §1 lists them. Both export an
+  // **object** (`contributions`, `emailBlocks`), so a reach into either from
+  // another module is a counted boundary reach under D-171 like `./admin` (R1.3)
+  // — and neither is a member of {@link FOREIGN_CONSUMPTION_SUBPATHS}: the
+  // storefront's generated registry and the module's own `./backend` are their
+  // consumers, never another module.
+  [STOREFRONT_LAYER_DIRECTORY, `./${STOREFRONT_LAYER_DIRECTORY}`],
+  [EMAIL_LAYER_DIRECTORY, `./${EMAIL_LAYER_DIRECTORY}`],
   // `specs/109-backend-test-kit/contracts/test-kit-package.md` R4.1, scheduled
   // as T014 and T015 of `specs/134-paid-module-extraction/`. A module's own test
   // doubles, fixtures and the tables its tests require emptied — the things that
@@ -395,8 +455,20 @@ export interface LayerInventory {
   readonly layers: readonly PackageLayer[];
   readonly hasI18n: boolean;
   readonly hasDocs: boolean;
+  /**
+   * Whether the package ships {@link BLOCK_STYLESHEET_FILE} at its root, which
+   * earns it the `./blocks.css` subpath and a `files` entry (issue #124).
+   */
+  readonly hasBlockStylesheet: boolean;
   readonly hasTests: boolean;
   readonly hasVitestConfig: boolean;
+  /**
+   * Whether the package declares {@link UI_TEST_TSCONFIG}: a third type-check
+   * program for UI-layer tests that need Node (issue #566). Read off the
+   * directory for the same reason `hasVitestConfig` is — a script an author has
+   * to remember to extend is a program nothing builds.
+   */
+  readonly hasUiTestConfig: boolean;
   /**
    * Every test file the package ships — under `src/` and under `test/` alike,
    * sorted, package-relative.
@@ -422,6 +494,17 @@ export interface LayerInventory {
 
 /** The root export every module package has: its manifest. */
 export const ROOT_ENTRY = 'src/manifest.ts';
+
+/**
+ * The UI layer's test program, for tests that run in Node and say so (issue
+ * #566). `tsconfig.ui.json` declares `types: []` so a screen that reaches for
+ * `process` does not compile; a `/// <reference types="node" />` in one test
+ * would apply to that whole program and switch the refusal off for every
+ * screen. A package whose UI tests need Node moves them into this program,
+ * which extends `tsconfig.ui.json`, takes the Node types, and is excluded by
+ * nothing else — the emit already leaves tests out.
+ */
+export const UI_TEST_TSCONFIG = 'tsconfig.ui.test.json';
 
 /**
  * What a package ships, read off its directory.
@@ -489,10 +572,25 @@ export function layerInventoryOf(packageDir: string, fs: ManifestFs): LayerInven
         `lives), or move the file to backend/test/ if it needs a booted server.`,
     );
   }
+  const hasUiTestConfig = fs.readText(join(packageDir, UI_TEST_TSCONFIG)) !== null;
+  if (
+    hasUiTestConfig &&
+    !layers.some((layer) => UI_PROGRAM_LAYER_DIRECTORIES.includes(layer.directory))
+  ) {
+    throw new ModulePackageManifestError(
+      `${packageDir}: declares ${UI_TEST_TSCONFIG} and has no UI layer ` +
+        `(${UI_PROGRAM_LAYER_DIRECTORIES.map((layer) => `src/${layer}/`).join(', ')}). The \`typecheck\` ` +
+        `script builds that program only beside the UI layer's own, so here it would be a ` +
+        `configuration no script names and no \`tsc\` invocation reads. Delete it.`,
+    );
+  }
   return {
     layers,
     assets: assetsUnder(srcDir, fs, packageDir),
     hasI18n: fs.listFiles(join(packageDir, 'i18n')).length > 0,
+    // Listed rather than opened: the generator writes nothing derived from the
+    // stylesheet's content — `check:block-renderers` is what judges that (§6).
+    hasBlockStylesheet: fs.listFiles(packageDir).includes(BLOCK_STYLESHEET_FILE),
     // Directories count, exactly as they do for `test/` two lines below. A
     // module's `docs/` is its fragment of the site's modules category
     // (`module-documentation-layer.md` §1), so a module whose single page is a
@@ -508,6 +606,7 @@ export function layerInventoryOf(packageDir: string, fs: ManifestFs): LayerInven
       fs.listFiles(join(packageDir, 'test')).length > 0 ||
       fs.listDirectories(join(packageDir, 'test')).length > 0,
     hasVitestConfig,
+    hasUiTestConfig,
     testFiles,
   };
 }
@@ -794,11 +893,13 @@ export function reachLayerOf(file: string): string {
  *     a co-located test and never of the runtime, and `@fastify/type-provider-zod`
  *     was required by eight packages for exactly the same reason.
  *   * **`optional`** — every non-test reach is in a UI layer.
- *     {@link UI_LAYER_DIRECTORIES} are the only layers a consumer can decline
- *     to resolve: they publish on `./admin` and `./admin-ui`, and an instance
- *     composing the backend and no admin imports neither. Everything else —
- *     `src/backend/`, `src/migrations/`, `src/ports/` and the root manifest —
- *     is on the path of every consumer that composes the module at all.
+ *     {@link UI_PROGRAM_LAYER_DIRECTORIES} are the only layers a consumer can
+ *     decline to resolve: they publish on `./admin`, `./admin-ui` and
+ *     `./storefront`, and an instance composing the backend alone imports none
+ *     of them. Everything else — `src/backend/`, `src/migrations/`,
+ *     `src/ports/`, `src/email/` (imported by the module's own backend) and the
+ *     root manifest — is on the path of every consumer that composes the module
+ *     at all.
  *   * **`required`** — anything else, including a name reached from a UI layer
  *     *and* from a runtime one. Optionality is a property of the whole set of
  *     reaches, so one runtime import is enough to make the peer owed.
@@ -820,7 +921,7 @@ export function peerRequirementOf(reaches: readonly PackageReach[]): PeerRequire
     (layer) => layer !== 'test',
   );
   if (published.length === 0) return 'build-only';
-  return published.every((layer) => UI_LAYER_DIRECTORIES.includes(layer))
+  return published.every((layer) => UI_PROGRAM_LAYER_DIRECTORIES.includes(layer))
     ? 'optional'
     : 'required';
 }
@@ -851,11 +952,22 @@ function typesPackageFor(name: string): string {
  *     Measured on a real socket in
  *     `backend/test/contract/real-socket-reply-contract.test.ts`; held over
  *     every published manifest by `test/unit/packages/fastify-peer-floor.test.ts`.
+ *   * **`@mikro-orm/*` ≥ 7.2.11** — the release the MikroORM 7 switch (#1866) was
+ *     characterised and type-checked against. Earlier 7.x releases are not a
+ *     tested combination, and `@mikro-orm/postgresql` pins its `@mikro-orm/core`
+ *     peer exactly, so a bare `^7` would admit a pair nobody ran. One floor for
+ *     every `@mikro-orm/*` package the estate names, because they move together.
  *
  * A floor whose major is not the one the application runs is refused rather
  * than applied: it would be a stale floor for a major nobody runs any more.
  */
-const PEER_FLOORS: ReadonlyMap<string, string> = new Map([['fastify', '5.11.0']]);
+const PEER_FLOORS: ReadonlyMap<string, string> = new Map([
+  ['fastify', '5.11.0'],
+  ['@mikro-orm/core', '7.2.11'],
+  ['@mikro-orm/decorators', '7.2.11'],
+  ['@mikro-orm/migrations', '7.2.11'],
+  ['@mikro-orm/postgresql', '7.2.11'],
+]);
 
 /** `^${major}`, or `^${floor}` when {@link PEER_FLOORS} records one for `name`. */
 function peerRangeFor(packageName: string, name: string, major: string): string {
@@ -1111,9 +1223,12 @@ export interface RenderedPackageManifest {
 export interface ManifestRenderRun {
   readonly rendered: readonly RenderedPackageManifest[];
   /**
-   * Application manifests this run **reconciled** — today exactly one, the
-   * admin's dependency on the module packages whose `./admin` layer the
-   * generated registry imports by bare specifier.
+   * Application manifests this run **reconciled** — today two: the admin's
+   * dependency on the module packages whose `./admin` layer the generated
+   * registry imports by bare specifier, and the backend's dependency on every
+   * module package, whose manifests the generated manifest index imports the
+   * same way (issue #445). The backend's is present only when the run was
+   * handed that index, because the index is how the backend is found.
    *
    * Kept apart from {@link ManifestRenderRun.rendered} because every floor and
    * every coverage number on that array is a statement about *module packages*:
@@ -1449,10 +1564,16 @@ export function renderModulePackageManifests(
       if (text === null) continue;
       sources.set(relative, text);
     }
-    for (const [file, text] of sources) {
-      specifierSites += namedSpecifiers(text, file).length;
-    }
-    const imported = peerNamesOf(sources);
+    // One scope per package, so the site count and the peer derivation read
+    // each source's specifiers off one parse (issue #910). Per package and not
+    // per run, because the keys are package-relative: `src/manifest.ts` names a
+    // different file in every module.
+    const imported = withSharedParses(() => {
+      for (const [file, text] of sources) {
+        specifierSites += namedSpecifiers(text, file).length;
+      }
+      return peerNamesOf(sources);
+    });
 
     const existing = existingManifest(identity.dir, countingFs);
     if (existing === null) firstRender.push(identity.name);
@@ -1546,6 +1667,11 @@ export function renderModulePackageManifests(
   // `exports` maps above came from, so a module that grows or drops the layer
   // moves both artefacts in one regeneration and neither can go stale under the
   // other.
+  //
+  // And the backend's dependency on every module package (issue #445), on the
+  // same terms: the manifest index imports each one's root by bare specifier.
+  // It is located through the index this run was handed, so a run with no
+  // index has no backend to reconcile — the real command always passes one.
   const applicationRendered = [
     renderAdminApplicationManifest({
       repoRoot,
@@ -1553,6 +1679,16 @@ export function renderModulePackageManifests(
       modulePackageNames,
       contributingPackageNames,
     }),
+    ...(manifestIndexPath === undefined
+      ? []
+      : [
+          renderBackendApplicationManifest({
+            repoRoot,
+            fs: countingFs,
+            manifestIndexPath,
+            modulePackageNames,
+          }),
+        ]),
   ];
 
   return {
@@ -1982,6 +2118,12 @@ export function renderManifest(input: RenderInput): string {
   //
   // A CSS file, so it carries **no conditions**: `types` and `default` are for
   // a module a consumer imports, and this one is imported by a stylesheet.
+  // The block stylesheet (issue #124), before the admin's `@source` file so the
+  // order is the one `block-renderers.md` §1 and the hand-written packages of
+  // that contract use. Finished CSS, so a plain path and no conditions.
+  if (input.layers.hasBlockStylesheet) {
+    exportsMap[BLOCK_STYLESHEET_SUBPATH] = `./${BLOCK_STYLESHEET_FILE}`;
+  }
   if (tailwindLayersOf(input).length > 0) {
     exportsMap[TAILWIND_SOURCE_SUBPATH] = `./${TAILWIND_SOURCE_FILE}`;
   }
@@ -2218,24 +2360,46 @@ export function renderManifest(input: RenderInput): string {
   // `jsx`/`lib` pair is declared. The predicate is `UI_LAYER_DIRECTORIES` and
   // not `ADMIN_LAYER_DIRECTORY`, so a package that publishes a component and
   // contributes no screen — which is what an installed extension package
-  // reaching D-191's exit looks like — still gets its build step.
-  const uiBuild = input.layers.layers.some((layer) =>
-    UI_LAYER_DIRECTORIES.includes(layer.directory),
-  )
-    ? ' && tsc -p tsconfig.ui.json'
-    : '';
+  // reaching D-191's exit looks like — still gets its build step. The storefront
+  // layer joins them for the same pair (issue #124): its React needs `jsx` and
+  // the DOM lib and must not see Node, so it is
+  // {@link UI_PROGRAM_LAYER_DIRECTORIES} that decides, not the admin set alone.
+  //
+  // The emit names `tsconfig.ui.build.json`, which extends `tsconfig.ui.json`
+  // and adds nothing but the test exclusion (issue #81): `tsconfig.ui.json` is
+  // also the UI layer's type-check, and a test it excluded would be read by no
+  // `tsc` invocation, while a test the emit compiled would put an `import` of
+  // `vitest` into `dist`. No compiler option is restated, so the `jsx`/`lib`
+  // pair is still declared once.
+  const hasUiLayer = input.layers.layers.some((layer) =>
+    UI_PROGRAM_LAYER_DIRECTORIES.includes(layer.directory),
+  );
+  const uiBuild = hasUiLayer ? ' && tsc -p tsconfig.ui.build.json' : '';
+  // `tsc` deletes nothing, so without a clean the output of a deleted source
+  // outlives it in a git-ignored `dist` every runtime reads (issue #443). It
+  // runs once, first: the UI compile writes into the same directory. The
+  // flags are the emit layout again, and the script refuses a layout whose
+  // `outDir` is the package itself or overlaps its sources.
+  const clean = `node ${input.repoRootPrefix}/scripts/clean-package-dist.mjs ${emitFlags} && `;
   const build =
+    clean +
     (input.layers.assets.length === 0
       ? 'tsc -p tsconfig.build.json'
       : `tsc -p tsconfig.build.json && node ${input.repoRootPrefix}/scripts/copy-package-assets.mjs ` +
         emitFlags) + uiBuild;
   const scripts: Record<string, string> = {
     build,
-    // The UI program is type-checked by the same configuration that emits it,
-    // with `--noEmit` on top: a second type-check-only config would be a third
-    // place the `jsx`/`lib` pair is declared, and two declarations of a
-    // compiler guarantee are two answers waiting to disagree.
-    typecheck: uiBuild === '' ? 'tsc -p tsconfig.json' : 'tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit',
+    // The UI program is type-checked by the configuration its emit extends,
+    // with `--noEmit` on top: a second config restating the compiler options
+    // would be a third place the `jsx`/`lib` pair is declared, and two
+    // declarations of a compiler guarantee are two answers waiting to disagree.
+    // The type-check reads the co-located tests; the emit excludes them. A
+    // package whose UI tests need Node builds them as a third program
+    // (`UI_TEST_TSCONFIG`, issue #566), so their Node types never reach a screen.
+    typecheck: hasUiLayer
+      ? 'tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit' +
+        (input.layers.hasUiTestConfig ? ` && tsc -p ${UI_TEST_TSCONFIG} --noEmit` : '')
+      : 'tsc -p tsconfig.json',
     lint: input.layers.hasTests ? 'eslint src test' : 'eslint src',
   };
   // Bare `vitest run`, never `--passWithNoTests` (feature 089, Phase 1). The
@@ -2257,7 +2421,15 @@ export function renderManifest(input: RenderInput): string {
   // `dist`, so `files` has to name it: a subpath declared over a file the
   // tarball omits is M9 — ERR_PACKAGE_PATH_NOT_EXPORTED at the first consumer,
   // which `pack-gate` refuses as `unresolvable-export`.
+  // The block stylesheet sits at the root for the same reason and needs the
+  // same entry (issue #124); listed first, in the `exports` order.
+  if (input.layers.hasBlockStylesheet) files.push(BLOCK_STYLESHEET_FILE);
   if (tailwindLayersOf(input).length > 0) files.push(TAILWIND_SOURCE_FILE);
+  // The tarball carries `dist` and not `src`, so a source map points at files
+  // no consumer has (issue #107). The maps stay on in `tsconfig.base.json` —
+  // local stack traces through the D-164 `./dist` resolution need them — and
+  // the exclusion is last, so no entry after it can re-include one.
+  files.push(SOURCE_MAP_EXCLUSION);
 
   const manifest = {
     name: input.packageName,
@@ -2443,29 +2615,135 @@ export function renderAdminApplicationManifest(input: {
   readonly contributingPackageNames: ReadonlySet<string>;
 }): RenderedPackageManifest {
   const members = workspaceMembers(input.repoRoot, input.fs);
-  const memberNames = new Set(members.map((member) => member.name));
   const { member } = findAliasMember(members, (path) => input.fs.readText(path));
-  const manifestPath = join(member.dir, 'package.json');
+  return reconcileModuleDependencies({
+    fs: input.fs,
+    member,
+    memberNames: new Set(members.map((entry) => entry.name)),
+    modulePackageNames: input.modulePackageNames,
+    wanted: input.contributingPackageNames,
+    unreadable:
+      `It is the manifest whose dependencies make the bare specifiers in the generated admin ` +
+      `registry resolvable; without it a module's admin layer is registered and unreachable.`,
+    noDependencies:
+      `The admin registry's entries are resolved through it, so there is nowhere to record ` +
+      `the modules this application composes.`,
+  });
+}
+
+/**
+ * The backend application's `package.json`, with its module-package
+ * dependencies reconciled against every module package this run derived
+ * (issue #445).
+ *
+ * ## Why every module package, and not a layer-dependent subset
+ *
+ * The generated manifest index imports **every** core module's manifest by a
+ * bare specifier — the package root, which every module package publishes
+ * whatever other layers it ships — and the composition registry imports its
+ * `./backend` and `./migrations` layers the same way. A bare specifier resolves
+ * only through a declared dependency, so a module package the backend does not
+ * declare is a registry entry that dies on `ERR_MODULE_NOT_FOUND` at the first
+ * process that loads it, `overlay:check` first. Until this reconciliation the
+ * entry was added by hand by every new module, which is the shared,
+ * hand-edited file {@link renderAdminApplicationManifest} exists to retire one
+ * application over.
+ *
+ * The population is this run's own identities rather than the names the
+ * committed index registers, because the index is `composer:generate`'s output
+ * and that command runs **after** this one: a module scaffolded a moment ago is
+ * in the first set and not yet in the second, and it is the one the edge is
+ * for. The `manifest-index` coverage on this command's `read:` line already
+ * holds the two sets against each other.
+ *
+ * ## Which application, and how it is found
+ *
+ * The workspace member whose directory holds the generated manifest index —
+ * the file whose specifiers have to resolve. Not a member named `backend`: a
+ * name is a convention and the index's location is the live fact
+ * (`lib/module-roots.ts` already locates it, and is the one derivation of it).
+ * An index under no member is a refusal.
+ *
+ * ## What it is allowed to touch
+ *
+ * Exactly what the admin's reconciliation touches: this repository's own module
+ * packages inside `dependencies`, plus `workspace:` edges to members that have
+ * gone. Every other key, and the order of every other key, is the file's own.
+ */
+export function renderBackendApplicationManifest(input: {
+  readonly repoRoot: string;
+  readonly fs: ManifestFs;
+  /** Absolute path of the generated manifest index the application owns. */
+  readonly manifestIndexPath: string;
+  /** Every module package this run derived, by npm name. */
+  readonly modulePackageNames: ReadonlySet<string>;
+}): RenderedPackageManifest {
+  const members = workspaceMembers(input.repoRoot, input.fs);
+  const owners = members
+    .filter((entry) => input.manifestIndexPath.startsWith(`${entry.dir}${sep}`))
+    .sort((left, right) => right.dir.length - left.dir.length);
+  const member = owners[0];
+  if (member === undefined) {
+    throw new ModulePackageManifestError(
+      `${input.manifestIndexPath} sits under no workspace member, so there is no application ` +
+        `manifest whose dependencies make its bare specifiers resolvable.`,
+    );
+  }
+  return reconcileModuleDependencies({
+    fs: input.fs,
+    member,
+    memberNames: new Set(members.map((entry) => entry.name)),
+    modulePackageNames: input.modulePackageNames,
+    wanted: input.modulePackageNames,
+    unreadable:
+      `It is the manifest whose dependencies make the bare specifiers in the generated ` +
+      `manifest index resolvable; without it every module is registered and unreachable.`,
+    noDependencies:
+      `The generated manifest index's entries are resolved through it, so there is nowhere ` +
+      `to record the modules this application composes.`,
+  });
+}
+
+/**
+ * One application's `dependencies`, reconciled against the module packages it
+ * composes — the edit {@link renderAdminApplicationManifest} and
+ * {@link renderBackendApplicationManifest} share.
+ *
+ * A wanted module is inserted at its ASCII position among the keys already
+ * there, a module package this run found and the application no longer wants
+ * is removed, and so is a `workspace:` edge to a member that has gone. Nothing
+ * else moves.
+ *
+ * Ours is answered from the identities this run derived, never from a `mod-`
+ * prefix test: the prefix is a naming convention (§6), and a third-party
+ * package that happened to follow it would be silently deleted here.
+ */
+function reconcileModuleDependencies(input: {
+  readonly fs: ManifestFs;
+  readonly member: WorkspaceMember;
+  readonly memberNames: ReadonlySet<string>;
+  readonly modulePackageNames: ReadonlySet<string>;
+  readonly wanted: ReadonlySet<string>;
+  /** Why the manifest matters, for the refusal when it cannot be read. */
+  readonly unreadable: string;
+  /** Why the `dependencies` object matters, for the refusal when it is absent. */
+  readonly noDependencies: string;
+}): RenderedPackageManifest {
+  const manifestPath = join(input.member.dir, 'package.json');
   const text = input.fs.readText(manifestPath);
   if (text === null) {
-    throw new ModulePackageManifestError(
-      `${manifestPath} could not be read. It is the manifest whose dependencies make the ` +
-        `bare specifiers in the generated admin registry resolvable; without it a module's ` +
-        `admin layer is registered and unreachable.`,
-    );
+    throw new ModulePackageManifestError(`${manifestPath} could not be read. ${input.unreadable}`);
   }
   const manifest = JSON.parse(text) as Record<string, unknown>;
   const declared = manifest['dependencies'];
   if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
     throw new ModulePackageManifestError(
-      `${manifestPath} declares no \`dependencies\` object. The admin registry's entries are ` +
-        `resolved through it, so there is nowhere to record the modules this application ` +
-        `composes.`,
+      `${manifestPath} declares no \`dependencies\` object. ${input.noDependencies}`,
     );
   }
   const kept = Object.entries(declared as Record<string, unknown>).filter(
     ([name, range]) => {
-      if (input.contributingPackageNames.has(name)) return true;
+      if (input.wanted.has(name)) return true;
       if (input.modulePackageNames.has(name)) return false;
       // A `workspace:` range naming no current member is an edge to a package
       // that has **gone** — a module deleted, renamed or moved out of the
@@ -2475,13 +2753,15 @@ export function renderAdminApplicationManifest(input: {
       // has to exist, because the "is it one of ours" question above is
       // answered from the packages this run **found**, and a deleted one is
       // exactly the package it cannot find.
-      return !(typeof range === 'string' && range.startsWith('workspace:') && !memberNames.has(name));
+      return !(
+        typeof range === 'string' &&
+        range.startsWith('workspace:') &&
+        !input.memberNames.has(name)
+      );
     },
   );
   const present = new Set(kept.map(([name]) => name));
-  const missing = [...input.contributingPackageNames]
-    .filter((name) => !present.has(name))
-    .sort(byAscii);
+  const missing = [...input.wanted].filter((name) => !present.has(name)).sort(byAscii);
 
   const reconciled: Array<[string, unknown]> = [];
   let cursor = 0;
@@ -2498,7 +2778,7 @@ export function renderAdminApplicationManifest(input: {
 
   manifest['dependencies'] = Object.fromEntries(reconciled);
   return {
-    packageName: typeof manifest['name'] === 'string' ? manifest['name'] : member.name,
+    packageName: typeof manifest['name'] === 'string' ? manifest['name'] : input.member.name,
     moduleId: null,
     outputPath: manifestPath,
     content: `${JSON.stringify(manifest, null, 2)}\n`,

@@ -1,12 +1,17 @@
-import type {
-  AdminCustomerDetail,
-  AdminCustomerListItem,
-  CustomerAccountAdminSearchPort,
-  CustomerAccountReadPort,
-  CustomerAccountRecord,
-  CustomerGroupReadPort,
-  OrderReadPort,
-  OrganizationDetailsPort,
+import {
+  customFieldFilterUnavailable,
+  type AdminCustomerDetail,
+  type AdminCustomerListItem,
+  type CustomerAccountAdminSearchPort,
+  type CustomerAccountReadPort,
+  type CustomerAccountRecord,
+  type CustomerGroupReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterCondition,
+  type CustomFieldListFilterField,
+  type CustomFieldListFilterPort,
+  type OrderReadPort,
+  type OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
 import type { CustomerDefaultsService } from './customer-defaults-service.js';
 
@@ -32,9 +37,13 @@ import type { CustomerDefaultsService } from './customer-defaults-service.js';
  * `EntityManager` at all: it owns no table, and every question it answers is
  * somebody's published read.
  */
+/**
+ * Whether the list is scoped. What a scoped admin reaches is the tenant
+ * filter's on `CustomerAccount` (issue #305: a sales representative reaches
+ * every organization nobody else governs), so no id list travels here.
+ */
 export interface AdminCustomerListScope {
   isPlatformAdmin: boolean;
-  allowedOrganizationIds: string[];
 }
 
 export interface AdminCustomerListQuery {
@@ -42,6 +51,8 @@ export interface AdminCustomerListQuery {
   status?: 'active' | 'blocked' | 'deleted' | undefined;
   organizationId?: string | undefined;
   customerGroupId?: string | undefined;
+  /** Issue #1903 — the custom fields marked as list filters (`customFieldFilters`). */
+  customFieldFilters?: CustomFieldFilters | undefined;
   page: number;
   pageSize: number;
 }
@@ -57,6 +68,12 @@ export interface CustomerAdminQueryPorts {
   organizations: OrganizationDetailsPort;
   customerGroups: CustomerGroupReadPort;
   orders: OrderReadPort;
+  /**
+   * Issue #1903 — `custom_fields`' list-filter port: the Customer
+   * custom fields the list offers as filters, and a request's filters as one
+   * condition. Absent, the list offers none and refuses any it is sent.
+   */
+  customFieldListFilter?: Pick<CustomFieldListFilterPort, 'condition' | 'listFilterable'> | undefined;
 }
 
 export class CustomerAdminQueryService {
@@ -67,16 +84,23 @@ export class CustomerAdminQueryService {
 
   async list(
     query: AdminCustomerListQuery,
-    scope: AdminCustomerListScope,
+    // Kept for the route's call shape: the reach itself is the tenant filter's.
+    _scope: AdminCustomerListScope,
   ): Promise<AdminCustomerListResult> {
+    // A field the list does not offer throws, and the route answers 400 naming it.
+    const customFieldCondition = await this.customFieldCondition(query.customFieldFilters);
     const { rows, total } = await this.ports.accountSearch.search({
       q: query.q,
       status: query.status,
       organizationId: query.organizationId,
       customerGroupId: query.customerGroupId,
-      // `null` is the unscoped read. A salesperson gets their territory, and
-      // org-less customers are visible to every salesperson by construction.
-      allowedOrganizationIds: scope.isPlatformAdmin ? null : scope.allowedOrganizationIds,
+      // `null`: no list of ids narrows the read. `CustomerAccount` is
+      // `@OrgScoped`, so a salesperson's read is confined by the tenant filter,
+      // which is the one reach rule (issue #305).
+      allowedOrganizationIds: null,
+      // Issue #1903 — an id sub-select `customer_accounts` intersects with
+      // the same tenant-scoped statement: it narrows the reach, never widens it.
+      customFieldCondition,
       page: query.page,
       pageSize: query.pageSize,
     });
@@ -86,6 +110,20 @@ export class CustomerAdminQueryService {
       rows: rows.map((c) => this.toListItem(c, orgNames, groupNames)),
       total,
     };
+  }
+
+  /** `GET /customers/custom-field-filters` — the Customer custom fields the list offers as filters. */
+  async customFieldFilterFields(): Promise<CustomFieldListFilterField[]> {
+    return (await this.ports.customFieldListFilter?.listFilterable('customer')) ?? [];
+  }
+
+  private async customFieldCondition(
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null> {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    const port = this.ports.customFieldListFilter;
+    if (port === undefined) throw customFieldFilterUnavailable(Object.keys(filters));
+    return port.condition('customer', filters);
   }
 
   async getDetail(id: string): Promise<AdminCustomerDetail | null> {
@@ -99,7 +137,7 @@ export class CustomerAdminQueryService {
     // the deduplication is what makes the ordering mean anything.
     const salesChannelIds = await this.ports.orders.salesChannelIdsForCustomer(customer.id);
 
-    const defaults = await this.defaults.getForCustomer(customer.id);
+    const defaults = await this.defaults.getForCustomer(customer.id, customer.organizationId);
 
     return {
       ...base,
@@ -121,6 +159,8 @@ export class CustomerAdminQueryService {
         : null,
       emailVerifiedAt: customer.emailVerifiedAt ? customer.emailVerifiedAt.toISOString() : null,
       twoFactorEnabled: customer.twoFactorEnabled,
+      // Issue #652 (D-292) — shown read-only on the admin customer detail.
+      preferredLanguage: customer.preferredLanguage,
       salesChannelIds,
       defaults,
       customFieldValues: customer.customFieldValues ?? {},

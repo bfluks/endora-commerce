@@ -161,6 +161,17 @@ function factsFor(path: string, reader: SourceReader, seen: Set<string>): Module
     return factsFor(target, reader, seen);
   };
 
+  /**
+   * A name taken from a file inherits that file's unknowns only when the file
+   * did not resolve the name itself (issue #101). A name it did resolve is
+   * known, whatever else the file re-exports from where this cannot follow; a
+   * name it did not may have come from exactly there, so its entity-ness stays
+   * unknown rather than false.
+   */
+  const inheritUnresolvableFor = (name: string, target: ModuleFacts): void => {
+    if (!target.exports.has(name)) facts.unresolvable.push(...target.unresolvable);
+  };
+
   for (const statement of source.statements) {
     // `export class X` / `export const x`
     const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
@@ -173,6 +184,23 @@ function factsFor(path: string, reader: SourceReader, seen: Set<string>): Module
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name)) facts.exports.set(declaration.name.text, false);
       }
+      continue;
+    }
+    // `export function f` / `export interface I` / `export type T` / `export enum E`.
+    // None of them is a class, so each is resolved, and resolved *not* an
+    // entity. Recorded so a named re-export of one is known rather than charged
+    // with the file's unrelated unresolvables (issue #564).
+    if (isExported && ts.isFunctionDeclaration(statement) && statement.name) {
+      facts.exports.set(statement.name.text, false);
+      continue;
+    }
+    if (
+      isExported &&
+      (ts.isInterfaceDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isEnumDeclaration(statement))
+    ) {
+      facts.exports.set(statement.name.text, false);
       continue;
     }
     if (!ts.isExportDeclaration(statement)) continue;
@@ -199,7 +227,7 @@ function factsFor(path: string, reader: SourceReader, seen: Set<string>): Module
       if (specifier !== null) {
         const target = factsOfTarget(specifier);
         if (target === null) continue;
-        facts.unresolvable.push(...target.unresolvable);
+        inheritUnresolvableFor(local, target);
         facts.exports.set(exposed, target.exports.get(local) === true);
         continue;
       }
@@ -216,7 +244,7 @@ function factsFor(path: string, reader: SourceReader, seen: Set<string>): Module
       }
       const target = factsOfTarget(origin.from);
       if (target === null) continue;
-      facts.unresolvable.push(...target.unresolvable);
+      inheritUnresolvableFor(origin.imported, target);
       facts.exports.set(exposed, target.exports.get(origin.imported) === true);
     }
   }
@@ -676,9 +704,19 @@ export function readPortsSurface(
       found.unresolvable.add(specifier);
       return null;
     }
-    const facts = factsFor(target, reader, new Set());
+    return factsFor(target, reader, new Set());
+  };
+
+  /**
+   * The target's unknowns, charged to the barrel only where they can reach it —
+   * `factsFor`'s rule for `./backend`, applied here (issue #564). A star
+   * publishes whatever the bare re-export carries, so it inherits all of them;
+   * a name the target resolves is known whatever else the target re-exports;
+   * a name it does not may have come from exactly there.
+   */
+  const inheritUnresolvable = (facts: ModuleFacts, name: string | null): void => {
+    if (name !== null && facts.exports.has(name)) return;
     for (const unresolved of facts.unresolvable) found.unresolvable.add(unresolved);
-    return facts;
   };
 
   const publish = (name: string, entity: boolean, runtime: boolean): void => {
@@ -731,6 +769,7 @@ export function readPortsSurface(
       const facts = factsOf(specifier);
       if (!statement.isTypeOnly) found.runtimeExports.add(`* from '${specifier}'`);
       if (facts === null) continue;
+      inheritUnresolvable(facts, null);
       for (const [name, entity] of facts.exports) publish(name, entity, !statement.isTypeOnly);
       continue;
     }
@@ -742,6 +781,7 @@ export function readPortsSurface(
       const runtime = !statement.isTypeOnly && !element.isTypeOnly;
       if (specifier !== null) {
         const facts = factsOf(specifier);
+        if (facts !== null) inheritUnresolvable(facts, local);
         publish(exposed, facts?.exports.get(local) === true, runtime);
         continue;
       }
@@ -756,6 +796,7 @@ export function readPortsSurface(
         continue;
       }
       const facts = factsOf(origin.from);
+      if (facts !== null) inheritUnresolvable(facts, origin.imported);
       publish(exposed, facts?.exports.get(origin.imported) === true, runtime);
     }
   }

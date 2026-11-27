@@ -3,12 +3,14 @@ import type { FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import type {
   AdminI18nTranslatePort,
+  AssetReadPort,
   AssetsLibraryPort,
   CustomerAccountReadPort,
   CustomerGroupReadPort,
+  CustomerPushPort,
   OrderReadPort,
   OrganizationDetailsPort,
-  QuoteRequestReadPort,
+  SettingWriteValidatorRegistryPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
@@ -19,13 +21,13 @@ import type {
 } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { pwaModule, type PwaModuleOptions, type PwaModuleResult } from './plugin.js';
+import { createIconAssetValidator } from './services/icon-asset-validator.js';
 import {
   createAssetUrlResolver,
   createChannelCodeResolver,
   createDefaultChannelIdResolver,
   type PwaCrossModulePorts,
 } from './services/cross-module-context.js';
-import { QUOTE_STATUS_EVENTS } from './services/status-push-copy.js';
 import { PushMessageDelivery } from './entities/push-message-delivery.entity.js';
 import { PushMessage } from './entities/push-message.entity.js';
 import { PushNotificationPreference } from './entities/push-notification-preference.entity.js';
@@ -44,11 +46,11 @@ import { PwaIconRendition } from './entities/pwa-icon-rendition.entity.js';
  * give:
  *
  *  - `assetUpload` and `resolveAssetUrl` are `assets_library`' published
- *    `assetsLibraryPort`. The first was a *structural subset* of
+ *    ports. The first is `assetsLibraryPort`, a *structural subset* of
  *    `AssetsLibraryPort.upload` all along — a Node `Readable` satisfies
  *    `AssetUploadStream`, `AssetDetail` satisfies `{ id: string }` — and the
- *    second is `getAsset(id).url` under D-223, which is why `resolveUrl` is
- *    published on no port.
+ *    second is `assetReadPort.resolveUrls` (D-223; it was `getAsset(id).url`
+ *    until issue #685, a detail that walks every page for its "used by" list).
  *  - `defaultChannelId` and `channelCodeForId` are the kernel's own
  *    `salesChannelResolutionPort`, a **platform** name (Constitution XII), so
  *    they add nothing to this module's manifest. The second replaces a root's
@@ -71,8 +73,9 @@ import { PwaIconRendition } from './entities/pwa-icon-rendition.entity.js';
  *
  * What is left of the coupling is {@link PwaCrossModulePorts} — two published
  * ports and no closure, resolved here and mapped in
- * `services/cross-module-context.ts` — plus the ports the status pushes read,
- * passed as `statusPush`.
+ * `services/cross-module-context.ts` — plus the ports the order status push
+ * reads, passed as `statusPush`. The other direction is `customerPushPort`,
+ * which this module publishes.
  *
  * `vapidSubject` comes from the environment, read here rather than threaded
  * from a root — a packaged module reads its own configuration.
@@ -128,6 +131,7 @@ export function registerModule(ctx: ModuleContext): void {
         // than through a gate frozen when this singleton was built.
         const ports: PwaCrossModulePorts = {
           assets: lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort'),
+          assetReads: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
           channels: lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
         };
         return pwaModule({
@@ -158,19 +162,17 @@ export function registerModule(ctx: ModuleContext): void {
           // satisfies it. That was true before T118c too, which is why draining
           // this member cost nothing but the deletion of two closures.
           assetUpload: ports.assets,
-          resolveAssetUrl: createAssetUrlResolver(ports.assets),
+          resolveAssetUrl: createAssetUrlResolver(ports.assetReads),
           defaultChannelId: createDefaultChannelIdResolver(ports.channels),
           channelCodeForId: createChannelCodeResolver(ports.channels),
           // The platform's contribution, read through the cradle per request so
           // a deployment that supplies its own still wins.
           resolveAuditContext: (request: FastifyRequest) =>
             ctx.cradle<PwaCradle>().adminAuditActorResolver(request),
-          // `specs/149-pwa-order-status-push/` — what the status pushes read.
-          // `quoteRequestReadPort` is a `degrades-without` edge (manifest
-          // `nonBindingDependencies`): the composer asks `isPresent` first.
+          // `specs/149-pwa-order-status-push/` — what the order status push
+          // reads (and, for the system default channel, `customerPushPort`).
           statusPush: {
             orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
-            quotes: lazyPort<QuoteRequestReadPort>(ctx, 'quoteRequestReadPort'),
             channels: ports.channels,
             translate: lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService'),
           },
@@ -180,17 +182,30 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * The automatic status pushes (issue #107, `specs/149-pwa-order-status-push/`).
+   * `customerPushPort` (`specs/179-rfq-and-customer-notifications/` FR-060) —
+   * how another module pushes to one customer account. `providePort` gates it
+   * on this module's effective state: a producer that skipped its presence
+   * check is refused with `MODULE_DISABLED` rather than writing a push message
+   * a switched-off module would never deliver.
+   */
+  ctx.di.providePort<CustomerPushPort>(
+    'customerPushPort',
+    ctx.asFunction(({ pwa }: PwaCradle): CustomerPushPort => pwa.handle.customerPushPort).singleton(),
+  );
+
+  /**
+   * The automatic order status push (issue #107, `specs/149-pwa-order-status-push/`).
    *
-   * They were bare `eventBus.on` calls inside `pwaModule`, so an order reaching
+   * It was a bare `eventBus.on` call inside `pwaModule`, so an order reaching
    * its status still wrote a `push_messages` row and still pushed to the
    * customer's device with `pwa` switched off — the module's own admin and
    * storefront surfaces refused at the same time, which is what made it
-   * invisible. `ctx.subscribe` gates every one.
+   * invisible. `ctx.subscribe` gates it.
    *
-   * The quote half used to subscribe to an event name no module emits. It listens to the five events `quote_requests` really emits
-   * now, one subscription each and by literal name; `rfq.created.v1` — the
-   * customer's own submission — is deliberately not among them (FR-008).
+   * The quote half — five `rfq.*` subscriptions — is gone since
+   * `specs/179-rfq-and-customer-notifications/` WP-10 (FR-061): `quote_requests`
+   * pushes through `customerPushPort` above, to the same people and on the same
+   * changes as its other channels, so no change is pushed twice.
    */
   const handlers = (): PwaModuleResult['handle']['pushEventHandlers'] =>
     ctx.cradle<PwaCradle>().pwa.handle.pushEventHandlers;
@@ -199,24 +214,15 @@ export function registerModule(ctx: ModuleContext): void {
     await handlers().onOrderStatusChanged(payload);
   });
 
-  ctx.subscribe('rfq.created_by_admin.v1', async (payload) => {
-    await handlers().onQuoteStatusEvent(QUOTE_STATUS_EVENTS['rfq.created_by_admin.v1'])(payload);
-  });
-
-  ctx.subscribe('rfq.modified.v1', async (payload) => {
-    await handlers().onQuoteStatusEvent(QUOTE_STATUS_EVENTS['rfq.modified.v1'])(payload);
-  });
-
-  ctx.subscribe('rfq.approved.v1', async (payload) => {
-    await handlers().onQuoteStatusEvent(QUOTE_STATUS_EVENTS['rfq.approved.v1'])(payload);
-  });
-
-  ctx.subscribe('rfq.canceled.v1', async (payload) => {
-    await handlers().onQuoteStatusEvent(QUOTE_STATUS_EVENTS['rfq.canceled.v1'])(payload);
-  });
-
-  ctx.subscribe('rfq.expired.v1', async (payload) => {
-    await handlers().onQuoteStatusEvent(QUOTE_STATUS_EVENTS['rfq.expired.v1'])(payload);
+  /**
+   * Issue #544 — a newly set app icon the administrator may not see in the
+   * asset library is refused as a missing one. A contribution into `settings`'
+   * registry, which skips it while this module is off.
+   */
+  ctx.onBoot(() => {
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createIconAssetValidator(lazyPort<AssetReadPort>(ctx, 'assetReadPort')),
+    );
   });
 
   ctx.routes(async (app) => {

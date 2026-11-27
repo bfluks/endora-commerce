@@ -1,9 +1,9 @@
 ---
-title: shipments
+title: Przesyłki
 description: Rekord przesyłki z możliwością ponowienia i jego cykl życia — odpowiednik modułu payments po stronie dostawy
 ---
 
-# `shipments`
+# Przesyłki (`shipments`)
 
 Rekord przesyłki (`Shipment`) i jego cykl życia. To odpowiednik modułu `payments` po stronie
 dostawy: *katalog* metod dostawy i rejestr adapterów należą do
@@ -51,24 +51,30 @@ obu zwraca `undefined`.
 zmienia już utworzonych przesyłek; operator ponownie generuje przesyłkę
 (`POST /api/v1/admin/orders/:id/shipments`), co dodaje nową próbę i zleca ją przewoźnikowi.
 Reagowanie na zmianę ustawienia aktywacji oznaczałoby, że platforma bez niczyjej prośby zleca
-przewoźnikowi paczki, które operator mógł już obsłużyć ręcznie. Zakładka Delivery zamówienia
+przewoźnikowi paczki, które operator mógł już obsłużyć ręcznie. Zakładka Dostawa zamówienia
 pokazuje stan, powód i przycisk.
 
 Kiedyś istniał tu drugi endpoint, `POST .../shipments/retry`, i został usunięty: dodawał próbę n+1,
 ale w żadnym stanie nie kontaktował się z adapterem, więc operator, który go użył, dostawał nowy
 wiersz `pending`, o który nikt nie został poproszony. Ponowienie **to** ponowne wygenerowanie —
-endpoint generowania dodaje kolejną próbę, odmawia dopiero po sukcesie i zleca ją przewoźnikowi.
+endpoint generowania dodaje kolejną próbę, odmawia dopiero po sukcesie
+(`409 SHIPMENT_ALREADY_GENERATED`, `details.code: "generate"`) i zleca ją przewoźnikowi.
+
+`SHIPMENT_ALREADY_GENERATED` niesie w `details` pola `shipmentId` i `orderId`, a dla
+`mark_failed` także `status` przesyłki. Do zgłoszenia #637 obie odmowy były odpowiedzią
+`409 VALIDATION_FAILED`.
 
 ## Cykl życia
 
 | Zdarzenie | Co je wywołuje | Skutek |
 | --- | --- | --- |
 | `order_created` | Utworzenie zamówienia (storefront / panel / API) | Wywoływane jest `onOrderCreated` adaptera wysyłki. Adaptery offline nic nie robią; przesyłka **nie** powstaje w tym momencie. |
-| `shipment_created` | „Generate shipment” w panelu albo API | Powstaje przesyłka `pending` (`attemptNo = max+1`); wywoływane jest `onShipmentCreated` adaptera; emitowane jest `shipment.created.v1` ze stanem, w jakim powstał wiersz. Gdy modułu adaptera nie ma, wiersz powstaje jako `pending_manual`, a adapter nie jest wywoływany — zobacz wyżej. |
+| `shipment_created` | „Wygeneruj przesyłkę” w panelu albo API | Powstaje przesyłka `pending` (`attemptNo = max+1`); wywoływane jest `onShipmentCreated` adaptera; emitowane jest `shipment.created.v1` ze stanem, w jakim powstał wiersz. Gdy modułu adaptera nie ma, wiersz powstaje jako `pending_manual`, a adapter nie jest wywoływany — zobacz wyżej. |
+| `payment.received.v1` | Rozliczenie płatności za zamówienie | Gdy adapter wysyłki zamówienia na to pozwala (`shouldAutoCreateOnPaid()`), a ostatnia próba nie jest ani `pending`, ani `success`, przesyłka jest generowana jak wyżej. Best-effort: błąd adaptera nigdy nie blokuje rozliczenia i zostaje dla przycisku **Wygeneruj przesyłkę** operatora. |
 | `receive_shipment` | Wynik od przewoźnika lub adaptera | Przesyłka zostaje rozstrzygnięta; zamówienie przechodzi do `statusOnSuccess` / `statusOnFailure` metody dostawy; emitowane jest `shipment.received.v1` / `shipment.failed.v1`. |
 
 `receive_shipment` jest **idempotentne**: sukces po końcowym `success` niczego nie zmienia; porażka
-po sukcesie jest odrzucana (409, bez cofania statusu); brakujące lub już rozstrzygnięte odwołanie
+po sukcesie jest odrzucana (`409 SHIPMENT_ALREADY_GENERATED`, `details.code: "mark_failed"`, bez cofania statusu); brakujące lub już rozstrzygnięte odwołanie
 jest odrzucane bez uszkadzania rekordów. Nieudane utworzenie ponawia się, generując przesyłkę
 ponownie — powstaje kolejna próba, która trafia do przewoźnika, a wcześniejsze próby pozostają bez
 zmian.

@@ -7,7 +7,8 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * `POST /admin/catalog/products/:id/duplicate` returns a fresh draft product
+ * `POST /admin/catalog/products/:id/duplicate` returns a fresh `inactive`, not
+ * archived product (spec 163, Q1-d)
  * with a derived SKU/slug and a "(copy)"-tagged name. The source row is left
  * untouched. The new row's `lowStockThreshold` is copied over.
  */
@@ -22,15 +23,15 @@ describe('POST /api/v1/admin/catalog/products/:id/duplicate', () => {
     await teardownBackendServer(h);
   });
 
-  it('creates a draft copy with a derived SKU and copies inventory flags', async () => {
+  it('creates an inactive copy with a derived SKU and copies inventory flags', async () => {
     const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/products',
       payload: {
         sku: 'DUP-SRC-001',
         type: 'simple' as const,
-        name: { 'en-US': 'Dup source' },
-        description: { 'en-US': 'Source for duplicate' },
+        name: 'Dup source',
+        description: 'Source for duplicate',
         categoryIds: [],
         attributeValues: {},
         visibility: 'public' as const,
@@ -69,8 +70,8 @@ describe('POST /api/v1/admin/catalog/products/:id/duplicate', () => {
     expect(dupBody.data.id).not.toBe(sourceId);
     expect(dupBody.data.sku.startsWith('DUP-SRC-001-copy')).toBe(true);
     expect(dupBody.data.slug.includes('copy')).toBe(true);
-    expect(dupBody.data.status).toBe('draft');
-    expect(dupBody.data.name['en-US']).toContain('(copy)');
+    expect(dupBody.data.status).toBe('inactive');
+    expect(dupBody.data.name).toContain('(copy)');
     expect(dupBody.data.lowStockThreshold).toBe(5);
 
     // Duplicating the duplicate must allocate a non-colliding SKU.

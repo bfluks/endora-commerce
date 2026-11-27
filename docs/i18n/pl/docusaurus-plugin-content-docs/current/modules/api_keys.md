@@ -1,9 +1,9 @@
 ---
-title: api_keys
+title: Klucze API
 description: Dane uwierzytelniające integracji w postaci tokenu bearer
 ---
 
-# `api_keys`
+# Klucze API (`api_keys`)
 
 Klucze API z tokenem bearer o określonym zakresie, przeznaczone do integracji między systemami.
 Token w postaci jawnej jest pokazywany tylko raz, przy utworzeniu; przechowywany jest wyłącznie jego
@@ -21,8 +21,9 @@ partnera dla przestrzeni `/api/v1/external/*`, którą w pełni opisuje przewodn
 | `DELETE /api/v1/admin/api-keys/:id` | administrator | Unieważnienie |
 
 Wywołania z zewnątrz uwierzytelniają się nagłówkiem `Authorization: Bearer sk_live_…`.
-`requireApiKey(scope)` i `requireBoundApiKey(scope)` to pre-handlery Fastify udostępniane przez
-plugin `api_keys`; trasy są nimi chronione (`requireApiKey('catalog:write')`,
+`requireApiKey(scope)` i `requireBoundApiKey(scope)` to pre-handlery Fastify, które moduł
+`api_keys` udostępnia jako porty (dlatego trasa innego modułu odpowiada `503 MODULE_DISABLED`, gdy
+ten moduł jest wyłączony); trasy są nimi chronione (`requireApiKey('catalog:write')`,
 `requireBoundApiKey('orders:write')` itd.).
 
 ## Wyliczenie zakresów
@@ -36,6 +37,7 @@ Przy tworzeniu zakresy są sprawdzane względem typowanego katalogu w
 | `catalog:write` | Zapis PIM według SKU — **tylko klucze niepowiązane** |
 | `orders:read` | Odczyt zamówień przez zewnętrzne API — **tylko klucze powiązane** |
 | `orders:write` | Przyjmowanie zamówień przez zewnętrzne API — **tylko klucze powiązane** |
+| `platform.api_description.read` | Opis API — `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` |
 
 Egzekwowanie nadal sprawdza tylko obecność zakresu na liście, więc dawne, dowolnie zapisane zakresy
 w istniejących kluczach nadal są odczytywane i egzekwowane — walidacji podlega tylko tworzenie.
@@ -59,6 +61,17 @@ po stronie serwera i pokazywane od razu w formularzu w panelu:
 | B3 | Techniczne konto klienta musi być aktywne i należeć do powiązanej organizacji |
 | B4 | Organizacja i kanał sprzedaży muszą istnieć (kanał nie musi być aktywny przy tworzeniu — klucz po prostu odmawia działania, dopóki kanał jest nieaktywny) |
 | B5 | `expiresAt`, jeśli podane, musi wskazywać chwilę w przyszłości |
+
+Naruszenie którejkolwiek reguły daje odpowiedź `422 VALIDATION_FAILED`, a `details` wymienia każdy
+problem jako `{ path, issue }`. Reguła B3 ma trzy przypadki: konto, które nie istnieje, i konto
+innej organizacji to błędy walidacji, każdy z własnym opisem. Konto powiązanej organizacji, które
+jest zablokowane, usunięte albo zanonimizowane, odrzuca jego własny stan i gdy jest to **jedyny**
+problem, odpowiedzią jest `422 API_KEY_SERVICE_ACCOUNT_INACTIVE` z `details.field:
+"binding.customerAccountId"`, `customerAccountId`, `organizationId` i tokenem odmowy w
+`details.code`: `blocked` (odblokuj konto albo wybierz inne) albo `removed` (konto usunięte lub
+zanonimizowane; wybierz inne). Operator czyta komunikat we własnym języku. Obok innego problemu
+nieaktywne konto pozostaje jedną z pozycji listy `VALIDATION_FAILED`. Do zgłoszenia #644 wszystkie
+trzy przypadki B3 miały jeden wspólny angielski opis.
 
 W trakcie żądania klucz powiązany ustawia kontekst tenanta ograniczony do jednej organizacji i
 przypięty kanał sprzedaży (jawny nagłówek `X-Sales-Channel` wskazujący inny kanał jest odrzucany z

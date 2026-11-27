@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as crm from './crm.js';
+import { customFieldFilterSchema } from './custom-fields.js';
 import type { OpportunityTransitionOutcome } from './crm.js';
 
 /**
@@ -412,6 +413,21 @@ describe('§12 analytics', () => {
     expect(parsed.basis).toBe('created');
     rejects(crm.TopOpportunitiesQuerySchema, { from: '2026-09-01', to: '2026-09-30', basis: 'won' });
   });
+
+  it('every figure names the time zone it was counted in — additively (#474, #475)', () => {
+    const handling = {
+      averageSeconds: null,
+      closedCount: 0,
+      byOutcome: { won: { averageSeconds: null, closedCount: 0 }, lost: { averageSeconds: null, closedCount: 0 } },
+    };
+    expect(crm.OpportunityHandlingTimeResponseSchema.parse({ data: handling, timeZone: 'Europe/Warsaw' }).timeZone).toBe(
+      'Europe/Warsaw',
+    );
+    accepts(crm.OpportunityAverageValueResponseSchema, { data: [], timeZone: 'UTC' });
+    // A reply from before the field parses as it did.
+    accepts(crm.OpportunityRepEffectivenessResponseSchema, { data: [] });
+    rejects(crm.OpportunityTimeInStatusResponseSchema, { data: [], timeZone: '' });
+  });
 });
 
 describe('opportunityStatusEventName', () => {
@@ -695,6 +711,10 @@ describe('board card fields and field filters (§12c, US19)', () => {
       rejects(schema, { fieldFilters: JSON.stringify({ 'custom:a': { from: '2026-02-30' } }) });
       rejects(schema, { fieldFilters: JSON.stringify(['custom:a']) });
     }
+  });
+
+  it('the field filter is the shared custom-field filter object (specs/157-custom-fields-list-filters/)', () => {
+    expect(crm.OpportunityFieldFilterSchema).toBe(customFieldFilterSchema);
   });
 
   it('a refused field filter is located once: fieldFilters, the field, the operator (N-BFR6)', () => {
@@ -999,5 +1019,30 @@ describe('events and the calendar (§12d, US21, US22)', () => {
     rejects(crm.MarkOpportunityMessagesReadRequestSchema, { throughMessageId: 'yesterday' });
     accepts(crm.OpportunityUnreadMessagesResponseSchema, { data: { unreadMessageCount: 0 } });
     rejects(crm.OpportunityUnreadMessagesResponseSchema, { data: { unreadMessageCount: -1 } });
+  });
+});
+
+describe('§3 links — issue #456, how far a Quote Request is agreed', () => {
+  const link = {
+    id: UUID_A,
+    documentKind: 'quote_request',
+    documentId: UUID_B,
+    available: true,
+    number: 'QR-1',
+    status: 'Pending',
+    total: '37.50',
+    currency: 'PLN',
+    syncStatus: false,
+    linkSource: 'manual',
+    createdAt: '2026-11-08T10:00:00.000Z',
+  };
+
+  it('a Quote Request link says how far its lines are agreed', () => {
+    for (const agreement of ['agreed', 'partial', 'none'] as const) {
+      expect(crm.OpportunityLinkSchema.parse({ ...link, agreement }).agreement).toBe(agreement);
+    }
+    // An Order link, and an unavailable one, carry none.
+    expect(crm.OpportunityLinkSchema.parse(link).agreement).toBeUndefined();
+    rejects(crm.OpportunityLinkSchema, { ...link, agreement: 'some' });
   });
 });

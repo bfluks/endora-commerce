@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { OrderTransitionPort, PaymentMethodReadPort } from '@endora-commerce/contracts';
+import type { OrderCommandPort, PaymentMethodReadPort } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -10,7 +10,7 @@ import {
   ReceivePaymentHandler,
   type SettlementLogger,
 } from '../../../../packages/modules/payments/src/backend/services/receive-payment-handler.js';
-import type { OrderPaymentStatusApplyPort } from '../../../../packages/modules/orders/src/ports/index.js';
+import type { OrderPaymentStatusApplyPort, OrderPaymentSettlementEffectsPort } from '../../../../packages/modules/orders/src/ports/index.js';
 import { Order } from '../../helpers/package-entities.js';
 import { Payment } from '../../helpers/package-entities.js';
 
@@ -57,6 +57,32 @@ describe('ReceivePaymentHandler.reflectRefund', () => {
     await teardownBackendServer(h);
   });
 
+  it('refuses a refund amount with more than two decimal places instead of rounding it (#428)', async () => {
+    const warnings: Array<{ details: object; message: string }> = [];
+    const handler = new ReceivePaymentHandler(
+      () => h.em(),
+      h.container.resolve<PaymentMethodReadPort>('paymentMethodReadPort'),
+      h.container.resolve<OrderCommandPort>('orderCommandPort'),
+      h.container.resolve<OrderPaymentStatusApplyPort>('orderPaymentStatusApplyPort'),
+      h.container.resolve<OrderPaymentSettlementEffectsPort>('orderPaymentSettlementEffectsPort'),
+      { warn: (details, message) => warnings.push({ details, message }) },
+    );
+    // Answers normally, so the gateway's webhook is acknowledged and not redelivered.
+    const result = await handler.reflectRefund({ paymentId, refundedAmount: 1.005, currency: 'PLN', fullyRefunded: false });
+    expect(result).toEqual({ paymentId, changed: false });
+    const p = await h.em().fork().findOne(Payment, { id: paymentId });
+    // Neither rounded to 1.01 (#417's half-up) nor to 1.00 (`toFixed(2)`): not recorded at all.
+    expect(p!.refundedAmount).toBe('0.00');
+    expect(p!.status).toBe('paid');
+    expect(p!.providerDetails).toMatchObject({
+      refundAnomaly: { reason: 'amount_precision_exceeded', reportedRefundedAmount: '1.005' },
+    });
+    const order = await h.em().fork().findOne(Order, { id: orderId });
+    expect(order!.paymentStatus).toBe('paid');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.details).toMatchObject({ paymentId, orderId, reportedRefundedAmount: '1.005' });
+  });
+
   it('reflects a partial refund, then a full refund; idempotent and no downgrade', async () => {
     const quiet: SettlementLogger = { warn: () => undefined };
     const handler = new ReceivePaymentHandler(
@@ -66,11 +92,12 @@ describe('ReceivePaymentHandler.reflectRefund', () => {
       // `lazyPort`: the hold a full refund puts on the order is a transition
       // like any other since feature 085 Phase D, so it is audited and its
       // side-effects run.
-      h.container.resolve<OrderTransitionPort>('orderTransitionPort'),
+      h.container.resolve<OrderCommandPort>('orderCommandPort'),
       // The co-transactional half (feature 080, T048): the order's payment
       // status moves to `refunded` on this handler's own transaction, through
       // the port `orders` publishes for it.
       h.container.resolve<OrderPaymentStatusApplyPort>('orderPaymentStatusApplyPort'),
+      h.container.resolve<OrderPaymentSettlementEffectsPort>('orderPaymentSettlementEffectsPort'),
       quiet,
     );
 
@@ -113,7 +140,7 @@ describe('ReceivePaymentHandler.reflectRefund', () => {
       objectId: orderId,
     });
     expect(audited).toHaveLength(1);
-    expect(audited[0]?.stateAfter).toEqual({ status: 'on_hold' });
+    expect(audited[0]?.stateAfter).toEqual({ status: 'on_hold', source: 'payment' });
 
     // Re-applying the same full refund is a no-op (idempotent).
     const again = await handler.reflectRefund({

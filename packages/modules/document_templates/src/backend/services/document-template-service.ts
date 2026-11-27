@@ -3,9 +3,11 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   GENERIC_DOCUMENT_PAGE_DEFAULTS,
+  isValidSectionPartition,
   type CreateDocumentTemplateBody,
   type DeleteDocumentTemplateBody,
   type DocumentBuilderConfig,
+  type DocumentCollectionDeclaration,
   type DocumentCollectionDetail,
   type DocumentTemplateDetail,
   type DocumentTemplateListQuery,
@@ -17,6 +19,8 @@ import {
   type RenameDocumentTemplateBody,
   type SaveDocumentTemplateContentBody,
   type VersionedBody,
+  type AssetReadPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -36,6 +40,7 @@ import { numberItems, withSampleValues } from '../rendering/items-table.js';
 import type { BlockDeclarations } from './block-declarations.js';
 import { buildDocumentBuilderConfig } from './builder-descriptor.js';
 import { assertEnvelopeLimits, assertLanguageAllowed, validateTree } from './content-validation.js';
+import { assertDocumentAssetsLinkable } from './linkable-assets.js';
 import type { TemplateReader, TemplateRow } from './template-resolver.js';
 
 /**
@@ -58,9 +63,12 @@ export interface DocumentTemplateServiceDeps {
   readonly declarations: BlockDeclarations;
   readonly salesChannels: SalesChannelResolutionPort;
   readonly renderer: DocumentRenderer;
+  /**
+   * Issue #544 — asked before a save stores, or a preview renders, an image
+   * the caller may not see in the asset library.
+   */
+  readonly assets: Pick<AssetReadPort, 'visibleToCaller'>;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function channelName(name: Record<string, string> | undefined): string | null {
   if (!name) return null;
@@ -131,14 +139,16 @@ export class DocumentTemplateService {
     const collections: DocumentCollectionDetail[] = [];
     for (const collection of this.deps.registry.collections(code)) {
       const catalogue = await this.deps.registry.catalogue(code, collection.key, sampleLanguage);
+      const sampleItems = withSampleValues(numberItems(collection.items(sample)), catalogue.fields);
       collections.push({
         key: collection.key,
         labelKey: collection.labelKey,
         ownerModule: registration.moduleId,
         fields: [...catalogue.fields],
         summaryFields: [...catalogue.summaryFields],
-        sampleItems: withSampleValues(numberItems(collection.items(sample)), catalogue.fields),
+        sampleItems,
         sampleSummary: { ...(collection.summary?.(sample) ?? {}) },
+        sampleSections: sampleSectionsOf(collection, sample, sampleItems.length),
       });
     }
     return {
@@ -195,6 +205,9 @@ export class DocumentTemplateService {
 
   /** A row whose type is available, or `DOCUMENT_TEMPLATE_NOT_FOUND` — indistinguishable (FR-051). */
   private async requireRow(id: string): Promise<DocumentTemplate> {
+    if (!isUuidShape(id)) {
+      throw new HttpError(404, ERROR_CODES.DOCUMENT_TEMPLATE_NOT_FOUND, 'Document template not found.', { id });
+    }
     const row = await this.deps.emFactory().findOne(DocumentTemplate, { id });
     if (!row || !this.deps.registry.get(row.documentType)) {
       throw new HttpError(404, ERROR_CODES.DOCUMENT_TEMPLATE_NOT_FOUND, 'Document template not found.', { id });
@@ -231,6 +244,11 @@ export class DocumentTemplateService {
       const builtIn = registration.defaultContent();
       content = { schemaVersion: 1, languages: { ...builtIn.languages } };
     } else {
+      if (!isUuidShape(body.source.templateId)) {
+        throw this.invalid('The source template is not a template of this document type.', {
+          templateId: body.source.templateId,
+        });
+      }
       const source = await this.deps.emFactory().findOne(DocumentTemplate, { id: body.source.templateId });
       if (!source || source.documentType !== body.documentType) {
         throw this.invalid('The source template is not a template of this document type.', {
@@ -277,6 +295,7 @@ export class DocumentTemplateService {
       languages,
       collections: this.deps.registry.collections(current.documentType).map((collection) => collection.key),
     });
+    await assertDocumentAssetsLinkable(this.deps.assets, tree, [current.content]);
     const { row } = await this.deps.commandBus.run(
       saveContentCommand({
         id,
@@ -324,6 +343,8 @@ export class DocumentTemplateService {
       languages,
       collections: this.deps.registry.collections(body.documentType).map((collection) => collection.key),
     });
+    // A preview renders the bytes for the caller, so every image it names is asked about.
+    await assertDocumentAssetsLinkable(this.deps.assets, tree, []);
     const result = await this.deps.renderer.render({
       documentType: body.documentType,
       salesChannelId: null,
@@ -359,7 +380,7 @@ export function templateReaderOver(emFactory: () => EntityManager): TemplateRead
       return rows.map(toRow);
     },
     async findById(id) {
-      if (!UUID_RE.test(id)) return null;
+      if (!isUuidShape(id)) return null;
       const row = await emFactory().findOne(DocumentTemplate, { id });
       return row ? toRow(row) : null;
     },
@@ -377,4 +398,26 @@ export function templateReaderOver(emFactory: () => EntityManager): TemplateRead
       return rows.map(toRow);
     },
   };
+}
+
+/**
+ * Feature 159 — the sample's sections for the editor's canvas
+ * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §4): `[]`
+ * when the collection declares none, and — as the renderer does — when the host
+ * throws or answers a partition that does not cover the sample's lines.
+ */
+function sampleSectionsOf(
+  collection: DocumentCollectionDeclaration,
+  sample: unknown,
+  itemCount: number,
+): DocumentCollectionDetail['sampleSections'] {
+  if (!collection.sections) return [];
+  try {
+    const sections = collection.sections(sample);
+    return isValidSectionPartition(sections, itemCount)
+      ? sections.map((section) => ({ ...section, itemIndexes: [...section.itemIndexes], summary: { ...section.summary } }))
+      : [];
+  } catch {
+    return [];
+  }
 }

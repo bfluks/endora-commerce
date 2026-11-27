@@ -89,14 +89,20 @@ i nie została jeszcze zbudowana. **Ten stopień istnieje, ale trudno go odkryć
 to wprost, zamiast zostawiać to do samodzielnego odkrycia.
 :::
 
-:::note Nie na tym stopniu: Command Bus
-`CommandBus.run(command)` przyjmuje obiekt polecenia i wykonuje je w transakcji. Nie ma rejestru
-handlerów i nie ma się do czego podpiąć. To jednolita ścieżka zapisu, a nie punkt rozszerzenia.
+:::note Nie na tym stopniu: udział w samym zapisie
+Subskrybent działa po zatwierdzeniu transakcji i nie może zmienić ani odrzucić tego, co zostało
+zapisane. Aby działać **wewnątrz** zapisu właściciela — dodać własny wiersz w tej samej transakcji
+albo zapis odrzucić — użyj hooka polecenia, czyli stopnia 2 (2b poniżej).
 :::
 
 ---
 
 ## Stopień 2 — kod przed tym, co właściciel już obsługuje, albo po tym
+
+Dwa mechanizmy, jeden stopień: wokół endpointu (2a) albo wewnątrz zapisu (2b). Oba są
+opublikowanym identyfikatorem, który właściciel wersjonuje, i oba mogą odmówić.
+
+### 2a — interceptor API
 
 **Mechanizm.** `ctx.interceptors([{ id, target, phase, order, handler }])`. Celem jest stały
 identyfikator endpointu `"<METHOD> <route pattern>"` — wzorzec dokładnie taki, jaki rejestruje
@@ -122,6 +128,32 @@ Rejestr przyjmuje taki cel bez słowa. W czasie działania nic cię o tym nie po
 rozbieżności twojego wdrożenia porównuje każdy cel z tabelą tras i przerywa build błędem
 `unmatched-interceptor-target` — i tylko ona to wychwyci.
 :::
+
+### 2b — hook polecenia
+
+**Mechanizm.** `ctx.commandHooks([{ id, on, phase: 'beforeCommit', handler }])`, gdzie `on` to
+referencja, którą właściciel publikuje w `@endora-commerce/contracts` dla polecenia zadeklarowanego
+jako dostępne dla hooków (`ORGANIZATION_HOOKABLE_ACTIONS.register`). Hook działa wewnątrz transakcji
+właściciela, po jego zapisie i przed jego wpisem audytu. Szczegóły są na stronie
+[Command Bus](./command-bus.md#command-hooks-beforecommit).
+
+**Koszt.** Powiązanie z akcją dostępną dla hooków i kształtem jej danych — to publiczne API, które
+właściciel wersjonuje — oraz zależność od właściciela w twoim manifeście. Hook trzyma otwartą
+transakcję właściciela przez cały czas działania, więc nie wywołuje usług zdalnych.
+
+**Co się traci.** Nic strukturalnie. Zapis właściciela, jego jedyny wpis audytu i sama szyna
+poleceń pozostają właściciela: hook może dodać własne wiersze (we własnych tabelach albo przez
+polecenie uruchomione `ctx.run`) i odrzucić cały zapis — nic więcej.
+
+**Kto.** Każdy, również wobec cudzych modułów — moduły rdzenia, moduły nakładki twojego wdrożenia i
+zainstalowane pakiety — ale tylko na akcjach, które właściciel zadeklarował. Hook na niezadeklarowanej
+akcji, dwa nieuporządkowane moduły z hookami na jednej akcji albo moduł z hookiem, który nie zależy od
+właściciela, przerywają kompozycję przy starcie. Kolejność dwóch niezależnych modułów z hookami
+ustala twoje wdrożenie w `divergence.ts` (`commandHookOrder`).
+
+**Kiedy to jest odpowiedź.** Własna reguła, która musi obowiązywać przy każdym zapisie rekordu,
+niezależnie od endpointu czy portu, przez który przyszedł; własne dane, które muszą zostać
+zatwierdzone razem z wierszem rdzenia albo wcale.
 
 ---
 
@@ -157,6 +189,11 @@ Kształt opublikowanego portu jest typem kontraktu, nigdy twoją własną klasą
 podana w jego bloku dokumentacji jest częścią kontraktu i pilnuje jej kontrola; a **opcjonalna
 metoda w opublikowanym porcie jest odrzucana**, bo proxy rozwiązujące port odpowiada funkcją na
 każdą właściwość i wykrywanie funkcji przez nie jest z założenia niemożliwe.
+
+Port **zapisu** jest portem swojego agregatu — rozszerzaj `<aggregate>CommandPort` agregatu, zamiast
+publikować port skrojony pod jedno żądanie (zobacz [przewodnik po jądrze](./kernel.md)) — a każda
+metoda opublikowanego portu należy do [powierzchni kontraktu](./contract-surface.md): zanim zostanie
+usunięta albo zmieniona, jest wycofywana na jedno wydanie.
 :::
 
 ---
@@ -237,22 +274,40 @@ załatwiłby stopień 2.
 
 ---
 
-## Nigdy nie jest stopniem: schemat
+## Drabina danych: gdzie trafiają nowe dane
 
-**Encji i migracji rdzenia nigdy się nie nadpisuje.** Własne tabele należą do modułu, którego
-jesteś właścicielem; dodatkowe pole w encji rdzenia dodaje się przez pola niestandardowe
-definiowane w czasie działania. Moduł nakładkowy wdrożenia nie zawiera ani klas encji, ani
-migracji, a generator odrzuca jedno i drugie.
+Stopnie powyżej zmieniają **zachowanie**. Nowe **dane** mają własną drabinę, uporządkowaną tak
+samo: zacznij od dołu.
+
+| Stopień | Mechanizm | Kto | Przetrwa aktualizacje, bo |
+| --- | --- | --- | --- |
+| D0 | **Pola niestandardowe definiowane w czasie działania** — operator definiuje pole encji gospodarza w panelu administracyjnym | operator, w czasie działania | to dane: wiersz definicji i wartość we własnym zbiorze wartości gospodarza |
+| D1 | **Tabela poboczna**, której właścicielem jest twój moduł, kluczowana identyfikatorem wiersza rdzenia i odczytywana przez port twojego modułu | dowolny twój moduł, zainstalowany pakiet | tabela jest twoja; rdzeń jej nie dotyka |
+| D2 | **Zadeklarowane kolumny rozszerzeń** — addytywne kolumny `x_<moduleId>_*` w rozszerzalnej tabeli rdzenia, deklarowane przez `defineColumnExtension` | zainstalowany pakiet modułu zależny od gospodarza | platforma generuje DDL, zapisuje je w rejestrze, weryfikuje przy każdej migracji i każdym starcie, a CI rdzenia pilnuje, by każda otwarta rozszerzalna tabela je zachowała |
+| D3 | **Wariant zapewniany przez moduł-właściciela** — typ, status, konfigurowalny kształt, który właściciel już modeluje | decyduje właściciel; ty konfigurujesz | to własny schemat właściciela |
+
+**D2 jest celowo wąski.** Rozszerzalne tabele to dokładnie tabele gospodarzy pól
+niestandardowych — wyprowadzane z rejestru powiązań pól niestandardowych, nigdy z drugiej listy —
+a w tym wydaniu otwarta jest tylko `organizations` (pozostałe osiem dojdzie w późniejszym
+wydaniu). Moduł deklarujący jest właścicielem swoich kolumn `x_<moduleId>_*` i tylko jego kod je
+zapisuje, przez akcesor platformy, wewnątrz polecenia (Command) albo hooka polecenia; gospodarz
+zachowuje tabelę, jej ograniczenia i wszystkie niezadeklarowane kolumny. Odinstalowanie modułu
+pozostawia kolumny (rejestr oznacza je jako osierocone), dopóki operator nie usunie ich
+audytowanym poleceniem. Przykład i wszystkie reguły są na stronie
+[Zadeklarowane kolumny rozszerzeń](./schema-extensions.md).
+
+**Nigdy nie jest stopniem: nadpisywanie schematu rdzenia.** Kolumny, ograniczenia, indeksu ani
+klasy encji rdzenia nigdy nie zmienia się spoza ich modułu, a migracja pakietu zapisująca tabelę
+innego modułu jest odrzucana przy `migrate` — przez platformę, nie przez przegląd kodu. Dziś
+moduł nakładkowy wdrożenia nie zawiera ani klas encji, ani migracji, a jedno i drugie jest
+odrzucane: utwórz tabelę we własnym pakiecie modułu (D1) i odczytuj ją z nakładki przez port tego
+modułu. Jedno z kolejnych wydań znosi tę odmowę (zobacz [Wzorzec nakładki](./overlay-pattern.md));
+migracje modułu nakładkowego przechodzą wtedy przez to samo zabezpieczenie, bez wyjątku.
 
 Powodem **nie** jest kolejność migracji — ten argument sprawdzono pomiarem, okazał się fałszywy i
 został wycofany. Powód jest taki, że wspólny schemat rdzenia to jedyne, co w ogóle umożliwia
-aktualizacje, a nakładka znajduje się w tym samym repozytorium i w tym samym buildzie co rdzeń,
-więc rozwiązanie kosztuje tylko jeden katalog: utwórz tabelę we własnym module i odczytuj ją z
-nakładki przez port tego modułu.
-
-**Zainstalowany pakiet rozszerzenia** to przypadek odwrotny i może zawierać jedno i drugie: autor
-zewnętrzny nie ma modułu rdzenia, więc ta sama reguła byłaby dla pakietów rozszerzeń zakazem, a nie
-ograniczeniem, które da się obejść projektem.
+aktualizacje: D1 i D2 to dwa sposoby dodania schematu, których aktualizacja rdzenia ma obowiązek
+— sprawdzany — nie zepsuć.
 
 ---
 
@@ -280,9 +335,10 @@ repozytorium, generowanych ponownie z twojego drzewa i porównywanych bajt po ba
 | `backend/src/apps/<deployment>/divergence.generated.ts` | program i kontrola deterministyczności |
 
 Obok nich jest jedyny plik, który piszesz ręcznie, `backend/src/apps/<deployment>/divergence.ts`.
-Zawiera trzy rzeczy, których nie da się wyprowadzić z drzewa plików: moduły, których nie
-dostarczasz, kolejność opakowywania, gdy dwa twoje moduły nakładkowe dekorują tę samą nazwę, oraz
-**po jednym zdaniu uzasadnienia dla każdej rozbieżności**.
+Zawiera to, czego nie da się wyprowadzić z drzewa plików: moduły, których nie dostarczasz,
+kolejność opakowywania, gdy dwa twoje moduły nakładkowe dekorują tę samą nazwę, kolejność dwóch
+modułów z hookami poleceń, których nie porządkuje żadna zależność, oraz **po jednym zdaniu
+uzasadnienia dla każdej rozbieżności**.
 
 Oba zestawy są porównywane w obie strony. Build kończy się błędem zarówno przy rozbieżności bez
 uzasadnienia, jak i przy uzasadnieniu rozbieżności, której już nie ma — bo właśnie tak wdrożenie po

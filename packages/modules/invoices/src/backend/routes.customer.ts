@@ -5,9 +5,12 @@ import {
   ERROR_CODES,
   type AssetsLibraryPort,
   type DocumentRenderPort,
+  type ErpSaleDocumentListResponse,
   type InvoiceAttachmentFetchPort,
+  type OrderInvoiceListResponse,
   type OrderReadPort,
   type OrderRecord,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { InvoiceExternalAttachment } from './entities/invoice-external-attachment.entity.js';
 import { Invoice } from './entities/invoice.entity.js';
@@ -16,7 +19,7 @@ import { renderInvoicePdf } from './document/render-invoice.js';
 
 export interface InvoicesCustomerDeps {
   emFactory: () => EntityManager;
-  /** `orders`' published read model — the ownership check (feature 075, Phase C). */
+  /** `orders`' published read model — the customer-scoped order read (issue #669). */
   orderReadPort: OrderReadPort;
   /** `assets_library` — resolves signed URLs for private attachment bytes. */
   assetsLibrary: AssetsLibraryPort;
@@ -34,8 +37,8 @@ export interface InvoicesCustomerDeps {
 
 /**
  * Storefront customer invoice routes (feature 047, US4). A customer lists and
- * downloads invoices for an order they (or their organization) own. Only
- * `ready` invoices are exposed.
+ * downloads invoices for an order they may read under the order read scope
+ * (issue #669). Only `ready` invoices are exposed.
  */
 export async function registerInvoicesCustomerRoutes(
   app: FastifyInstance,
@@ -52,23 +55,22 @@ export async function registerInvoicesCustomerRoutes(
     documents,
   } = deps;
 
+  /**
+   * The order, if the caller may read it — decided by `orders` itself, so these
+   * routes and `GET /api/v1/orders/:id` share one rule: a regular member reaches
+   * only the orders they placed, a holder of `orders.view_organization` every
+   * order of the Organization (issue #669, `specs/170-organization-roles/` FR-049). Anything else answers 404.
+   */
   async function ownedOrderOr404(req: FastifyRequest, orderId: string): Promise<OrderRecord> {
-    const ctx = resolveCustomerContext(req);
-    const order = await orderReadPort.findById(orderId);
-    if (
-      !order ||
-      (order.placedByCustomerAccountId !== ctx.customerAccountId &&
-        order.organizationId !== ctx.organizationId)
-    ) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Order not found.');
-    }
+    const order = await orderReadPort.findByIdForCustomer(orderId, resolveCustomerContext(req));
+    if (!order) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Order not found.');
     return order;
   }
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/orders/:id/invoices',
     { preHandler: requireCustomer },
-    async (request) => {
+    async (request): Promise<OrderInvoiceListResponse> => {
       await ownedOrderOr404(request, request.params.id);
       const em = emFactory();
       const rows = await em.find(
@@ -114,7 +116,7 @@ export async function registerInvoicesCustomerRoutes(
   app.get(
     '/api/v1/account/organization/invoices',
     { preHandler: requireCustomer },
-    async (request) => {
+    async (request): Promise<ErpSaleDocumentListResponse> => {
       const ctx = resolveCustomerContext(request);
       const em = emFactory();
       const rows = await em.find(
@@ -160,6 +162,9 @@ export async function registerInvoicesCustomerRoutes(
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       const em = emFactory();
+      if (!isUuidShape(request.params.invoiceId)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sale document not found.');
+      }
       const invoice = await em.findOne(Invoice, {
         id: request.params.invoiceId,
         origin: 'erp_import',
@@ -168,6 +173,9 @@ export async function registerInvoicesCustomerRoutes(
       });
       if (!invoice) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sale document not found.');
+      }
+      if (!isUuidShape(request.params.attachmentId)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Attachment not found.');
       }
       const attachment = await em.findOne(InvoiceExternalAttachment, {
         id: request.params.attachmentId,

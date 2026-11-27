@@ -10,7 +10,18 @@ import {
   removeFromDefaultListAction,
 } from '../lib/actions/shoppingList';
 import { addRfqDraftItem } from '../lib/rfqDraft';
-import { addProductToCartAction } from '../lib/actions/cart';
+import { addProductToCartAction, getCommerceAbilitiesAction } from '../lib/actions/cart';
+import {
+  cardActionVisibility,
+  VISITOR_ABILITIES,
+  type CommerceAbilities,
+  type ProductCardButtonsConfig,
+} from '../lib/commerce-permissions';
+import { channelHeaders } from '../lib/channel/channel-header';
+import { cardAddToCartPayload, quoteAddQuantity } from '../lib/orderMinimum';
+import { productCardActionLabels, type CardActionState } from '../lib/buyActionLabels';
+import { useLocalizedPath } from '../lib/i18n/localized-link';
+import { withModulePresence, type ModuleActionPresence } from '../lib/module-action-presence';
 
 /**
  * Product-card action buttons (add to cart / add to shopping list / add to
@@ -22,33 +33,59 @@ import { addProductToCartAction } from '../lib/actions/cart';
  * dispatches `b2b:shopping-list:changed` so the header heart badge updates;
  * "add to cart" dispatches `b2b:cart:changed`; "add to quote" links to the
  * product page's quote section (full quantity / variant selection lives there).
+ *
+ * `specs/170-organization-roles/` (FR-057): a button also needs the buyer's
+ * role to allow it (`cardActionVisibility`); what the role allows is read once
+ * per page load through a server action, beside the settings, so a list-only
+ * member's cards offer no cart button. A visitor keeps every button (PR-4).
+ *
+ * Issue #672 (Principle XVII item 5): a button also needs its module to be
+ * present. What is present is the server card's `presence` prop — never asked
+ * from the browser — and while `shopping_lists` is off the default list's
+ * membership is not read either.
  */
 
-interface ButtonsConfig {
-  showAddToCart: boolean;
-  showAddToShoppingList: boolean;
-  showAddToQuote: boolean;
+type ButtonsConfig = ProductCardButtonsConfig;
+
+/** Settings and abilities, resolved together so the card renders once, in its final shape. */
+interface CardState {
+  config: ButtonsConfig;
+  abilities: CommerceAbilities;
 }
 
-let cachedConfig: Promise<ButtonsConfig> | null = null;
+/** Per channel: the toggles are channel-scoped settings. */
+const cachedConfig = new Map<string, Promise<ButtonsConfig>>();
 
-function loadConfig(apiBase: string): Promise<ButtonsConfig> {
-  if (!cachedConfig) {
-    cachedConfig = fetch(`${apiBase}/api/v1/storefront/settings/product-card-buttons`, {
+function loadConfig(apiBase: string, channelCode: string | undefined): Promise<ButtonsConfig> {
+  const key = channelCode ?? '';
+  let config = cachedConfig.get(key);
+  if (!config) {
+    config = fetch(`${apiBase}/api/v1/storefront/settings/product-card-buttons`, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...channelHeaders(channelCode) },
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('settings'))))
       .then((body: { data: ButtonsConfig }) => body.data)
       .catch(() => ({ showAddToCart: true, showAddToShoppingList: true, showAddToQuote: true }));
+    cachedConfig.set(key, config);
   }
-  return cachedConfig;
+  return config;
 }
 
-type ActionState = 'idle' | 'busy' | 'done' | 'error';
+/** The buyer's abilities, once per page load; on any failure the visitor's (the backend still guards). */
+let cachedAbilities: Promise<CommerceAbilities> | null = null;
+
+function loadAbilities(): Promise<CommerceAbilities> {
+  cachedAbilities ??= getCommerceAbilitiesAction().catch(() => VISITOR_ABILITIES);
+  return cachedAbilities;
+}
+
+type ActionState = CardActionState;
 
 export function ProductCardActions(props: {
   apiBase: string;
+  /** The active sales channel, sent on the settings read. Supplied by the layout's page. */
+  salesChannelCode: string | undefined;
   productId: string;
   productSlug: string;
   /** Display name carried into the client-side quote-request draft. */
@@ -57,27 +94,49 @@ export function ProductCardActions(props: {
   unitPrice?: { amount: number; currency: string } | null;
   /** True for a simple, directly-purchasable product (shows "add to cart"). */
   buyable: boolean;
+  /**
+   * Feature 155 (FR-016) — the product's pieces minimum; "add to cart" adds it in one action.
+   * `null`/absent = none (adds 1, as before).
+   */
+  minOrderQuantity?: number | null | undefined;
+  /**
+   * Localized accessible name for "add to cart" — "Add 10 pcs to cart" when it adds the
+   * minimum, else the plain label — rendered by the server card through `cardAddToCartLabel`.
+   */
+  addToCartMinimumLabel?: string | null | undefined;
+  /**
+   * The server card's request locale; every tooltip and accessible name is worded in it (U4 —
+   * they were Polish literals whatever the page's language). Polish when absent, as before.
+   */
+  locale?: string | undefined;
+  /** Which action modules are present, resolved by the server page (issue #672). */
+  presence: ModuleActionPresence;
 }): ReactNode {
-  const [cfg, setCfg] = useState<ButtonsConfig | null>(null);
+  const [cfg, setCfg] = useState<CardState | null>(null);
   const [cartState, setCartState] = useState<ActionState>('idle');
   const [listState, setListState] = useState<ActionState>('idle');
   /** Whether this product is currently in the customer's default list. */
+  const localize = useLocalizedPath();
   const [inList, setInList] = useState(false);
   const [quoteState, setQuoteState] = useState<ActionState>('idle');
 
   useEffect(() => {
     let cancelled = false;
-    void loadConfig(props.apiBase).then((c) => {
-      if (!cancelled) setCfg(c);
-    });
+    void Promise.all([loadConfig(props.apiBase, props.salesChannelCode), loadAbilities()]).then(
+      ([config, abilities]) => {
+        if (!cancelled) setCfg({ config, abilities });
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [props.apiBase]);
+  }, [props.apiBase, props.salesChannelCode]);
 
   // Reflect default-list membership on the heart, and keep it in sync when any
   // other card (or the header) changes the list via `b2b:shopping-list:changed`.
+  const listsPresent = props.presence.shoppingLists;
   useEffect(() => {
+    if (!listsPresent) return;
     let cancelled = false;
     const sync = (): void => {
       void loadShoppingListMembership().then((m) => {
@@ -90,7 +149,7 @@ export function ProductCardActions(props: {
       cancelled = true;
       window.removeEventListener('b2b:shopping-list:changed', sync);
     };
-  }, [props.apiBase, props.productId]);
+  }, [props.apiBase, props.productId, listsPresent]);
 
   if (!cfg) return null;
 
@@ -101,7 +160,9 @@ export function ProductCardActions(props: {
       // cookies are httpOnly and scoped to the storefront origin, so a direct
       // call filled a cart neither the header badge's server render nor the
       // `/cart` page reads.
-      const res = await addProductToCartAction({ productId: props.productId, quantity: 1 });
+      const res = await addProductToCartAction(
+        cardAddToCartPayload(props.productId, props.minOrderQuantity),
+      );
       if (!res.ok) throw new Error('cart');
       window.dispatchEvent(new CustomEvent('b2b:cart:changed'));
       setCartState('done');
@@ -127,7 +188,7 @@ export function ProductCardActions(props: {
           itemId: existingItemId,
         });
         if (!res.ok && res.reason === 'auth') {
-          window.location.href = '/login?next=/shopping-lists';
+          window.location.href = localize(`/login?next=${encodeURIComponent(localize('/shopping-lists'))}`);
           return;
         }
         if (!res.ok) throw new Error('list');
@@ -136,7 +197,7 @@ export function ProductCardActions(props: {
       } else {
         const res = await addToDefaultListAction({ productId: props.productId, quantity: 1 });
         if (!res.ok && res.reason === 'auth') {
-          window.location.href = '/login?next=/shopping-lists';
+          window.location.href = localize(`/login?next=${encodeURIComponent(localize('/shopping-lists'))}`);
           return;
         }
         if (!res.ok) throw new Error('list');
@@ -160,68 +221,67 @@ export function ProductCardActions(props: {
       slug: props.productSlug,
       name: props.productName,
       unitPrice: props.unitPrice ?? null,
-      quantity: 1,
-    });
+      // Feature 155 (FR-032, US4 #13) — one click adds the minimum, as "add to cart" does.
+      quantity: quoteAddQuantity(props.minOrderQuantity),
+    }, props.minOrderQuantity ?? null);
     setQuoteState('done');
     window.setTimeout(() => setQuoteState('idle'), 1500);
   };
 
-  const anyVisible =
-    (cfg.showAddToCart && props.buyable) || cfg.showAddToShoppingList || cfg.showAddToQuote;
-  if (!anyVisible) return null;
+  const visible = cardActionVisibility(
+    cfg.config,
+    withModulePresence(cfg.abilities, props.presence),
+    props.buyable,
+  );
+  if (!visible.cart && !visible.list && !visible.quote) return null;
 
   // Order: shopping list → quote → cart. Each action is an icon button (icons
   // consistent with the header) and reveals its label as a tooltip on hover.
-  const listTooltip =
-    listState === 'error'
-      ? 'Nie udało się zmienić listy'
-      : inList
-        ? 'Usuń z listy zakupowej'
-        : 'Dodaj do listy zakupowej';
-  const cartTooltip =
-    cartState === 'done'
-      ? 'Dodano do koszyka'
-      : cartState === 'error'
-        ? 'Nie udało się dodać'
-        : 'Dodaj do koszyka';
-  const quoteTooltip = quoteState === 'done' ? 'Dodano do zapytania' : 'Dodaj do zapytania';
+  const labels = productCardActionLabels({
+    locale: props.locale ?? 'pl-PL',
+    cartState,
+    listState,
+    quoteState,
+    inList,
+    addToCartLabel: props.addToCartMinimumLabel,
+  });
 
   return (
     <div className="mt-[10px] flex flex-wrap gap-[6px]">
-      {cfg.showAddToShoppingList ? (
-        <WithTooltip label={listTooltip}>
+      {visible.list ? (
+        <WithTooltip label={labels.list}>
           <button
             type="button"
             onClick={(): void => void toggleList()}
             disabled={listState === 'busy'}
             aria-pressed={inList}
             className="icon-btn"
-            aria-label={listTooltip}
+            aria-label={labels.list}
           >
             <HeartIcon filled={inList} />
           </button>
         </WithTooltip>
       ) : null}
-      {cfg.showAddToQuote ? (
-        <WithTooltip label={quoteTooltip}>
+      {visible.quote ? (
+        <WithTooltip label={labels.quote}>
           <button
             type="button"
             onClick={addToQuote}
             className="icon-btn"
-            aria-label="Dodaj do zapytania"
+            aria-label={labels.quoteName}
           >
             <QuoteIcon filled={quoteState === 'done'} />
           </button>
         </WithTooltip>
       ) : null}
-      {cfg.showAddToCart && props.buyable ? (
-        <WithTooltip label={cartTooltip}>
+      {visible.cart ? (
+        <WithTooltip label={labels.cart}>
           <button
             type="button"
             onClick={(): void => void addToCart()}
             disabled={cartState === 'busy'}
             className="icon-btn"
-            aria-label="Dodaj do koszyka"
+            aria-label={labels.cartName}
           >
             <CartIcon />
           </button>

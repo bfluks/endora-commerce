@@ -1,5 +1,5 @@
 ---
-title: Command Bus (Uniform Write Auditing & Undo)
+title: Command Bus (uniform write auditing & undo)
 ---
 
 # Command Bus
@@ -24,6 +24,30 @@ So a committed command records one audit row and emits its event once; a rolled-
 command records no audit row and emits no event. The write, the audit entry, and the
 event can never disagree.
 
+### Work that has to wait for the commit: `EventBus.afterScope`
+
+The event is held back because `CommandBus.run` wraps its transaction in an `EventBus.run`
+scope, and a scope buffers every `emit()` until its function has resolved. A write that
+must do something **else** only once it has committed — drop a cache that the commit makes
+stale — defers it into the same scope with `eventBus.afterScope(fn)`:
+
+- inside a scope, `fn` is queued on the innermost one. When the scope succeeds, the queued
+  functions run in order, each awaited, and only **then** do the buffered events dispatch,
+  so a subscriber never sees what `fn` was there to replace;
+- if the scope throws, the queue is discarded together with the events;
+- outside any scope, `fn` runs and is awaited at once.
+
+A deferred function is isolated the way an event handler is: if it throws, the error is
+logged, the remaining deferred functions still run and the buffered events are still
+dispatched. The scope does not reject, because the write has already committed. The sales-channel membership writer uses it for the
+access-cache drop when a caller passes its transaction's `em` (issue #1926). A plain
+`em.transactional(...)` outside a Command has no scope of its own; wrap it in
+`eventBus.run(...)` to get the same ordering.
+
+This is not an `afterCommit` handler: those are declared per hookable action, run later
+from the outbox, at least once and in no order, which is the right contract for an external
+side effect and the wrong one for a drop the very next request depends on.
+
 ## Anatomy of a Command
 
 ```ts
@@ -34,6 +58,9 @@ interface Command<TResult> {
   capture?(ctx): Promise<AuditState>;                 // optional pre-state
   run(ctx): Promise<{ result: TResult; before?; after?; skipAudit? }>;
   event?(result): CommandEvent | undefined;           // dispatched once on commit
+  hookData?(result): unknown;                         // required when the action is hookable
+  outboxData?(result): OutboxData;                    // afterCommit data, ids and codes only
+  extensions?: Record<string, unknown>;               // caller input for hook modules, by module id
 }
 ```
 
@@ -51,15 +78,218 @@ co-transactional audit entry and derive the actor from the ambient `TenantContex
 - **`recordAuditFromContext(auditLog, em, input)`** — the lightweight companion
   (`packages/platform/src/commands/audit-from-context.ts`). It records the audit entry on an
   `em` the caller already owns, committed by the caller's existing `flush()`. Use it
-  when a write already runs inside its own transaction or `persistAndFlush(...)` and
+  when a write already runs inside its own transaction or `persist(...).flush()` and
   cannot be wrapped in the bus's transaction without restructuring. The actor is
-  best-effort here: with no ambient context (e.g. a pre-auth self-registration or a
-  worker path) it records null actor ids rather than throwing, so background writes
-  still audit. Callers that *must* have an actor use the bus.
+  best-effort here: with no ambient context (e.g. a worker path that opened none) it
+  records null actor ids rather than throwing, so background writes still audit.
+  Callers that *must* have an actor use the bus. An anonymous request is not such a
+  path: it carries the system context, so a pre-auth write such as a storefront
+  self-registration runs as a Command (`organization.register`) with a null actor.
 
 Most module writes use a small private `#audit(em, action, objectId, before, after)`
 helper that delegates to `recordAuditFromContext`, keeping the audit call one line at
 each write site.
+
+## What an audit entry holds
+
+The audit log is one platform-wide table, read under one permission (`audit_log:read`)
+regardless of which Organizations the reader may see. So for a **tenant-scoped record** (an
+`@OrgScoped`, `@CustomerScoped`, `@TransitivelyScoped` or `@RuleScoped` entity) a Command's
+before/after state carries **names and structure, never values**: ids, document numbers, status
+and other codes, booleans, counts, dates, and `changedFields` / `changedCustomFields` listing what
+changed. Titles, descriptions, amounts, custom-field values, personal data and the record's own
+Organization or Customer Account id stay out of it. A module whose record history shows values
+keeps them in a store of its own, written in the same Command and read only through the record's
+scoped access path; the audit entry points at that row by `valueChangeId`. Platform-global
+records (catalog, settings, dictionaries) may still record values. The rule and its test
+obligation are `specs/conventions/audit-state.md` in the repository (issue #470).
+
+## Command hooks (`beforeCommit`) {#command-hooks-beforecommit}
+
+A module can take part in **another module's write** without forking it, but only in a write
+the owning module has opened to hooks. The owner **declares** a Command action hookable: it
+publishes a typed reference in `@endora-commerce/contracts` and lists it in its manifest's
+`hookableActions`. `organizations` declares several; its module page lists them. Any module — a core
+module, a deployment's overlay module or an installed package — then registers a hook:
+
+```ts
+import { ORGANIZATION_HOOKABLE_ACTIONS as ORG } from '@endora-commerce/contracts';
+import { CommandHookRefusal } from '@endora-commerce/platform/commands';
+
+export function registerModule(ctx: ModuleContext): void {
+  ctx.commandHooks([
+    {
+      id: 'refuse-unserved-country',
+      on: ORG.register,
+      phase: 'beforeCommit',
+      handler: ({ data }) => {
+        if (!SERVED.has(data.organization.registeredAddress.country)) {
+          throw new CommandHookRefusal(409, ACME_COUNTRY_NOT_SERVED, 'We do not serve this country.');
+        }
+      },
+    },
+  ]);
+}
+```
+
+**When it runs.** Inside the Command's transaction, after the owner's `run` and before the
+owner's audit entry: `capture → run → hooks → audit entry → event → commit`. The hook gets the
+owner's declared `data` (typed by the ref, reflecting the uncommitted write), the same `em`
+and actor, and `ctx.run(child)` to run a Command of its own or another owner's on the same
+transaction, with that child's own audit entry.
+
+**Veto.** A hook refuses by throwing an `HttpError` with a code its own module declares and
+translates (`CommandHookRefusal` is a readable subclass). The whole Command rolls back — the
+owner's row, every child, every entry and the event — and the caller gets that status and
+code. Any other throw rolls back too and answers `500`.
+
+**What a hook writes is named in the owner's one entry.** A hook that writes its own tables
+calls `ctx.noteAuditChanges(['x_acme_erp_code'])`, and the owner's entry gains
+`stateAfter.extensions.<moduleId>.changedFields`. Names only: the bus refuses anything that
+is not a field name, so the names-only audit rule holds for hooks too. Notes force the entry: if
+the owner answered `skipAudit` but a hook noted a write, one entry is still recorded, with
+`stateBefore: null` and `stateAfter: { extensions }`.
+
+**Extension input.** A caller may pass `extensions: { <moduleId>: … }` on the Command. Each
+hook sees only its own module's slice as `ctx.extension` and validates it itself. A key no
+present hook module on that action claims is refused `422 COMMAND_EXTENSION_UNCLAIMED` before
+anything is written, so a misspelt or switched-off module never loses data silently.
+`currentCommandHookOrigin()` tells code on the hook's async path which hook is running.
+
+**Off means off.** A hook whose module is switched off — on either presence axis — is skipped
+for that Command, decided per call, with no restart. The write behaves as if the module were
+not installed.
+
+**Composition refuses what cannot be ordered or is not offered.** At boot, after every module
+has registered and before any boot hook, the platform refuses: a hook on an action no module
+declares; a phase the owner does not offer; one action declared by two modules; a duplicate
+hook id within a module; a hook module whose manifest `dependencies` do not reach the owner;
+and two hook modules on one action with no dependency path between them. Hooks run in
+dependency order (a module after every module it depends on, a module's own hooks in
+registration order). When two modules are unrelated, the deployment orders them in its
+`divergence.ts`:
+
+```ts
+commandHookOrder: { 'organization.register': ['acme_erp', 'acme_crm'] }, // first runs first
+```
+
+An entry that contradicts a dependency is refused. Hooks appear in the deployment's divergence
+report as `command-hook`, and `GET /api/v1/admin/command-hooks` (behind
+`platform.modules.read`) serves the live execution plan.
+
+**Rules for hook authors.** Write only your own module's tables, or run the owner's Command
+through `ctx.run` — never another module's table. Make no remote call: the transaction is
+open and a slow hook holds the owner's row locks. A hook nesting Commands that reappear in
+their own chain, or nesting deeper than eight, is refused `500 COMMAND_HOOK_CYCLE`.
+
+**Rules for owners.** Declare only a Command whose `run` is complete and which is not
+reversible (undo restores only what the owner captured). Supply `hookData` — the bus refuses a
+hooked Command without it (`500 COMMAND_HOOK_DATA_MISSING`) — and `outboxData` for the
+`afterCommit` phase (refused the same way), and hold each declared Command to its ref with `expectHookableCommand`
+from `@endora-commerce/test-kit/command-hooks`. The action string, the phases and the data
+types are a public contract.
+
+## After the commit: `afterCommit` handlers and the outbox {#aftercommit-outbox}
+
+Work that must happen **after** an owner's write — telling an ERP that an Organization
+registered, say — goes in an `afterCommit` handler on the same declared action. It is
+registered through the same `ctx.commandHooks` call, and it is never run inside the write:
+
+```ts
+import { ORGANIZATION_HOOKABLE_ACTIONS as ORG } from '@endora-commerce/contracts';
+import { PermanentOutboxFailure } from '@endora-commerce/platform/commands';
+
+ctx.commandHooks([
+  {
+    id: 'notify-erp',
+    on: ORG.register,
+    phase: 'afterCommit',
+    handler: async ({ messageId, data, causation }) => {
+      const answer = await erp.registered(data.organizationId, { idempotencyKey: messageId });
+      if (answer.rejected) throw new PermanentOutboxFailure('acme-erp-rejected', answer.reason);
+    },
+  },
+]);
+```
+
+**Written in the owner's transaction.** For each present `afterCommit` handler, the Command
+Bus writes one row into the platform's `command_outbox` table on the Command's own `em`,
+after the audit entry: `capture → run → hooks → audit entry → event → outbox rows → commit`.
+The rows commit with the write or not at all — a rolled-back Command leaves none — and a
+handler whose module is switched off gets no row. This is the difference from an event
+subscriber, which runs best-effort in the request's process after the commit and is lost if
+that process dies first.
+
+**Ids and codes only.** A row stores the owner's `outboxData`, which is `audit-state.md`
+list 1: ids, codes, booleans, counts, dates and field names. The table is platform-global, so
+the bus refuses outbox data with a nested object or a string that is longer than a code or has
+whitespace or an `@` in it (an e-mail address is the one personal datum shaped like a code), naming the key and never the value. A handler re-reads anything else through
+the owner's ports.
+
+**Delivered at least once.** A worker drains the table: a BullMQ job scheduler ticks every
+10 seconds, and a commit that wrote rows also enqueues one deduplicated wake-up, which the bus
+does not wait for. If Redis is down at commit, the wake-up is lost and the row is not: the next
+tick delivers it. Rows are claimed with `for update skip locked` under a five-minute lease, so
+two worker processes never hand one row to two handlers at once. A batch is delivered row by row
+under the lease its claim took, and a row whose turn comes after that lease ran out is left for
+the next reclaim rather than delivered late. A single handler that by itself runs longer than the
+lease can still have its row reclaimed and delivered again while it is running, so a handler can
+run twice: dedupe on `messageId`, which is the row's id and is stable across retries.
+
+**In the Organization's context.** Each row is delivered in a scope pinned to the
+Organization it concerns (`single-org`, the system as actor), or in the drain's system scope
+when it has none. The actor and request id recorded at commit arrive as `causation`, and the
+request id is also the delivery scope's, so a Command the handler runs records the request that
+caused it. The original actor's reach is never restored.
+
+**Retries, then dead letters.** A failed delivery is retried after `min(30 s · 2^(n-1), 1 h)`,
+up to 10 attempts, and the row is then dead. A handler throws `PermanentOutboxFailure(code,
+message)` to dead-letter at once. A row stores the failure's code and the error's class, never
+its message. A row whose handler module is switched off waits without spending an attempt, and
+is delivered after the module is switched back on. A row whose module is present but no longer
+registers the handler is dead-lettered `hook-unregistered`. Delivered rows are purged after 7
+days, dead rows after 90. `module:uninstall --hard <module>` deletes that module's rows; a soft
+uninstall keeps them.
+
+Unlike `beforeCommit` hooks, `afterCommit` handlers on one action are not ordered against each
+other — each is its own row, delivered on its own — and need no `commandHookOrder` entry. The
+in-process `EventBus` and its subscribers are unchanged; the outbox is a second, durable path
+for these handlers only.
+
+## Watching it: the *Command hooks* screen {#command-hooks-screen}
+
+**Platform → Command hooks** in the admin (`/platform/command-hooks`, or ⌘K / CTRL+K
+*command hooks*; *outbox* opens the second tab directly) shows both halves. It is the
+platform's own screen, not a module's. Either tab's permission opens it, and a tab the
+administrator may not read is not shown: someone holding only the outbox permission lands on
+the outbox.
+
+- **Execution plan** — behind `platform.modules.read`, from `GET /api/v1/admin/command-hooks`.
+  One card per declared action with its owner, its `beforeCommit` hooks as a numbered list in
+  the order they run, and its `afterCommit` handlers as an unnumbered list: they carry
+  `position: null` in the response, because the outbox promises no order across rows, and the
+  list order (module id, then registration order) is only for a stable screen. Each hook says
+  whether its module is on; a switched-off one is skipped.
+- **Outbox** — behind `platform.command_outbox.read`, from
+  `GET /api/v1/admin/command-outbox?status=dead|pending|in_flight&limit=&cursor=` (dead by
+  default; keyset-paginated by the row's `sequence`, newest first). A row shows its action,
+  object type and id, handler (`module#id`), attempts, last failure, when it was created and —
+  for a dead row when it failed, for a waiting one its next attempt — and nothing else: the
+  row's `data` is never served, and a failure was stored as a code and a class only.
+- **Retry** — behind `platform.command_outbox.manage`, offered on a dead row only.
+  `POST /api/v1/admin/command-outbox/:id/retry` runs the Command `command_outbox.retry`, which
+  puts the row back to `pending`, due now, with no attempts spent, and audits
+  `{ status: 'dead' } → { status: 'pending' }`. An unknown id answers `404`; a row that is not
+  dead answers `409 COMMAND_OUTBOX_NOT_DEAD`.
+
+**Translate your failure codes.** The screen shows a failure's code as stored, beside a
+sentence when one exists: first in the **handler's** module bundle, then in the platform's,
+under `errors.<code>` and then `commandOutbox.failure.<code>`. An `HttpError` code you declare
+in `errorCodes` already has its `errors.<CODE>` sentence; give a `PermanentOutboxFailure` code
+(`acme-erp-rejected`) a `commandOutbox.failure.<code>` entry in your own `i18n/en.json` and
+`pl.json` — the `errors.*` family is the error envelope's and takes SCREAMING_SNAKE codes
+only. The platform translates its own three: `hook-unregistered`, `permanent-failure` and
+`handler-failed`. A code nobody translates is shown raw.
 
 ## Reversibility & undo
 
@@ -102,8 +332,9 @@ auditable event is captured elsewhere, and always with a one-line reason.
 `scripts/check-command-coverage.ts` statically flags, per method **and per route
 handler**, in every `.ts` file under a root a module's source can live in — every module
 package, the application tree and the overlay tree, derived by `resolveModuleLayout()` — a sensitive mutation
-(`persist*`, `nativeUpdate`, `nativeDelete`, `remove*`, `flush`) that is neither audited
-nor escape-hatched, and the **double-audit** shape (a unit that both runs a Command and
+(`persist*`, `nativeUpdate`, `nativeDelete`, `remove*`, `flush`, `create`, `upsert`,
+`upsertMany` — the last four only off an EntityManager, since `remove`, `create` and
+`upsert` are also ordinary service method names) that is neither audited nor escape-hatched, and the **double-audit** shape (a unit that both runs a Command and
 audits by hand). A unit counts as covered when it runs a Command, defines a Command
 literal, records audit (`auditLog.record`/`recordWithin`, `recordAuditFromContext`, or a
 `.audit` recorder), delegates to such a unit (`this.<runner>()`, a module-level helper, or

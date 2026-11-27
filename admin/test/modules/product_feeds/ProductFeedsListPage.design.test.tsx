@@ -96,6 +96,7 @@ function feed(over: Partial<ProductFeedDto> = {}): ProductFeedDto {
     publishedAt: null,
     isRunning: false,
     scheduleTooTightWarning: false,
+    pinnedPriceBookWarning: null,
     version: 1,
     createdAt: '2026-08-01T10:00:00.000Z',
     ...over,
@@ -138,8 +139,12 @@ describe('ProductFeedsListPage — design-system alignment', () => {
     renderPage();
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).not.toBeNull());
     const busy = document.querySelector('[aria-busy="true"]') as HTMLElement;
-    expect(busy.className).toContain('b2b-card');
-    expect(busy.className).not.toMatch(/\brounded-lg border\b/);
+    // The kit Card since #1492 (CAT-17); since #1749 the kit ListPage's skeleton,
+    // with the loading announced through the list's count region.
+    expect(busy.matches('.rounded-lg.border.bg-card')).toBe(true);
+    expect(busy.className).not.toMatch(/\bb2b-/);
+    expect(busy.querySelector('[data-testid="list-page-skeleton"]')).not.toBeNull();
+    expect(screen.getAllByRole('status').some((region) => /common\.state\.loading/.test(region.textContent ?? ''))).toBe(true);
   });
 
   it('puts the feed table on the same card surface every other admin list uses', async () => {
@@ -171,6 +176,8 @@ describe('ProductFeedsListPage — design-system alignment', () => {
     renderPage();
     const warning = await screen.findByText('feeds.table.scheduleTooTight');
     expect(warning.className).not.toMatch(/text-amber-\d{3}/);
-    expect(warning.getAttribute('style')).toContain('var(--warn)');
+    // A token utility since #1492 (CAT-17), not an inline style.
+    expect(warning.className).toContain('text-[var(--warn)]');
+    expect(warning.getAttribute('style')).toBeNull();
   });
 });

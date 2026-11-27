@@ -105,6 +105,12 @@ So an invocation gets resources of its own, with nothing to remember:
 | PostgreSQL | `<base>_r_<stamp>_<rand>`, cloned from the migrated template of this run's migration set, `<base>_tpl_<digest>` | dropped by the run's teardown; a crashed run's database is swept by a later invocation once it is 4 h old and unconnected |
 | Redis | a logical database index, leased in index 0 and emptied before the run | released by the teardown; the lease expires 5 minutes after a crashed run stops refreshing it |
 
+**And one per worker, when the complete suite runs several** (`BACKEND_TEST_WORKERS`, 6 locally
+and 1 under CI): worker 1 takes the two resources above, and every further worker a clone of the
+same template and a Redis index of its own, released and swept the same way. The rules, the test
+Postgres and the files that stay serial are in `specs/conventions/backend-test-suite.md` § *Running
+the complete suite locally*.
+
 Index 0 is never leased and never emptied: it holds the leases themselves, and it is the one
 `pnpm run dev` uses (`backend/.env` ships `redis://localhost:6379`). Before this, every
 `setupBackendServer` ran its stale-cache drop against index 0 — `session:*`,
@@ -228,6 +234,16 @@ reason, and `test/unit/harness/migrator-driving-ledger.test.ts` keeps it honest 
 directions and checks that every entry is actually using the seam. Under
 `BACKEND_TEST_ISOLATION=shared` there is no template to clone, so the seam falls back to the
 shared database and prints why — that is part of what the escape hatch costs.
+
+### A test that needs a freshly migrated database clones one too
+
+A file that drives a platform's **first boot** — the `test/integration/demo/` files that spawn
+`endora demo …` — needs a database holding exactly what `migration:up` from empty leaves, which is
+the template minus the one row `test/template-seed.ts` adds. `migratedDatabase()`
+(`test/helpers/migrated-database.ts`) is that: a clone of this invocation's template with
+`withdrawPlatformInvariants` applied, and `drop()` in teardown. `migrated-clone-parity.test.ts`
+holds that the two are the same database; see `specs/conventions/backend-test-suite.md` § *Inside
+a slow file*.
 
 Two escape hatches, both explicit:
 

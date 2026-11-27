@@ -1,26 +1,27 @@
 import { useMemo, type ReactNode } from 'react';
 import type { OpportunityHandlingTime } from '@endora-commerce/contracts';
+import { FigureCard, useFigure } from '@endora-commerce/admin-kit/components';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmAnalyticsApi, type AnalyticsFilters } from '../../analytics-api.js';
+import { crmAnalyticsApi, type AnalyticsAnswer, type AnalyticsFilters } from '../../analytics-api.js';
 import { durationLabel } from '../../lib/analytics-format.js';
 import { NO_VALUE } from '../../lib/labels.js';
-import { useFigure } from '../../lib/use-figure.js';
-import { FigureCard } from './FigureCard.js';
+import { useReportedTimeZone } from '../../lib/reporting-time-zone.js';
 
 /** Average handling time: creation to closing, with won and lost apart. */
 export function HandlingTimeCard({ filters }: { filters: AnalyticsFilters | null }): ReactNode {
   const t = useTranslation('crm');
   const { language } = useAppLanguage();
   const load = useMemo(
-    () => (filters ? (): Promise<OpportunityHandlingTime> => crmAnalyticsApi.handlingTime(filters) : null),
+    () => (filters ? (): Promise<AnalyticsAnswer<OpportunityHandlingTime>> => crmAnalyticsApi.handlingTime(filters) : null),
     [filters],
   );
-  const figure = useFigure(load);
+  const figure = useFigure(useReportedTimeZone(load));
   const time = (seconds: number | null): string =>
     seconds === null ? NO_VALUE : durationLabel(seconds, language);
 
   return (
     <FigureCard
+      errorFallback={t('analytics.error.load')}
       title={t('analytics.handling.title')}
       description={t('analytics.handling.description')}
       figure={figure}

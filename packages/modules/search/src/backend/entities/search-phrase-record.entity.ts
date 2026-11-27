@@ -1,11 +1,7 @@
 import {
-  Entity,
-  Index,
-  ManyToOne,
   OptionalProps,
-  PrimaryKey,
-  Property,
 } from '@mikro-orm/core';
+import { Entity, Index, ManyToOne, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
@@ -45,8 +41,8 @@ export class SearchPhraseRecord {
   phrase!: string;
 
   /**
-   * `lower(trim(phrase))` — populated by the recorder service before
-   * persistAndFlush. Indexed by `(sales_channel_id, phrase_normalized,
+   * `lower(trim(phrase))` — populated by the recorder service before it
+   * persists and flushes the row. Indexed by `(sales_channel_id, phrase_normalized,
    * recorded_at DESC)` for the analytics aggregation query.
    */
   @Property({ type: 'string', length: 512, fieldName: 'phrase_normalized' })

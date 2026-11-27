@@ -119,6 +119,18 @@ const MIGRATED_MODULES: readonly string[] = [
   // exist when the prefix chain was deleted, so the frozen capture holds none of
   // its codes and `MINTED_ERROR_CODES` is what accounts for them.
   'crm',
+  // Minted with the module (`specs/163-projects-and-tasks/`): its three
+  // `TASK_*` codes were created after the chain was deleted, so
+  // `MINTED_ERROR_CODES` accounts for them.
+  'tasks',
+  // Minted by `specs/174-product-editor-scope-switcher/`: `import_export`'s first codes are the
+  // three `IMPORT_PROFILE_*` refusals, created after the chain was deleted, so
+  // `MINTED_ERROR_CODES` accounts for them.
+  'import_export',
+  // Minted with the module (`specs/163-projects-and-tasks/`): its `PROJECT_*`
+  // codes were created after the chain was deleted, so `MINTED_ERROR_CODES`
+  // accounts for each in the change that first raises it.
+  'projects',
   // The remaining six receiving modules of Tier A (MR 3), on exactly the terms
   // the MR 2 note below states: the capture says `core` for all seventeen of
   // their codes, so `capture ⊕ rehomed` is what makes these entries answerable,
@@ -131,6 +143,10 @@ const MIGRATED_MODULES: readonly string[] = [
   // `DOCUMENT_*` codes were created after the chain was deleted, so
   // `MINTED_ERROR_CODES` accounts for them.
   'document_templates',
+  // Minted with the module (issue #379): its two `ADMIN_FEEDBACK_*` codes were
+  // created after the chain was deleted, so `MINTED_ERROR_CODES` accounts for
+  // them.
+  'admin_feedback',
   // Tier B, MR 4 — the first batch of the sweep whose receivers all already ship
   // an i18n bundle, and the first that deletes from one. `catalog`, `orders` and
   // `mfa` were on this roster from Phase 3 and simply grow; `customer_accounts`,
@@ -141,6 +157,11 @@ const MIGRATED_MODULES: readonly string[] = [
   // `d129-sweep.md` §5.4 keeps *writing* one available.
   'customer_accounts',
   'customers',
+  // Minted (issue #632): `DELIVERY_METHOD_IN_USE` and
+  // `DELIVERY_METHOD_USAGE_UNKNOWN` are this module's first codes and were
+  // created after the chain was deleted, so `MINTED_ERROR_CODES` accounts for
+  // them.
+  'delivery_methods',
   'dictionaries',
   // Minted with the modules (feature 119): neither `invoice_ledger` nor `infakt`
   // existed when the prefix chain was deleted, so the frozen capture holds none
@@ -158,6 +179,10 @@ const MIGRATED_MODULES: readonly string[] = [
   // (feature 134, T069), taking its codes and their `MINTED_ERROR_CODES`
   // entries with it.
   'erp_connector',
+  // Feature 170 (`specs/170-forms-module/`): mints its codes with the module, one
+  // `MINTED_ERROR_CODES` entry each and nothing in the frozen capture — the
+  // shape of `tasks` above.
+  'forms',
   // `infakt` was here — its two codes were minted with it — and left this
   // repository with them (feature 134, T069).
   'inventory',
@@ -191,6 +216,12 @@ const MIGRATED_MODULES: readonly string[] = [
   // exclusivity refusal every PIM module raises; `pim_unopim` owned the other
   // twelve and left this repository with them (feature 134).
   'pim_connector',
+  // Minted (issue #631): `PRODUCT_FEED_LANGUAGE_INACTIVE`,
+  // `PRODUCT_FEED_CURRENCY_NOT_OFFERED` and `PRODUCT_FEED_SLUG_TAKEN` are the
+  // first codes this module declares, created after the chain was deleted, so
+  // `MINTED_ERROR_CODES` accounts for them. Its five older `PRODUCT_FEED_*`
+  // codes are `catalog`'s by the frozen capture.
+  'product_feeds',
   // Minted after the chain was deleted (!1159), so the frozen capture holds none
   // of its three codes and `MINTED_ERROR_CODES` is what accounts for them. The
   // roster's question — does this module declare exactly what the reference says
@@ -198,11 +229,28 @@ const MIGRATED_MODULES: readonly string[] = [
   // the ledger entry without the roster line would leave the declaration
   // unmeasured.
   'newsletter',
+  // Minted (issue #635): `PAYMENT_METHOD_IN_USE` and
+  // `PAYMENT_METHOD_USAGE_UNKNOWN` are this module's first codes and were
+  // created after the chain was deleted, so `MINTED_ERROR_CODES` accounts for
+  // them.
+  'payment_methods',
   'payments',
   'price_lists',
   'promotions',
   'prompt_actions',
+  // Minted (issue #641): `ONE_CLICK_UNAVAILABLE` is this module's first code and
+  // was created after the chain was deleted, so `MINTED_ERROR_CODES` accounts
+  // for it.
+  'quick_order',
   'quote_requests',
+  // Minted (`specs/182-related-payers/`): the module's codes were created after
+  // the chain was deleted, so `MINTED_ERROR_CODES` accounts for them.
+  'related_payers',
+  // Minted (`specs/155-catalog-order-constraints/`): `RETURN_LINE_NOT_RETURNABLE`
+  // is this module's first code and was created after the chain was deleted, so
+  // the frozen capture holds none and `MINTED_ERROR_CODES` is what accounts for
+  // it.
+  'returns',
   'sales_channels',
   'search',
   // Minted (`specs/144-seo-search-engine-robots/`): `SEO_CRAWLER_TEXT_TOO_LARGE`
@@ -211,6 +259,10 @@ const MIGRATED_MODULES: readonly string[] = [
   // it.
   'seo',
   'settings',
+  // Minted (issue #637): `SHIPMENT_ALREADY_GENERATED` is this module's first
+  // code and was created after the chain was deleted, so `MINTED_ERROR_CODES`
+  // accounts for it.
+  'shipments',
   'shopping_lists',
   'transactional_emails',
   'webhooks',

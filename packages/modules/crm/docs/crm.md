@@ -1,9 +1,9 @@
 ---
-title: crm
+title: CRM — sales opportunities
 description: Sales opportunities with a configurable status workflow that linked orders follow
 ---
 
-# `crm`
+# CRM — sales opportunities (`crm`)
 
 The CRM module keeps track of **sales opportunities**: a deal a sales
 representative is working with one customer organization, from the first
@@ -46,14 +46,14 @@ when at least one of them is visible.
 
 | Screen | Where | Permission | What it is for |
 | --- | --- | --- | --- |
-| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, with search and filters by state, status, organization, assignee, tags, sales channel and creation date. |
+| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, as a list or, with the **List / Board** switch in the header, as a board. The list has search and filters by state, status, organization, assignee, tags, sales channel, creation date and the custom fields marked as list filters; both views offer saved views. |
 | New opportunity | the **New opportunity** button (`/crm/opportunities/new`) | `crm:write` | Create an opportunity by hand: a title, the organization and the currency are required; a contact person, a sales channel, an expected value, an expected close date and a description are optional. |
-| An opportunity | a row of the list (`/crm/opportunities/:id`) | `crm:read` | A header, a stage bar with its current status and the moves allowed from it, back and forward, a card of its facts on the right, and tabs: *Overview*, **Links** (its orders and quote requests), **Events** (what is planned for it, with reminders), *Notes*, *Messages*, *Attachments* and **Change history**. See *The opportunity's screen*. |
-| Board | **CRM → Board** (`/crm/board`) | `crm:read` | The same opportunities as cards, in a column per status. A holder of `crm:write` moves a card to another status. |
+| An opportunity | a row of the list (`/crm/opportunities/:id`) | `crm:read` | A header with the status beside the title, a stage bar with the moves allowed from that status, back and forward, a card of its facts on the right, and tabs: *Overview*, **Links** (its orders and quote requests), **Events** (what is planned for it, with reminders), *Notes*, *Messages*, *Attachments* and **Change history**. See *The opportunity's screen*. |
+| Board | **Board** in the *List / Board* switch of **CRM → Opportunities** (`/crm/opportunities?view=board`) | `crm:read` | The same opportunities as cards, in a column per status. A holder of `crm:write` moves a card to another status. The former address `/crm/board` still opens it. |
 | Calendar | **CRM → Calendar** (`/crm/calendar`) | `crm:read` | The events planned on the open opportunities you may see, by month, week or day, or as a list. Every event opens its opportunity. See *The calendar*. |
 | Analytics | **CRM → Analytics** (`/crm/analytics`) | `crm:analytics` | Five figures over a range of days: handling time, time in each status, the most effective sales reps, the most valuable opportunities and the average value. |
-| Tags | **CRM → Tags** (`/crm/tags`) | `crm:configure` | The tag list: add, rename, recolour and delete the labels opportunities may carry. |
-| Workflow | **CRM → Workflow** (`/crm/workflow`) | `crm:configure` | The statuses, the transitions between them, the order status each opportunity status sets, the opportunity status each order status leads to, the statuses that count towards a computed value, and the fields a board card shows. |
+| Tags | the **Tags** tab of **CRM → Configuration** (`/crm/workflow/tags`) | `crm:configure` | The tag list: add, rename, recolour and delete the labels opportunities may carry. The former address `/crm/tags` still opens it. |
+| Workflow | **CRM → Configuration** (`/crm/workflow`) | `crm:configure` | Four tabs before **Tags**, each with one save model. **Statuses & moves** (`/crm/workflow`): the statuses and the transitions between them, each change applied at once. **Order sync** (`/crm/workflow/order-sync`): the order status each opportunity status sets and the opportunity status each order status leads to, under one Save. **Value** (`/crm/workflow/value`): the statuses that count towards a computed value. **Board card** (`/crm/workflow/board-card`): the fields a board card shows. |
 
 The everyday screens are also in the command palette (`⌘K` / `Ctrl+K`):
 **Sales opportunities**, **New sales opportunity**, **Opportunity board**,
@@ -89,16 +89,19 @@ a card of its facts.
 
 **The header** carries the title with its status beside it and, under it, one
 quiet line: the number, the organization, who holds it — or *Unassigned* — and
-the sales channel when there is one. **Edit** (`crm:write`) and **Delete**
-(`crm:configure`) are on the right.
+the sales channel when there is one. **Delete** (`crm:configure`) is on the
+right. There is no **Edit** button and no separate edit form: every field that
+can be changed is changed where it is shown (see *Editing and deleting an
+opportunity*). The title has its pencil beside the heading.
 
-**The stage bar**, at the top of the left column, names the **current status**
-and shows where the opportunity can go from it — and nothing else. A workflow
+**The stage bar**, at the top of the left column, shows under **Move to…**
+where the opportunity can go from its status — and nothing else. The status
+itself is the badge beside the title; the bar does not repeat it. A workflow
 is not a straight line, so the bar does not draw one: a status your workflow
 does not allow from here is not on the screen.
 
 - **Back** lists the moves to a status that comes earlier in the order you gave
-  the statuses on **CRM → Workflow**, and the moves that reopen a closed
+  the statuses on **CRM → Configuration → Statuses & moves**, and the moves that reopen a closed
   opportunity.
 - **Forward** lists the moves to a later status, and every move that closes the
   opportunity, each marked as *won* or *lost* — whatever position a closing
@@ -107,7 +110,7 @@ does not allow from here is not on the screen.
   the bar says so; a closed opportunity also says how and when it closed.
 - For a holder of `crm:write` **each move is a button**, and pressing it is the
   same status change, with the same rules, as anywhere else in the module. The
-  optional **reason** is the field under the bar. Somebody with `crm:read`
+  optional **reason** is behind **Add a reason** under the moves. Somebody with `crm:read`
   alone sees the same moves as plain text.
 - **The bar does not claim a history, and it does not count stages.** It says
   where the opportunity is and where it can go; the *Change history* tab says
@@ -124,9 +127,10 @@ whichever tab is open.
 
 | Tab | What is on it |
 | --- | --- |
-| **Overview** | The description, the custom fields, and — after **Edit** — the edit form. |
+| **Overview** | The description — formatted, and changed in place with its pencil — and the custom fields. |
 | **Links** | *Linked orders* and *Linked quote requests*: link, unlink, the *follow the opportunity's status* switch, **Create order** and **Create quote request**. The tab shows how many documents are linked. |
 | **Events** | What is planned for the opportunity — a call, a meeting, a deadline — as a list and on a calendar of its own, each with an optional reminder. The tab shows how many events have not ended yet. See *Events and reminders*. |
+| **Tasks** | The tasks linked to the opportunity, with *Add task*. The tab shows how many of them are still open. It is added by the **Tasks** module, so it is there only while that module is on and for somebody who may read tasks — see the Tasks module's page. |
 | **Notes**, **Messages** | The two conversations. The **Notes** tab shows how many notes there are; the **Messages** tab shows how many messages you have not read yet. |
 | **Attachments** | The files. The tab shows how many are attached. |
 | **Change history** | Everything that was done to the opportunity, newest first. |
@@ -136,17 +140,35 @@ nothing behind it shows no number — so a number always means there is somethin
 to open. On *Links*, *Notes* and *Attachments* it is the number of items: linked
 documents, notes, files. On *Events* it is the events that have not ended yet.
 On *Messages* it is the messages you have not read — see *Notes and internal
-messages*. The numbers come with the opportunity itself, so they are there
-before any tab is opened, and each follows when you add or remove an item on its
-tab. What a colleague adds in the meantime appears after a reload. A screen
-reader announces each number with what it counts — "Notes, items: 3",
-"Events, upcoming: 2", "Messages, unread: 1".
+messages*. On *Tasks* it is the linked tasks that are still open. The numbers
+come with the opportunity itself, so they are there before any tab is opened,
+and each follows when you add or remove an item on its tab; the *Tasks* number
+is read just after the screen opens, and if it cannot be read the tab simply
+shows none. What a colleague adds in the meantime appears after a reload. A
+screen reader announces each number with what it counts — "Notes, items: 3",
+"Events, upcoming: 2", "Tasks, open: 3", "Messages, unread: 1".
 
 The open tab is part of the address — `/crm/opportunities/:id?tab=links`, and
-likewise `events`, `notes`, `messages`, `attachments` and `history` — so it survives a
-reload and can be sent to a colleague. An address that names no tab, or one
-that does not exist, opens *Overview*. Coming back from **Create order** or
+likewise `events`, `tasks`, `notes`, `messages`, `attachments` and `history` — so it
+survives a reload and can be sent to a colleague. An address that names no tab,
+one that does not exist, or one you cannot see (`tasks` while the Tasks module
+is off), opens *Overview*. Coming back from **Create order** or
 **Create quote request** opens **Links**, where the new document appears.
+
+For module authors: a module adds a tab of its own to this strip — a label, an
+optional count and a panel — through the `opportunity.detail.tabs` admin zone,
+declared with `recordTabComponent()` from `@endora-commerce/admin-kit/contributions`.
+The contributed tabs sit after *Events*; a contributed tab whose id is one of
+the screen's own is not shown. CRM names no contributor and depends on none.
+
+**Back to the opportunity.** Every way an opportunity leads to an order or a
+quote request — the *Links* tab, an order mentioned in a description, a note or
+a message, what became of the linked orders after a move, the documents a
+computed value left out, the change history, and the link to a document just
+created — opens it with the opportunity's address, including the open tab, in
+`?returnTo=`. The back link in that order's or quote request's header then
+reads **Back** and leads to the opportunity, on the tab you left. Opened any
+other way, the back link is the usual one, to the list.
 
 **The facts**, in one card on the right — from the header down, beside the
 stage bar and whichever tab is open — each as a small label above its value. On
@@ -155,23 +177,26 @@ value and the deadline are never under a long tab:
 
 | Group | Facts | Changed here |
 | --- | --- | --- |
-| **Value and deadline** | The value and whether it is entered by hand or computed; the expected close date. | The value's mode, with one button. |
-| **Customer and assignee** | The organization (a link to its screen), the contact person, the assignee. | The assignee. |
-| **Classification** | The sales channel, where the opportunity came from, its tags. | The tags. |
+| **Value and deadline** | The value and whether it is entered by hand or computed; the expected close date. | The value's mode, with one button; the amount while it is entered by hand; the expected close date. |
+| **Customer and assignee** | The organization (a link to its screen), the contact person, the assignee. | The contact person; the assignee. |
+| **Classification** | The sales channel, where the opportunity came from, its tags. | The sales channel; the tags. |
 | **Record** | The number, when it was created and last changed, and — once closed — when it closed. | — |
 
-A fact with no value is shown as empty rather than left out. Everything that is
-not changed in the card itself — the title, the description, the contact
-person, the sales channel, the expected close date and the amount — is changed
-with **Edit**.
+A fact with no value is shown as empty rather than left out. A fact that can be
+changed carries a pencil beside it, for a holder of `crm:write`; the
+organization, the currency, the source, the number and the record's dates
+carry none, because they cannot be changed.
 
 ## Configuring the workflow
 
 The workflow is the operator's. A status has a **code** (lowercase letters,
 digits and underscores; it never changes once created), a name per language, a
-kind, a colour and a weight that orders it on screen. Exactly one status is the
-**start status** — the one a new opportunity begins in — and it must be an open
-one.
+kind, a colour and a place in the order the statuses are listed in, on the
+board too. A new status goes last; the arrows on each row of the **Workflow**
+screen move it up or down, one change per move. If somebody else changed the
+list meanwhile, the move is refused, the list is reloaded and the screen says
+so. Exactly one status is the **start status** — the one a new opportunity
+begins in — and it must be an open one.
 
 A transition is a directed step from one status to another. An opportunity can
 only make a step that is configured, so the set of transitions is what the
@@ -205,6 +230,7 @@ its transitions and its mappings with it.
 | `GET /api/v1/admin/crm/workflow` | `crm:read` | The configured statuses, with how many opportunities are in each, the transitions between them, the order-status mappings and the statuses that count toward a computed value. |
 | `POST /api/v1/admin/crm/statuses` | `crm:configure` | Add a status. |
 | `PATCH /api/v1/admin/crm/statuses/:code` | `crm:configure` | Rename or recolour a status, change its kind, or make it the start status. |
+| `PUT /api/v1/admin/crm/statuses/order` | `crm:configure` | Reorder the statuses: `{ orderedCodes }` names every configured status exactly once, in the new order. Anything else — a code that is not configured (deleted or renamed meanwhile), a status left out, a status named twice — answers `409` `ORDER_STALE`: the list changed, so reload it. |
 | `DELETE /api/v1/admin/crm/statuses/:code` | `crm:configure` | Delete a status no opportunity is in. |
 | `PUT /api/v1/admin/crm/transitions` | `crm:configure` | Add and remove transitions. |
 | `PUT /api/v1/admin/crm/order-status-mappings` | `crm:configure` | Replace the set of order-status mappings. |
@@ -236,22 +262,44 @@ closes the opportunity and stamps the moment; leaving one reopens it.
 
 ## Editing and deleting an opportunity
 
-On an opportunity's screen, **Edit** — in the header, for a holder of
-`crm:write` — opens a form on the *Overview* tab, whichever tab you were on:
-the title, the
-description, the contact person, the sales channel, the expected close date and
-the value. The organization and the currency are shown and cannot be changed.
-The value is either **entered by hand** or **calculated from linked
-documents**; the figure you entered is kept while the calculated one is shown.
+**You change a field where you read it.** There is no **Edit** button and no
+edit form: for a holder of `crm:write`, every field that can be changed carries
+a pencil button beside it — always visible, not only on hover — that a screen
+reader announces as *Edit* followed by the field's name. Pressing
+it turns that one field into its input, with **Save** and **Cancel**:
 
-Saving sends only the fields you changed. If the opportunity was changed in the
-meantime — by a colleague, or by a status change you made yourself while the
-form was open — nothing is saved and the form says so: press **Reload the
-opportunity** to see the latest version, then make your changes again. Nothing
-is ever overwritten silently.
+| Field | Where | How |
+| --- | --- | --- |
+| **Title** | Beside the page heading. | **Enter** saves, **Escape** cancels. |
+| **Description** | Its own section on the *Overview* tab. | The formatted editor (see *Formatted text*); **Ctrl+Enter** (**Cmd+Enter** on a Mac) or **Save** saves. |
+| **Expected close date** | The card of facts. | A date. |
+| **Contact person** | The card of facts. | Only people of the opportunity's organization are offered. |
+| **Assignee** | The card of facts. | Choosing a person is not yet assigning: **Save** is. A cleared choice unassigns. |
+| **Sales channel** | The card of facts. | |
+| **Value** — the amount | The card of facts. | Only while the value is **entered by hand**. A computed value has no pencil: switch the mode first. |
 
-A status change can carry a **reason**: write it in the field under the stage
-bar before pressing a status. It is optional and is recorded with the change.
+The tags and the value's mode were already changed in place and still are.
+The organization, the currency, the source, the number and the
+record's dates cannot be changed and carry no pencil. Custom fields keep their
+own section and their own **Save custom fields** button (see *Custom fields*).
+
+**Saving sends that one field and nothing else**, with the version of the
+opportunity you were looking at (`If-Match`). What happens next:
+
+- **Saved** — the field shows the new value, and a short message says so.
+- **Somebody else saved first** — a colleague, or a status change you made
+  yourself in the meantime (`409 VERSION_CONFLICT`). Nothing is overwritten:
+  the screen shows the opportunity as it is now, a message says that it was
+  changed in the meantime, and **what you typed stays in the field**. Check the
+  newer version and press **Save** again to save your value over it — or
+  **Cancel** to drop it.
+- **Refused for any other reason** — a title left empty, a contact person who
+  is not of the organization — the field shows the server's own message and
+  keeps what you typed.
+
+A status change can carry a **reason**: press **Add a reason** under the
+moves, write it, then press a status. It is optional, is recorded with the
+change, and the field folds again after the move.
 
 **Delete**, in the header of the screen, is for a holder of `crm:configure`. It
 asks first, and removes the opportunity together with its status history and
@@ -259,7 +307,8 @@ its links; the linked orders themselves are not touched.
 
 ## The board
 
-**CRM → Board** shows the opportunities you may see as cards, in one column per
+The **Board** view of **CRM → Opportunities** — the **List / Board** switch in
+the page header — shows the opportunities you may see as cards, in one column per
 status, in the workflow's order. Each column's header carries the number of
 opportunities in that status and their value, one total per currency; each card
 shows the opportunity's title and the fields chosen for the card — unless
@@ -304,7 +353,7 @@ and the menus.
 ### What a card shows
 
 A card always shows the opportunity's title. What it shows under the title is
-yours to choose: on **CRM → Workflow**, the **Board card** section lists the
+yours to choose: on **CRM → Configuration**, the **Board card** tab lists the
 fields on the card, in order, and the fields that can be added. Somebody who
 may configure CRM reaches it from the board too, with **Card fields**.
 
@@ -349,10 +398,50 @@ by its number. Filters combine: only opportunities
 that match all of them are shown, counted and totalled. The value filter
 compares the amount whatever its currency.
 
-**The filters are in the board's address.** Reload the page, bookmark it or
-send the link to a colleague and the same filters are applied. **Clear
-filters** removes them all. A link saved before the card was changed still
-opens: a filter on a field that is no longer on the card is ignored.
+**The filters are in the page's address.** Reload the page, bookmark it or
+send the link to a colleague and the same filters are applied. The list and the
+board share the address: the search, the organization, the assignee, the tags,
+the sales channel and the creation dates set in one view are applied in the
+other when you switch, and a filter only one view has waits for it. **Clear all
+filters** removes the filters of both views. A link saved before the card was
+changed still opens: a filter on a field that is no longer on the card is
+ignored.
+
+### The list's custom-field filters
+
+The **Opportunities list** does not follow the card. It offers a filter for every opportunity
+custom field whose **Use as list filter** option is on (set on **Custom fields**), whether or not a
+card shows the field, beside its other filters. The filters work as the board's do for the same
+kind of field, except that an opportunity without a value never matches — *No* included. They are
+in the page address, and a change returns the list to its first page. The panel shows the first
+three; the rest are behind **More filters (n)**, and a hidden field with an active filter is always
+shown.
+
+The two rules are independent: a field can be a board filter because the card shows it and not a
+list filter, or the reverse. **A card field that is not a list filter cannot filter the list**: a
+link that filtered the list by it is answered with an error naming the field and **Remove this
+filter**, until the option is turned on. The board — its *Show more* included — is unchanged.
+
+### Saved views
+
+The toolbar of **CRM → Opportunities** carries a **Saved views** selector with **Save view** and
+**Delete view** beside it, on the list and on the board alike. They work as on the order, quote
+request and task lists:
+
+- **One view serves both.** A view remembers every filter of the page — those of the list (state,
+  status, custom-field filters), those of the board (the card-field filters) and those the two
+  share — and the list's sort. It does not remember whether you were on the list or the board:
+  choosing a view replaces every filter and the sort and leaves you where you are, so a view saved
+  on the list opens the same opportunities on the board.
+- **A view never widens what you can see.** It stores filter values, never results; the page is
+  then read with *your* permissions and organizations. *Me* as the assignee means whoever applies
+  the view.
+- **Private or shared.** The **Save view** dialog asks for a name (at most 160 characters) and
+  whether to share the view with every administrator who can open the page; a shared view is
+  listed with **(shared)** after its name. You cannot hold two views whose names differ only in
+  letter case or surrounding spaces.
+- **Deleting.** **Delete view** is enabled for your own views; a shared view of someone else's only
+  for an administrator who reaches every organization.
 
 ### For integrators
 
@@ -361,6 +450,7 @@ opens: a filter on a field that is no longer on the card is ignored.
 | `GET /api/v1/admin/crm/board` | `crm:read` | One column per status, in workflow order: the status, `count`, `valueTotals` per currency, the first `perColumn` opportunities (default 50, at most 200) and `hasMore`; and `cardFields`, the fields a card shows, in order. Takes the list's filters except `statusCode` and `state` — the assignee and tag filters included, with the same meaning — and `fieldFilters`. |
 | `GET /api/v1/admin/crm/board/card-fields` | `crm:read` | `fields`: the fields a card shows, in order. `available`: every field that can be chosen. `maxFields`: 6. |
 | `PUT /api/v1/admin/crm/board/card-fields` | `crm:configure` | Body `{ "fields": ["builtin:organization", "custom:lead_source"] }` — field references, in order. Answers the configuration as it stands afterwards. `422` for a reference that names no field. |
+| `GET`, `POST /api/v1/admin/crm/opportunities/list-views`; `PATCH`, `DELETE …/list-views/:id` | `crm:read` | The page's saved views: your own and every shared one. A view is `{ name, shared, filters, sort }`; `filters` holds the page's address parameters. `409` `CRM_SAVED_VIEW_NAME_TAKEN` for a name you already use. |
 
 Moving a card is `POST /api/v1/admin/crm/opportunities/:id/transition`; the
 board has no write of its own for it. A column is continued from the list
@@ -383,8 +473,19 @@ keyed by reference: `{"custom:lead_source":{"in":["referral"]},"builtin:value":{
 The operators are `contains` (text), `min` / `max` (numbers and amounts, as
 decimal strings), `from` / `to` (dates, `YYYY-MM-DD`, both days included),
 `is` (yes / no) and `in` (options, and the contact person's customer-account
-id). A reference that is not on the card is ignored; a parameter that is not
-valid JSON of this shape answers `400`.
+id). A parameter that is not valid JSON of this shape answers `400`.
+
+Which references count depends on the request:
+
+- **The board**, and **the list with `cardValues=true`** (a board column continued with *Show
+  more*): a reference that is not on the card is ignored.
+- **The list otherwise**: a `custom:` reference is filtered when the field's list-filter option is
+  on, whether or not the card shows it, and answered with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE`
+  (the key in `details.key`) when it is not; `builtin:` references keep the card rule. The offered
+  fields are at `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
+
+`cardValues` chooses the rule, never what may be seen: both run within the opportunities you may
+see.
 
 ## Linking orders
 
@@ -392,6 +493,10 @@ An existing order can be linked to an opportunity. The order must belong to the
 opportunity's organization, and an order belongs to **at most one**
 opportunity — linking one that is already linked is refused, naming the
 opportunity that holds it.
+
+Linking an order by hand carries no custom-field value in either direction —
+only an order placed from a linked quote request, or created from the
+opportunity, does (see *Custom fields*).
 
 Each link has a switch, **follow the opportunity's status**, on by default.
 Switch it off for an order that should stay linked — for reference, or for its
@@ -411,6 +516,9 @@ listed as **unavailable**, with no number, status or total, and an order change
 that was refused is shown without the order's number. The Admin UI offers the
 order picker and the following switch to a holder of both permissions and says
 so to anybody else.
+
+A linked order's number opens the order's screen, whose **Back** leads to this
+opportunity (see *Back to the opportunity* under *The opportunity's screen*).
 
 Moving an opportunity moves the orders that follow it **whoever moves it**:
 which order status a move asks for was set up by somebody holding
@@ -483,7 +591,7 @@ administrator is recorded as having made it.
 - when an order moves its opportunity, no other order of that opportunity is
   asked to follow.
 
-On the **Workflow** screen these mappings are the second table, *Opportunity
+On the **Order sync** tab of **CRM → Configuration** these mappings are the second table, *Opportunity
 status for each order status*: one row per order status, a choice of the
 opportunity status it leads to, and a checkbox, **Only when every linked order
 is there**. The checkbox is ticked for you when the chosen status closes the
@@ -538,7 +646,7 @@ Organizations module, and the rule above only reads it.
 
 **The assignee does not decide who can see an opportunity.** A sales
 representative restricted to certain organizations sees every opportunity of
-those organizations, whoever holds it — and does not see an opportunity of
+the organizations they reach, whoever holds it — and does not see an opportunity of
 another organization even when it is assigned to them.
 
 In the Admin UI:
@@ -547,9 +655,10 @@ In the Admin UI:
   empty and the rule above chooses; pick a person and it is theirs.
 - **On an opportunity**, *Assignee* — in the card of facts on the right —
   names who holds it. A holder of
-  `crm:write` changes it there: choosing a person assigns the opportunity to
-  them at once, and clearing the field leaves it unassigned. There is nothing
-  to save.
+  `crm:write` changes it there with its pencil, as every other fact: choose a
+  person, or clear the field to leave it unassigned, and press **Save**.
+  A refusal — the person was deactivated meanwhile — is shown under the field,
+  which keeps the choice.
 - **On the list** there is an *Assignee* column, and both the list and the
   board have an *Assignee* filter: **Anyone**, **Mine**, **Unassigned**, or
   **A specific person…**, which adds a field to choose them.
@@ -606,7 +715,7 @@ on an opportunity is everyday work and needs `crm:write`.
 
 In the Admin UI:
 
-- **CRM → Tags** is the tag list, with how many of the opportunities you can
+- **CRM → Configuration → Tags** is the tag list, with how many of the opportunities you can
   see carry each tag. **Add tag** opens a small form with a name and a colour;
   the pencil renames or recolours; the bin deletes, after a confirmation that
   says how many opportunities will lose the tag.
@@ -651,12 +760,18 @@ conversation, except the person who sent it, on the notification bell of the
 Admin UI with a link to the opportunity. The entry names the opportunity by
 its number and carries nothing of the message, and is not written for somebody
 who can no longer reach the opportunity's organization. **Nobody else is
-told, unless the message mentions them** (see *Mentioning a person, an order
+told, unless the message mentions them** (see *Mentioning a person, a document
 or a product with @*): the first message on an opportunity that has no
 assignee, mentioning nobody, notifies nobody. The entry is shown in the
 reader's own language, as the assignment's is. While the **Admin
 notifications** module is switched off, a message is stored all the same and
 nobody is told.
+
+**Both are formatted text.** A note and a message are written in the same
+editor as the description — bold, italic, strikethrough, lists and links — and
+can mention a person, an order, a quote request, a task or a product (see *Formatted text* and
+*Mentioning a person, a document or a product with @*). A note or a message
+holds up to 10,000 characters.
 
 **Both are internal.** Neither a note nor a message has a setting that shows it
 to the customer, and nothing the customer can open — an order, a quote request,
@@ -703,8 +818,10 @@ numbers. Marking messages read moves only your own marker, and never backwards;
 404. How far each administrator has read is stored in the table
 `crm_opportunity_message_reads`, one row per administrator and opportunity, and
 goes with the opportunity when it is deleted. `crm_message_read_baselines` holds
-the one instant from which unread messages are counted for somebody with no
-marker.
+the one instant from which unread messages are counted at all: a message is
+unread when it is newer than both that instant and your marker, so a marker
+older than the instant makes nothing unread again. The count takes the messages
+the *Messages* tab lists and no others.
 
 ## Attachments
 
@@ -733,6 +850,12 @@ stored as private, and a public file is refused as an attachment.
 library refuses, and names the opportunity by its number. Remove the attachment
 first. This holds while the CRM module is switched off, too — the attachments
 are still there, and so is the protection.
+
+**The media library shows an attachment only to those who may read its
+opportunity**: a file used only by opportunities outside somebody's
+Organization reach is hidden from them in the library, as it is from anybody
+without `crm:read`, and the refusal above names the opportunity only to those
+who may see it.
 
 Anybody who may read an opportunity may download its attachments; no
 permission of the media library is needed. Each attachment in the list carries
@@ -763,7 +886,7 @@ Somebody who may only read sees the list and the download buttons.
 | --- | --- | --- |
 | `GET /api/v1/admin/crm/opportunities/:id/attachments` | `crm:read` | The attachments, oldest first: file name, type, size, who attached it, and `url`. |
 | `POST /api/v1/admin/crm/opportunities/:id/attachments/upload` | `crm:write` | Upload a file and attach it: `multipart/form-data` with one `file` part. |
-| `POST /api/v1/admin/crm/opportunities/:id/attachments` | `crm:write` and `assets.read` | Attach a file that is already in the media library as a private file: `{ "assetId" }`. |
+| `POST /api/v1/admin/crm/opportunities/:id/attachments` | `crm:write` and `assets.read` | Attach a file that is already in the media library as a private file: `{ "assetId" }`. A public file is `422` `CRM_ATTACHMENT_NOT_PRIVATE` (`details`: `assetId`, `visibility`; `VALIDATION_FAILED` until issue #639); a file that is not in the library, or that the caller may not see, is `422` `VALIDATION_FAILED`. |
 | `DELETE /api/v1/admin/crm/opportunities/:id/attachments/:attachmentId` | `crm:write` | Remove the attachment. The file stays in the media library. |
 
 The upload answers the new attachment. It answers 413 `CRM_ATTACHMENT_TOO_LARGE`
@@ -793,8 +916,9 @@ there is no event without an opportunity.
 An event has:
 
 - a **name** (required, up to 200 characters) and an optional **description**
-  of up to 5,000 characters. The description is plain text: the `@` shortcuts
-  are not offered in it;
+  of up to 5,000 characters. The description is formatted text, written in the
+  same editor as a note (see *Formatted text*), but it takes no mentions: the
+  `@` shortcuts and the insert buttons are not offered in it;
 - **one day**. Either a start and an end time on that day, the end later than
   the start, or **All day** — the date, with no times. An event cannot run over
   midnight: a meeting that does is two events;
@@ -804,7 +928,7 @@ Events are the opportunity's plan, not their author's property. Unlike a note,
 **any** holder of `crm:write` who can see the opportunity edits and deletes
 any of its events, whoever added them. When two people save the same event,
 the later save wins. Adding or changing an event does not count as an edit of
-the opportunity, so it never makes a colleague's open edit form fail.
+the opportunity, so it never makes a colleague's save of a field fail.
 
 Deleting an opportunity deletes its events, and none of their reminders is
 sent. Closing an opportunity deletes nothing — see *Closed opportunities*
@@ -900,15 +1024,22 @@ in the language of the recipient's Admin UI: Polish for a Polish preference,
 English otherwise. It is sent with the platform-wide branding, not a sales
 channel's.
 
-**The e-mail carries no link.** It names the opportunity by its number and
-asks the reader to open it in the Admin UI; the bell entry is the one that
-links to it. Neither the bell entry nor the e-mail ever carries the event's
-description or the opportunity's title.
+**The e-mail links to the event when the admin panel's address is known.**
+With `ADMIN_BASE_URL` set, it carries an **Open the event** button that opens
+the opportunity on its *Events* tab with the event marked, the same place the
+bell entry leads to. Without it the e-mail carries no link and no button. It
+still names the opportunity by its number and asks the reader to open it in
+the Admin UI. A relative or guessed address is never sent. Neither the bell
+entry nor the e-mail ever carries the event's description or the opportunity's
+title.
 
 An operator edits the e-mail's subject and body, per language, on the
-**Transactional Emails** screen (`/transactional-emails`), and can switch it
-off there. The variables it offers are `event.name`, `event.when` and
-`opportunity.number`. **An e-mail that does not go out never costs the bell
+**Transactional emails** screen (`/transactional-emails`), and can switch it
+off there. The variables it offers are `event.name`, `event.when`,
+`opportunity.number` and `event.adminUrl`, the link to the event. That one is
+empty when `ADMIN_BASE_URL` is not set, and a button whose address is only that
+variable is then left out. A template edited before the link existed does not
+name it and renders as before. **An e-mail that does not go out never costs the bell
 entry** — switched off by the operator, no address on the recipient's account,
 a mail server that refuses: the bell entry is written all the same, the event
 shows the reminder as sent by the bell, and the server's log says why the
@@ -967,7 +1098,7 @@ closing or reopening.
 
 ### Time zones
 
-The platform has no time-zone setting, so an event carries its own: the time
+CRM has no time-zone setting for events, so an event carries its own: the time
 zone of the browser it was saved from.
 
 - A **timed** event is one moment, the same for everybody. Each reader sees it
@@ -1055,7 +1186,7 @@ opens for a role that holds `crm:read`, and is in the command palette as
 | Who | What the Calendar shows |
 | --- | --- |
 | An administrator who may see **every** organization | The events of every open opportunity. A **Mine / All** switch narrows the Calendar to the opportunities assigned to them. It opens on *All*, where each event also names the opportunity's assignee. |
-| An administrator restricted to a set of organizations — a sales representative | Only the events of opportunities **assigned to them**, within those organizations. There is no switch. |
+| An administrator restricted to a set of organizations — a sales representative | Only the events of opportunities **assigned to them**, within the organizations they reach. There is no switch. |
 
 A sales representative's Calendar therefore never shows a colleague's
 opportunity, even one in an organization they share — although they can open
@@ -1149,7 +1280,7 @@ organizations gets figures over those organizations only.
 | --- | --- | --- |
 | Average handling time | The time from creating an opportunity to closing it, averaged. Given for every closed opportunity together, and for won and lost apart. | Those closed in the range. An opportunity that was reopened is not counted until it is closed again. |
 | Average time in status | How long an opportunity stays in a status: from the change that put it there to its next change, averaged over every time the status was entered. An opportunity that is still in the status is counted up to now. Choose the statuses to show, or see them all. | Every entry into the status that happened in the range. |
-| Most effective sales reps | How many opportunities each sales rep closed as won, and what they were worth — for the whole range, and month by month (calendar months, in UTC). The sales rep is the person the opportunity is assigned to **now**: an opportunity reassigned after it was won counts for its current assignee. | Those closed as won in the range and assigned to somebody. |
+| Most effective sales reps | How many opportunities each sales rep closed as won, and what they were worth — for the whole range, and month by month (calendar months, in the reporting time zone). The sales rep is the person the opportunity is assigned to **now**: an opportunity reassigned after it was won counts for its current assignee. | Those closed as won in the range and assigned to somebody. |
 | Most valuable opportunities | The ten opportunities with the highest value, each a link to the opportunity. Choose whether the range goes by the creation date or by the closing date. | Those created — or closed — in the range that have a value. |
 | Average opportunity value | The mean value of an opportunity. | Those created in the range that have a value. |
 
@@ -1163,8 +1294,13 @@ hand, or — when the opportunity is set to be computed — the amount computed
 from its linked documents. "Most valuable" means the highest value and nothing
 else: the module knows no cost and no margin, so no figure here is a profit.
 
-**Days and months are counted in UTC**, and a range includes both of its dates
-in full.
+**Days and months are counted in the reporting time zone** — the *Reporting
+time zone* setting in the *Analytics* section of the settings screen, `UTC`
+unless changed — and a range includes both of its dates in full: it starts at
+midnight of its first day and ends at midnight after its last, both in that
+zone. While the Analytics module is switched off, days and months are counted
+in `UTC`. The screen names the zone under the filters, and the range presets
+(*This month*, …) take today's date in that zone, not from your own computer.
 
 Time in status and the ranking of sales reps are drawn as charts. Each chart
 has a table under it with the same numbers, so nothing is said by a chart
@@ -1181,9 +1317,15 @@ stored in advance.
 | `GET /api/v1/admin/crm/analytics/top-opportunities` | `crm:analytics` | The opportunities with the highest value: `limit` (10 unless given, 100 at most) **for each currency**, ordered by currency and then highest first. `basis=created` unless `basis=closed`. |
 | `GET /api/v1/admin/crm/analytics/average-value` | `crm:analytics` | A row per currency: `currency`, `average`, `count`. |
 
-Each takes `from` and `to` (`YYYY-MM-DD`) and, optionally, `salesChannelId` and
-`assignedAdminUserId`. A range that ends before it begins answers 422. A
-figure with nothing to average answers `null`, not zero.
+Each takes `from` and `to` (`YYYY-MM-DD`, both included, days in the reporting
+time zone, `analytics.reporting_time_zone`, which the `analytics` module owns
+and serves through its gated `reportingTimeZonePort` — `UTC` by default, and
+`UTC` while `analytics` is off: a `degrades-without` edge, asked before the port
+in `services/reporting-time-zone.ts`) and, optionally, `salesChannelId` and
+`assignedAdminUserId`. A range that ends before it begins answers 422. Each
+answers `{ data, timeZone }`: the figure, and the IANA name of the zone its days
+and months were counted in. A figure with nothing to average answers `null`,
+not zero.
 
 ## Quote requests and a computed value
 
@@ -1194,7 +1336,11 @@ same endpoint with `"documentKind": "quote_request"`. It must belong to the
 opportunity's organization, and it belongs to at most one opportunity. An
 opportunity can hold several quote requests and several orders.
 
-A linked quote request is listed with its number, its status and its value.
+A linked quote request is listed with its number, its status and its value —
+the amount the Quote Requests module computes for it, the figure its own list
+shows. While only some of its lines have an agreed price, the value is marked
+**Partially agreed**; while none has, **Not yet agreed**. A quote request
+without any price shows `—` and adds nothing to a computed value.
 **A quote request is the Quote Requests module's to show**: linking one, and
 being offered one to link, needs `rfqs:handle` — the permission that module
 reads a request with — as well as `crm:write`, and answers `403` without it.
@@ -1212,7 +1358,9 @@ opportunity the order is linked to the same one (`linkSource:
 closed, and whatever `crm.auto_create_from_orders` says: such an order never
 gets an opportunity of its own. From then on it is a linked order like any
 other: it follows the order-status mappings, and the opportunity's value counts
-it.
+it. Joining also fills the opportunity's **empty** custom fields from the
+order's, for every order field that carries to opportunities; a value the
+opportunity already holds is kept (see *Custom fields*).
 
 The order records its quote request when it is placed from the basket the
 customer filled by ordering the accepted quote request on its page in the
@@ -1236,10 +1384,11 @@ A computed value is the sum of:
   order's **total** — the gross amount the customer pays: goods, tax, delivery
   and any payment surcharge, less discounts;
 - every linked **quote request** whose status is a counting quote request
-  status, at the **sum of quantity × unit price** over its lines. The unit
-  price is the agreed price, or the price the customer asked for while none has
-  been agreed. Quote prices are **net of tax** — this is the figure the quote
-  request's own screen shows as its net total.
+  status, at its **amount**: the sum over its lines of quantity × unit price,
+  where each line's unit price is its agreed price, or the price the customer
+  asked for while that line has none. A line with neither price adds nothing.
+  The Quote Requests module computes this amount, and its own list shows the
+  same figure. Quote prices are **net of tax**.
 
 The two are not on the same basis, and neither is converted: each document
 counts at the figure its own screen shows.
@@ -1253,9 +1402,9 @@ are both counted.
 **One currency.** An opportunity has one currency and nothing is converted. A
 document in another currency that would otherwise count is left out, and the
 opportunity names it: `excludedDocuments` on the opportunity lists each one as
-`{ kind, id, reason: "currency_mismatch" }`. A quote request with lines in
-several currencies counts the lines in the opportunity's currency and is named
-as well.
+`{ kind, id, reason: "currency_mismatch" }`. A quote request counts in the
+currency its amount is in, its first line's: in another currency, it is left
+out and named as a whole.
 
 The value follows the documents: it is recalculated when a document is linked
 or unlinked, when a linked order changes status, when a linked quote request is
@@ -1299,10 +1448,23 @@ CRM does not need the Quote Requests module. While it is switched off:
   status, no value;
 - it adds nothing to a computed value;
 - linking a quote request answers `503 MODULE_DISABLED`; an existing link can
-  still be removed.
+  still be removed;
+- a quote request mentioned in a text reads as *Quote request unavailable*, and
+  the `@@` document list offers no quote requests.
 
 Nothing is lost: switched back on, the links show their documents again. A
 computed value picks the quote requests up again at its next recalculation.
+
+The **Tasks** module is optional in the same way. While it is switched off a
+task mentioned in a text reads as *Task unavailable*, the `@@` document list
+offers no tasks and an opportunity's screen shows no *Tasks* tab; switched
+back on, the mentions show their tasks again. While it is on, the *Tasks* tab
+of an opportunity lists the tasks linked to it that you may
+see — the Tasks module's own page describes it.
+
+So is the **Projects** module: while it is switched off a project mentioned in a
+text reads as *Project unavailable* and the `@@` document list offers no
+projects; switched back on, the mentions show their projects again.
 
 ### In the Admin UI
 
@@ -1320,7 +1482,7 @@ On an opportunity's screen:
   lists every document that was **left out**, with the reason, and reminds you
   that your own estimate is kept.
 
-On **CRM → Workflow**, *Statuses that count towards a computed value* is two
+On the **Value** tab of **CRM → Configuration**, *Statuses that count towards a computed value* is two
 lists of checkboxes — order statuses and quote request statuses — saved
 together. *This and every later status* ticks an order status and all that
 follow it. After saving, the screen says that the values are being recalculated
@@ -1354,7 +1516,9 @@ An opportunity created this way:
 - is titled with the document's number and the organization's name;
 - is linked to the document, and its value is **computed** from it (see *Quote
   requests and a computed value*), in the document's currency;
-- records where it came from: `source` is `order` or `quote_request`.
+- records where it came from: `source` is `order` or `quote_request`;
+- receives the document's custom-field values for every order or quote request
+  field whose **Carry value to Opportunity** option is on (see *Custom fields*).
 
 What is **not** created:
 
@@ -1362,8 +1526,6 @@ What is **not** created:
 - nothing for an order that records a quote request linked to an opportunity —
   the order joins that opportunity instead, whatever the settings say (see
   *Linking quote requests*);
-  records its quote request today, so this is not effective yet (see *Linking
-  quote requests*);
 - nothing for documents that existed before the setting was switched on;
 - nothing while the CRM module is switched off, and nothing afterwards for the
   documents placed in the meantime;
@@ -1397,6 +1559,9 @@ on its **Links** tab, which says that the new document is being linked and then 
 document is in its list from then on, marked in the change history as *created
 from the opportunity*. An order created this way follows the opportunity's
 status like any linked order, and both kinds count towards a computed value.
+Once linked, the document receives the opportunity's custom-field values for
+every opportunity field whose **Carry value to Order** or **Carry value to
+Quote request** option is on, into its empty fields only (see *Custom fields*).
 
 What to expect:
 
@@ -1407,10 +1572,16 @@ What to expect:
   you may see. If you save the document for a customer of another organization
   it is created, but it is **not** linked: the opportunity says so on your
   return and offers a link to the document. Nothing about the opportunity is
-  changed.
+  changed, and no custom-field value is carried.
 - **Who sees the buttons.** *Create order* needs `crm:write` and
   `orders:write`; *Create quote request* needs `crm:write` and `rfqs:handle`.
   The create screens also search customers, which needs `customers:read`.
+- **A quote request's version moves once more.** The values are carried just
+  after the create request has answered, in a write of the quote request's own,
+  and a carry that fills a field raises the request's `version`. A client that
+  edits the new request with the version the create response returned is then
+  refused with `409 VERSION_CONFLICT`: read the request again and send the
+  version it reports now. A carry that fills nothing leaves the version alone.
 - **With the Quote Requests module switched off** there is no *Create quote
   request* button. *Create order* is unaffected.
 - **With the CRM module switched off** the create screens work exactly as they
@@ -1444,7 +1615,13 @@ Each entry says **when**, **what** (`action`), **who** (`actor`) and the state
 - a status change carries `before.status` and `after.status`, what caused it
   (`after.cause`: `manual`, `order_status` or `system`), the order that caused
   it when one did (`after.causeOrderId`), and the reason somebody typed;
-- an edit carries the fields as they were and as they are.
+- an edit carries the fields as they were and as they are;
+- a creation for a document, or an order joining from its quote request, that
+  carried or skipped custom-field values carries `after.customFieldCarry`:
+  `source` (`entityType` `order` or `quote_request`, `recordId`), `carried` (the
+  keys filled) and `skipped` (one `{ key, reason, label }` per field not
+  carried). The carried values themselves are in `after.customFieldValues`,
+  for a reader who holds `custom_fields:read`.
 
 | Verb + Path | Permission | Purpose |
 | --- | --- | --- |
@@ -1455,8 +1632,26 @@ disagree with what happened — and **anybody who may read the opportunity may
 read its history**. The permission that opens the platform-wide audit log is
 not needed.
 
-Five things to know:
+**The values come from the opportunity itself, not from the audit log.** The
+platform-wide audit log is read by everybody who holds `audit_log:read`,
+whichever organizations they may see, so an opportunity's entry there names
+what changed and holds none of the values: no title, description, value,
+currency, contact person, organization, tag name, custom field value, reason,
+event name or file name. Those are kept beside the opportunity, written in the
+same step as the entry, and the history puts them back in `before` and
+`after` for a reader who may read the opportunity. Entries recorded before
+this change still carry their values in the audit log, and the history shows
+them as they were recorded.
 
+Six things to know:
+
+- **Custom field values need `custom_fields:read`.** An entry's `before` and
+  `after` carry the opportunity's custom field values (`customFieldValues`) only
+  for a reader who also holds `custom_fields:read`; for anybody else the server
+  leaves that member out of every entry, and the rest of the entry is as it was
+  recorded. `customFieldCarry` stays for every reader: it names fields, reasons
+  and labels, never a value. A role holding `crm:read` alone therefore no
+  longer reads custom field values through the history.
 - A note or a message is in the history as the fact that it was written,
   edited or deleted — by whom, and how long it was. Its text is not: that is
   read on the *Notes* and *Messages* tabs.
@@ -1475,33 +1670,114 @@ Five things to know:
   a next page to ask for.
 
 On the platform-wide **Audit log** screen the same entries appear among
-everybody else's, as the same sentences.
+everybody else's, as the same sentences, with the names of the changed fields
+(`changedFields`, `changedCustomFields`) where the history shows values. An
+opportunity is named there by its number.
 
 In the Admin UI the history is the **Change history** tab of an opportunity.
 Each entry is a sentence — *Opportunity status changed*, *Note added* — with
 who did it and when. A status change shows the two statuses by name; when an
 order caused it, the entry names that order and links to it. An edit lists the
 fields that changed, as they were and as they are. Custom field values are
-listed a line per field under the fields' own labels — or under their codes for
-somebody without `custom_fields:read` — and an order's status is shown by name,
-to somebody holding `orders:read` only. A description that changed reads as it
-does on the *Overview*: a person, an order or a product it mentions is shown by
-name, never as the token. *Show earlier changes* reads the next page.
+listed a line per field under the fields' own labels, to somebody holding
+`custom_fields:read`; for anybody else the history holds no custom field
+values, so none are listed. An order's status is shown by name,
+to somebody holding `orders:read` only. A description that changed is shown as
+its words, without the formatting marks: a person, an order or a product it
+mentions is shown by name, never as the token. *Show earlier changes* reads the
+next page.
 
-## References to products and orders
+**Values not carried.** A creation or join entry that skipped custom-field
+values reads *Not carried from the order:* or *Not carried from the quote
+request:*, followed by one line per skipped field with the reason — the
+opportunity has no field with this key, its field has a different type, its
+field is visible to customers while the source field is internal, or the value
+is not valid for its field. A field is named by **the label of the order's or quote
+request's field, as it read when it was skipped**, in your language, and these lines are shown to **anybody who may
+read the opportunity** — `custom_fields:read` is not needed for them, and they
+hold no value. The values themselves stay behind `custom_fields:read` as above.
+An entry recorded before labels were kept names the field by its current label
+where it can, otherwise by its key. Values carried without a problem show as
+the custom-field lines of the entry, like any other change of them.
+
+## Formatted text
+
+The description of an opportunity, a note, a message and an event's description
+are written in a **formatted editor**. A toolbar above the field formats what
+is selected, and each of its buttons shows whether the text at the cursor
+already has that formatting:
+
+| Button | Keyboard (**Cmd** on a Mac) |
+| --- | --- |
+| **Bold** | **Ctrl+B** |
+| **Italic** | **Ctrl+I** |
+| **Strikethrough** | **Ctrl+Shift+S** |
+| **Bulleted list** | **Ctrl+Shift+8**, or type `- ` at the start of a line |
+| **Numbered list** | **Ctrl+Shift+7**, or type `1. ` at the start of a line |
+| **Link** | — |
+
+**Link** asks for an address. Only an address beginning `http://`, `https://`
+or `mailto:` is accepted; anything else is refused with a message, and nothing
+is linked.
+
+In the description, a note and a message the `@` shortcuts and the **Mention a
+person**, **Insert document** and **Insert product** buttons work as before (see
+below). An event's description is formatted too, but takes no mentions.
+
+Wherever the text is read — the *Overview*, the *Notes* and *Messages* tabs,
+the *Events* tab — it shows its formatting, and a link opens in a new tab.
+
+**For integrators.** What the API takes and returns is still **a string**, not
+HTML and not a document tree. The formatting is a small Markdown subset written
+into it, beside the reference tokens of the next section:
+
+| Written | Read as |
+| --- | --- |
+| `**text**` | bold |
+| `_text_` | italic — never inside a word, so a SKU such as `ABC_1_X` stays as typed |
+| `~~text~~` | strikethrough |
+| `- item` | an item of a bulleted list |
+| `3. item` | an item of a numbered list, starting at that number |
+| `[label](https://…)` | a link — `http`, `https` or `mailto` only; any other address is read as plain characters |
+| `\*`, `\_`, `\~`, `\[`, `\]`, `\\` | the character itself |
+
+Every line is a block. **No HTML is ever stored**, and a screen draws the text
+with elements of its own. Text written before formatting existed has none of
+these marks and reads exactly as it did — as plain paragraphs; nothing was
+migrated. The grammar is `@endora-commerce/contracts`'s:
+`parseOpportunityRichText` reads a text into blocks, `formatOpportunityRichText`
+writes blocks back, and `opportunityRichTextToPlain` gives the words without
+the marks — what an e-mail, a notification or the change history shows.
+
+The length limits count the stored string, marks included: a description up to
+20,000 characters, a note or a message up to 10,000, an event's description up
+to 5,000.
+
+## References to products, orders, quote requests, tasks, opportunities and projects
 
 The description of an opportunity, a note and a message can mention a
-**product** or an **order**. A mention is a token in the text:
+**product**, an **order**, a **quote request**, a **task**, another
+**opportunity** or a **project**. A mention is a token in the text:
 
 ```text
 [[product:<product id>]]
 [[order:<order id>]]
+[[quote_request:<quote request id>]]
+[[task:<task id>]]
+[[opportunity:<opportunity id>]]
+[[project:<project id>]]
 ```
 
-The text is stored and returned exactly as it was written — plain text; nothing
-in it is treated as markup. Beside every such text the API returns
-`references`: one entry per product or order mentioned, in the order they
-appear, each once.
+This is the same reference standard the Projects and Tasks modules use, so a
+text reads the same on every screen. Texts written before quote requests,
+tasks, opportunities and projects could be mentioned are unchanged: their
+tokens are a subset of these.
+
+The text is stored and returned exactly as it was written — a string with the
+tokens and the formatting marks of *Formatted text* in it, never HTML. Beside
+every such text the API returns
+`references`: one entry per target mentioned, in the order they appear, each
+once.
 
 ```json
 {
@@ -1514,12 +1790,46 @@ appear, each once.
 ```
 
 - `label` is the product's **current** name, in the reader's language, or the
-  order's number — looked up each time the text is read, so a renamed product
-  shows its new name.
-- `url` is where the mention leads in the Admin UI.
-- A product that no longer exists, and an order of an organization the reader
-  may not see, come back with `"available": false` and **no label and no
-  link**. The mention stays in the text; nothing about its target is shown.
+  order's, the quote request's, the task's, the opportunity's or the project's
+  number — looked up each time the text is read, so a renamed product shows its
+  new name.
+- `url` is where the mention leads in the Admin UI — `/catalog/products/…`,
+  `/orders/…`, `/quote-requests/…`, `/tasks/…`, `/crm/opportunities/…` or
+  `/projects/…`.
+- An available **order** also carries `order`: what the reader is shown beside
+  its number.
+
+  ```json
+  {
+    "type": "order",
+    "id": "9b2e…",
+    "available": true,
+    "label": "ORD-2026-000184",
+    "url": "/orders/9b2e…",
+    "order": {
+      "status": "processing",
+      "total": "12480.00",
+      "currency": "PLN",
+      "placedAt": "2026-10-14T09:12:00.000Z",
+      "customerName": "Hurtownia Nowak sp. z o.o."
+    }
+  }
+  ```
+
+  `status` is the order's status code, `total` its total as a decimal string,
+  `customerName` the billing company — or, without one, the billing recipient —
+  and `null` when there is neither. A product, a quote request, a task, an
+  opportunity, a project and a person carry no such object.
+- A product that no longer exists, an order of an organization the reader may
+  not see, a quote request or a task that is gone or that the reader may not
+  see, and a quote request or a task while the Quote Requests or the Tasks
+  module is switched off, come back with `"available": false` and **no label
+  and no link**. So does an opportunity that is gone, and a project that is
+  gone, that the reader may not see or whose module is switched off. The
+  mention stays in the text; nothing about its target is shown. A task is also
+  hidden when the record it belongs to — a project, for example — is one the
+  reader may not see, and a private task or a draft of somebody else's always
+  is.
 
 A token that is not well-formed — an unknown type, something that is not an id
 — is simply text.
@@ -1528,25 +1838,50 @@ A token that is not well-formed — an unknown type, something that is not an id
 and message (for its `body`). There is no separate endpoint.
 
 In the Admin UI the description field and the note and message fields carry
-buttons under them, **Insert order** and **Insert product** among them. Each
+buttons under them, **Insert document** and **Insert product** among them. Each
 opens a search;
 choosing a result puts it into the text where the cursor was — **as its name,
-never as the token**: the field shows the order's number or the product's name
-as a small label while you write, and the token is only what is stored. Once
-saved, the text shows that name as a link in its place, and
-*Product unavailable* / *Order unavailable* for a target that is gone or that
-you may not see — in the saved text and in the field alike when it is opened
-for editing; what you cannot see is saved back unchanged. A name is shown only to somebody who could open the target
-itself: an order's number needs `orders:read`, a product's name
+never as the token**: the field shows the document's number or the product's
+name as a small label while you write, and the token is only what is stored.
+Once saved, the text shows that name as a link in its place, and
+*Product unavailable* / *Order unavailable* / *Quote request unavailable* /
+*Task unavailable* / *Opportunity unavailable* / *Project unavailable* for a target that is gone or that you may not see — in the
+saved text and in the field alike when it is opened for editing; what you
+cannot see is saved back unchanged. A name is shown only to somebody who could
+open the target itself: an order's number needs `orders:read`, a quote
+request's `rfqs:handle`, a task's `tasks:read`, an opportunity's `crm:read`, a
+project's `projects:read` and the project's own visibility, a product's name
 `catalog:read`.
 
-The two searches are the catalogue's and the Orders module's own, so *Insert
-product* is offered to a role that also holds `catalog:read` and *Insert order*
-to one that holds `orders:read`; orders are offered for the opportunity's
-organization only. A token typed or pasted by hand is saved without either,
-and reads as unavailable to whoever lacks the permission.
+**An order says more when it is read.** In saved text an order mentioned is
+shown as its number — a link that opens the order in the same tab, whose
+**Back** returns to the opportunity — followed by its status, its total, the
+date it was placed and its customer (the billing company, or the billing
+recipient when there is none). Beside it, a small separate icon — named *Open
+order ORD-2026-000184 in a new tab* when you point at it, and to a screen
+reader — opens it in a new tab instead.
 
-## Mentioning a person, an order or a product with @
+*Insert product* searches the catalogue, and is offered to a role that also
+holds `catalog:read`. *Insert document* searches **one list of documents**,
+grouped **Orders · Quote requests · Tasks · Opportunities · Projects** — the
+list the Projects and Tasks modules offer too:
+
+- **Orders** and **Quote requests** of the opportunity's organization only —
+  on the create form, of the organization chosen there; without one, neither
+  group is offered;
+- **Tasks** any you may see;
+- **Opportunities** any opportunity, by number or title — this module's own;
+- **Projects** any project you may see, by number or title;
+- every group but *Opportunities* only to a role that also holds the
+  permission its module reads it with — `orders:read`, `rfqs:handle`,
+  `tasks:read`, `projects:read` — and only while that module is switched on. A
+  role holding none of the four is not offered the button, and so not the
+  *Opportunities* group either.
+
+A token typed or pasted by hand is saved without any of these, and reads as
+unavailable to whoever lacks the permission.
+
+## Mentioning a person, a document or a product with @
 
 The same three fields — the description, a note, a message — take a mention
 straight from the keyboard:
@@ -1554,17 +1889,18 @@ straight from the keyboard:
 | Type | To mention | Offered to |
 | --- | --- | --- |
 | `@` | a **person** — a user of the Admin UI who may read opportunities | anybody writing the text |
-| `@@` | an **order** of the opportunity's organization | a role that also holds `orders:read` |
+| `@@` | a **document** — an order or a quote request of the opportunity's organization, a task, an opportunity or a project — from the grouped list above | anybody writing the text — the opportunities group is always offered; orders, quote requests, tasks and projects only to a role that also holds `orders:read`, `rfqs:handle`, `tasks:read` or `projects:read` respectively |
 | `@@@` | a **product** | a role that also holds `catalog:read` |
 
 Type the `@` at the start of the text or after a space and a list opens **where
 you are typing** — under that line, or above it when there is no room below;
-keep typing to narrow it — a first name, a surname, an order number,
-a product name or SKU. **Arrow keys** move through the list, **Enter** or
+keep typing to narrow it — a first name, a surname, an order, quote request,
+task, opportunity or project number, a task's, an opportunity's or a project's
+title, a product name or SKU. **Arrow keys** move through the list, **Enter** or
 **Tab** chooses, **Escape** closes it and leaves what you typed. Choosing
 replaces the `@` and the letters after it with the mention — shown as
-**@Tomasz Nowak**, as an order's number or as a product's name — and you carry
-on with the sentence:
+**@Tomasz Nowak**, as a document's number or as a product's name — and you
+carry on with the sentence:
 
 ```text
 @Tomasz Nowak - take this over
@@ -1573,20 +1909,24 @@ on with the sentence:
 **The field shows names, never tokens**, for a mention just chosen and for
 every one already in a text you open for editing. A mention behaves as one
 character: the arrow keys step over it, and **Backspace** or **Delete** removes
-the whole of it. The field is plain text — a paste arrives as its text with its
-line breaks and none of its formatting — and **Ctrl+Z** / **Ctrl+Shift+Z** undo
-and redo, a mention being one step. A token typed or pasted by hand turns into
-its name when the field knows it, and otherwise stays as you typed it and is
-resolved when the text is saved. Typing `@@` or `@@@` quickly opens the one
+the whole of it. The field is the formatted editor of *Formatted text*: a
+paste keeps only the formatting the field can hold, and **Ctrl+Z** /
+**Ctrl+Shift+Z** undo and redo, a mention being one step. A token pasted in its text form
+(`[[order:…]]`) becomes a chip — its name when the field knows it, otherwise
+*unavailable* until the text is saved and resolved; one typed character by
+character stays the characters you typed. Typing `@@` or `@@@` quickly opens the one
 list you asked for; a single `@` opens the people after a short pause.
 
 An `@` inside a word — an e-mail address — opens nothing, and neither does an
 `@` followed by a space. A shortcut your role is not offered leaves the
 characters exactly as typed. The line under the field names the shortcuts you
-have, and **Mention a person** beside *Insert order* and *Insert product* does
-the same by a button.
+have, and **Mention a person** beside *Insert document* and *Insert product*
+does the same by a button.
 
-A mention of a person is stored like the other two, as a token, and comes back
+`@@` replaces what it meant before: until the reference standard shared with
+Projects, it searched the organization's orders alone.
+
+A mention of a person is stored like the others, as a token, and comes back
 in `references`:
 
 ```text
@@ -1753,9 +2093,32 @@ button; on the create form they are saved with the opportunity.
   whenever the custom fields are saved. Editing something else on an
   opportunity — its title, its value, its status — never asks for it, so a
   field made required today does not block work on yesterday's opportunities.
-- An opportunity created automatically has no custom values until somebody
-  fills them in.
+- An opportunity created automatically has no custom values of its own until
+  somebody fills them in — except those carried from its document (below).
 - When a field is deleted, its values stop being shown.
+
+**Carrying values between an opportunity and its documents.** On **Custom
+fields**, an order or quote request field can have **Carry value to
+Opportunity** on, and an opportunity field **Carry value to Order** and **Carry
+value to Quote request**; the field on the other record must have the same key
+and a compatible type and options, and an internal field cannot carry into a
+customer-visible one. The Custom fields module's page has the whole rule. Only
+an empty field is filled, once, when the records are joined:
+
+| When | What is carried | Attributed to |
+| --- | --- | --- |
+| an opportunity is created automatically for an order or a quote request | the document's values, into the new opportunity | the system, in the creation's entry |
+| an order placed from a linked quote request joins its opportunity | the order's values, into the opportunity's empty fields | the system, in the link's entry |
+| an order or a quote request created from the opportunity is linked to it | the opportunity's values, into the document's empty fields | the system, in the document's own audit trail; the document's creation stays the administrator's |
+
+Nothing is carried when an order or a quote request is linked by hand — on the
+*Links* tab or from the document's *Linked opportunity* panel — nor when the
+records belong to different organizations. A value that cannot be carried is
+skipped, the opportunity or the document is created or linked all the same,
+and the skip is recorded **on the record that did not receive it**: in the
+opportunity's *Change history* (see *Change history*), as a system note in the
+order's comments, or in the quote request's history. While the CRM module is
+switched off nothing is carried, and nothing is caught up afterwards.
 
 **Who sees them.** Whoever can see the opportunity sees its custom values, and
 nobody else: they are part of the opportunity. Showing the fields also needs
@@ -1779,8 +2142,8 @@ the definitions and every stored value.
 
 ## Opportunities on the organization's screen
 
-An organization's screen ends with an **Open opportunities** panel: the
-opportunities being worked with that organization that are not yet won or lost,
+An organization's **Sales** tab holds an **Open opportunities** section, after
+the sales representatives: the opportunities being worked with that organization that are not yet won or lost,
 newest first, each with its number and title (a link to the opportunity), its
 status and its value. **New opportunity** opens the create form with the
 organization already chosen.
@@ -1791,6 +2154,8 @@ organization already chosen.
   list.
 - Somebody confined to certain organizations sees the panel only on those
   organizations' screens, like every other opportunity list.
+- The Sales tab is shown to somebody who may assign sales representatives or
+  who sees this section, so holding `crm:read` alone is enough to open it.
 - With CRM switched off the organization's screen shows nothing of it — no
   panel, no heading, no request.
 
@@ -1800,8 +2165,8 @@ opportunity, the entry stays and carries no title and no link.
 
 ## The opportunity on the order's and the quote request's screen
 
-An order's screen ends with a **Linked opportunity** panel, whichever tab is
-open.
+An order's screen has a **Linked opportunity** section in its sidebar, beside
+the tabs, so it is in view whichever tab is open.
 
 - **An order linked to an opportunity** shows the opportunity's number and
   title (a link to it), its status, who it is assigned to and its value.
@@ -1818,9 +2183,10 @@ open.
     the opportunity's own screen.
 - The panel is shown to whoever holds `crm:read`. Without it, and with CRM
   switched off, the order's screen is exactly as it is without the module — no
-  panel, no heading, no empty space, no request.
+  panel, no heading, no empty space, no request. When nothing else fills the
+  sidebar either, the screen has no sidebar at all.
 
-**A quote request's screen ends with the same panel**, for a quote request:
+**A quote request's sidebar holds the same panel**, for a quote request:
 the opportunity it is linked to, or — for a holder of `crm:write` — *Link to an
 opportunity* and *Create opportunity*, which carry the quote request instead of
 an order. Whoever is on that screen holds `rfqs:handle`, which linking a quote
@@ -1839,10 +2205,11 @@ MODULE_DISABLED`, whoever asks. The create form accepts `linkDocumentKind=order`
 or `quote_request` and `linkDocumentId=<the document's id>` beside
 `organizationId` in its address.
 
-For module authors: the panel is CRM's contribution to the `order.detail.after`
-and `quote_request.detail.after` admin zones, which the Orders and the Quote
-Requests modules mount and which any module may contribute to. Neither imports
-CRM or declares a dependency on it.
+For module authors: the panel is CRM's contribution to the `order.detail.sidebar`
+and `quote_request.detail.sidebar` admin zones, and the organization's section
+its contribution to `organization.detail.sales`, which the Orders, the Quote
+Requests and the Organizations modules mount and which any module may
+contribute to. None of them imports CRM or declares a dependency on it.
 
 ## Adding your own logic to a status change
 
@@ -1919,26 +2286,27 @@ opportunity — with `opportunityId`, `organizationId`, `documentKind`,
 ## Reading and moving an opportunity from another module
 
 For developers. Another module, or a deployment's overlay, works with
-opportunities through two published ports and never through CRM's tables or
-classes. Both types are exported by `@endora-commerce/contracts`.
+opportunities through published ports and never through CRM's tables or
+classes: `opportunityReadPort` to read, and `opportunityCommandPort` to write
+(see *Server-side writes* below). Their types are exported by
+`@endora-commerce/contracts`.
 
 | Container name | Type | What it does |
 | --- | --- | --- |
-| `opportunityReadPort` | `OpportunityReadPort` | `findById(id)`, `findByDocument(kind, documentId)` and `listOpenForOrganization(organizationId)`. Each answers plain `OpportunityRecord` values — id, number, title, organization, status code and kind, assignee, value, currency, dates — or `null` / an empty list. |
-| `opportunityTransitionPort` | `OpportunityTransitionPort` | `applyStatus({ opportunityId, to, actor, reason? })` moves an opportunity through the configured workflow, guards and events included, and answers what happened as a value. |
+| `opportunityReadPort` | `OpportunityReadPort` | `findById(id)`, `findByIds(ids)`, `findByDocument(kind, documentId)`, `listOpenForOrganization(organizationId)` and `search({ q, limit })` (number or title, at most 20). Each answers plain `OpportunityRecord` values — id, number, title, organization, status code and kind, assignee, value, currency, dates — or `null` / an empty list. `statusName(code, language)` names a status as CRM's screens do: its name in that language, else its default name, else the code. `listNotes({ organizationId?, authorAdminUserId?, createdFrom?, createdBefore?, cursor?, limit })` lists the notes written on opportunities, oldest first, a page of at most 100 at a time — see *Reading notes* below. |
+| `opportunityTransitionPort` | `OpportunityTransitionPort` | **Deprecated since 0.113.0, removed in 0.114.0.** `applyStatus({ opportunityId, to, actor, reason? })` now runs `opportunityCommandPort.transition(opportunityId, { to, reason })` and answers the same outcome; the `actor` you pass is no longer read. |
 
 ```ts
-import type { OpportunityTransitionPort } from '@endora-commerce/contracts';
+import type { OpportunityCommandPort } from '@endora-commerce/contracts';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 
-const opportunities = lazyPort<OpportunityTransitionPort>(ctx, 'opportunityTransitionPort');
+const opportunities = lazyPort<OpportunityCommandPort>(ctx, 'opportunityCommandPort');
 
-const outcome = await opportunities.applyStatus({
+const outcome = await opportunities.transition(
   opportunityId,
-  to: 'won',
-  actor: { kind: 'system' },
-  reason: 'Contract signed in the ERP',
-});
+  { to: 'won', reason: 'Contract signed in the ERP' },
+  { source: 'erp' },
+);
 if (!outcome.applied && outcome.reason !== 'already_there') {
   // 'not_found' | 'unknown_status' | 'not_permitted' | 'vetoed', with `detail`
 }
@@ -1954,17 +2322,103 @@ if (!outcome.applied && outcome.reason !== 'already_there') {
   opens its own.
 - **Reads and moves run under the caller's tenant scope.** A caller confined to
   some organizations cannot read or move an opportunity of another.
+- **Reading notes.** `listNotes` answers `{ items, nextCursor }`. Each item is
+  an `OpportunityNoteRecord`: the note's `id`, its `opportunityId`, the
+  opportunity's `organizationId`, the `author` (`id` and `name`), the `body` as
+  written, `createdAt` and `editedAt`. Every filter is optional and they
+  combine: an organization, an author, and a creation time from `createdFrom`
+  (included) to `createdBefore` (not included). Pass the page's `nextCursor`
+  back as `cursor` for the next page; it is `null` on the last one. Only notes
+  are listed — never the internal messages, and never a deleted note — and
+  only those of opportunities the caller's tenant scope reaches, so a sales
+  representative reads the notes of the organizations their scope reaches. A
+  cursor the port did not issue, or an invalid date, is refused with
+  `422 VALIDATION_FAILED`. The port checks no permission: ask `crm:read`
+  yourself before calling it.
 - **Declare the edge in your manifest.** A module that cannot work without CRM
   lists `crm` in `dependencies`. One that can lists it in
   `nonBindingDependencies` with `kind: 'degrades-without'`, the port's name and
   a `whenAbsent` sentence an operator will read before switching CRM off.
-- **With CRM switched off both ports fail closed**: resolving either throws
+- **With CRM switched off every port fails closed**: resolving one throws
   `ModuleDisabledError` (HTTP `503 MODULE_DISABLED`). Do not wrap the call in a
   bare `catch` — a consumer that degrades asks
   `effectiveState.isPresent('crm')` first.
 
 To react to a status change rather than cause one, subscribe to the events or
 register a guard, as *Adding your own logic to a status change* describes.
+
+## Server-side writes
+
+For developers. Another module, an overlay module or an integration worker (a
+CRM or ERP connector) writes an opportunity through **`opportunityCommandPort`**,
+the opportunity's write port, declared as `OpportunityCommandPort` in
+`@endora-commerce/contracts`. Resolve it per use with
+`lazyPort<OpportunityCommandPort>(ctx, 'opportunityCommandPort')`, with `crm`
+in the calling module's manifest `dependencies` (or in
+`nonBindingDependencies` with `kind: 'refuses-without'`).
+
+| Method | Audit action | What the admin does the same way |
+| --- | --- | --- |
+| `create(input, options?)` | `crm.opportunity.create` | `POST /api/v1/admin/crm/opportunities` |
+| `update(id, patch, options?)` | `crm.opportunity.update` | `PATCH /api/v1/admin/crm/opportunities/:id` |
+| `setCustomFieldValues(id, merge, options?)` | `crm.opportunity.update` | `PATCH /api/v1/admin/crm/opportunities/:id` with only `customFieldValues` |
+| `assign(id, { adminUserId }, options?)` | `crm.opportunity.assign` | `POST /api/v1/admin/crm/opportunities/:id/assign` |
+| `transition(id, { to, reason? }, options?)` | `crm.opportunity.transition` | `POST /api/v1/admin/crm/opportunities/:id/transition` |
+| `setTags(id, { tagIds }, options?)` | `crm.opportunity.tag_set` | `PUT /api/v1/admin/crm/opportunities/:id/tags` |
+| `link(id, { documentKind, documentId, syncStatus? }, options?)` | `crm.opportunity.link_add` | `POST /api/v1/admin/crm/opportunities/:id/links` |
+| `unlink(id, linkId, options?)` | `crm.opportunity.link_remove` | `DELETE /api/v1/admin/crm/opportunities/:id/links/:linkId` |
+| `addComment(id, { kind, body }, options?)` | `crm.opportunity.note_add`, `crm.opportunity.message_add` | `POST /api/v1/admin/crm/opportunities/:id/comments` |
+| `delete(id, options?)` | `crm.opportunity.delete` | `DELETE /api/v1/admin/crm/opportunities/:id` |
+
+**One write path.** Each method runs the same Command as the admin endpoint,
+through the same code, so the two cannot write differently: one audit entry
+with the same state, the same events, and the same follow-ups — the assignee
+told, the people mentioned told, the value recalculated after a link changes
+or the mode becomes computed. A transition runs the guards, asks the linked
+orders to follow, and announces the change, exactly as from the admin. Inputs
+are the endpoints' request bodies, validated with the same limits; an input
+outside them is refused with `422 VALIDATION_FAILED`. Refusals are the
+endpoints' errors with their codes (`404 CRM_OPPORTUNITY_NOT_FOUND`,
+`422 CRM_ASSIGNEE_INVALID`, `422 CUSTOM_FIELD_VALUE_INVALID`,
+`409 CRM_DOCUMENT_ALREADY_LINKED`, and each operation's own), with one
+exception: **`transition` answers a refusal as a value**, the outcome shown
+above, so a guard's veto is `vetoed` with the guard's sentence rather than an
+error. The methods that change the opportunity answer its `OpportunityRecord`,
+custom-field values included; `link` answers the link, `addComment` the note
+or message.
+
+**Custom-field values.** `setCustomFieldValues` hands your `merge` function a
+copy of the current values while the opportunity is locked, and stores what it
+returns. Validate inside it with `CustomFieldValuePort.validateAndMerge`; CRM
+does not validate for you, and a refusal you throw writes nothing.
+
+**Who wrote it.** The actor is the ambient one, never a parameter: an
+administrator inside an admin request, or under `withSystemScopeActingFor`; the
+**system** actor under `withSystemScope` in a worker. A status change made with
+no administrator is recorded with the cause *system*. **A note or a message
+needs an author**, so `addComment` with no administrator is refused with
+`403 FORBIDDEN`; a worker writes one under `withSystemScopeActingFor`. The port
+checks no permission — the caller is the gate — so never resolve it for a
+customer-facing route. Call it after your own commit: each call is a
+transaction of its own.
+
+**Options** (the last parameter of every method):
+
+- `source` — a lower-case code naming the integration (`erp`, `crm.connector`,
+  at most 64 characters), recorded as `source` in the audit entry beside the
+  actor. Any other value is refused with `422 VALIDATION_FAILED` before
+  anything is read or written. The opportunity's change history does not show
+  it; the audit log does.
+- `expectedVersion` — the opportunity's `version` you read. `update` honours
+  it, as the admin's `If-Match` does, and refuses a moved-on opportunity with
+  `409 VERSION_CONFLICT`. The other methods ignore it.
+- `extensions` — no CRM write is declared hookable, so any key is refused with
+  `422 COMMAND_EXTENSION_UNCLAIMED` before anything is read or written.
+
+**Not offered**: attachments, events and their reminders, retrying or
+dismissing an order change that was refused, recalculating a value, and
+whether a linked order follows the opportunity. The workflow, the tags and the
+order-status mappings are configuration, not part of an opportunity.
 
 ## Switching it on and off
 
@@ -2029,6 +2483,7 @@ the person may see, and is no more than a name to choose by.
 | `GET /api/v1/admin/crm/lookups/contacts?organizationId=…&q=…` | `crm:write` | Members of one organization the caller may see: `id`, `name`, `email`. |
 | `GET /api/v1/admin/crm/lookups/mentionable?q=…&organizationId=…` | `crm:write` | Active administrators holding `crm:read` — the people a text may mention: `id`, `name`. |
 | `GET /api/v1/admin/crm/lookups/quote-requests?organizationId=…&q=…` | `crm:write` and `rfqs:handle` | Quote requests of one organization the caller may see that can be linked: the open ones, and the one whose number is typed in full. `id`, `number`, `status`. Answers `503` while the Quote Requests module is off. |
+| `GET /api/v1/admin/crm/lookups/documents?opportunityId=…&q=…` | `crm:write` | The `@@` document list: `{ "groups": [{ "kind": "order" \| "quote_request" \| "task" \| "opportunity" \| "project", "items": [{ "id", "label", "sublabel"? }] }] }`, at most ten per group, in that order. Orders and quote requests of the opportunity's organization (`organizationId=…` instead, before the opportunity exists); tasks, opportunities and projects the caller may see, with the title as `sublabel`. The `opportunity` group is always present; any other only for a caller holding `orders:read`, `rfqs:handle`, `tasks:read` or `projects:read` respectively, and only while its module is on. An opportunity the caller cannot see answers `404`. The same shape as the Projects module's `GET /api/v1/admin/projects/lookups/documents`. |
 
 The currencies offered when an opportunity is created are the ones the active
 sales channels sell in.
@@ -2052,10 +2507,10 @@ there are in English only.
 | `crm.enabled` | on | The switch described above. |
 | `crm.auto_create_from_orders` | off | Every order placed from then on gets an opportunity of its own. The setting can differ per sales channel; the order's channel decides. |
 | `crm.auto_create_from_quote_requests` | off | Every quote request created from then on — submitted by a customer or prepared by an administrator — gets an opportunity of its own. Needs the Quote Requests module to be on. |
-| `crm.board_card_fields` | number, organization, value, sales rep, tags | The fields a board card shows, in order, as a list of field references. Change it in the **Board card** section of **CRM → Workflow**, which offers the fields that exist, rather than here. |
+| `crm.board_card_fields` | number, organization, value, sales rep, tags | The fields a board card shows, in order, as a list of field references. Change it on the **Board card** tab of **CRM → Configuration**, which offers the fields that exist, rather than here. |
 
 Events, reminders and the calendar add no setting. The reminder e-mail is
-edited and switched off on the **Transactional Emails** screen, as *Event
+edited and switched off on the **Transactional emails** screen, as *Event
 reminder*; how often reminders are looked for, the five minutes that make a
 person online and the 24 hours after which a late reminder is skipped are
 fixed.
@@ -2082,13 +2537,9 @@ Things an operator may look for and will not find in this release:
 - **Events without an opportunity** — a personal calendar.
 - **Synchronisation with another calendar.** There is no Google Calendar or
   Outlook synchronisation and no iCalendar export.
-- **A link in the reminder e-mail.** The e-mail names the opportunity by its
-  number; the bell entry links to it.
 - **A time-zone setting.** The calendar follows each reader's browser.
 - **Events elsewhere in the module.** Events are not offered to outbound
   webhooks, do not appear in analytics, and are not a field of a board card.
-- **Global search.** Opportunities are found on their own list and board, not
-  through the Admin UI's search.
 - **Profit.** Every figure is a value; there is no cost or margin.
 
 ## Demo data

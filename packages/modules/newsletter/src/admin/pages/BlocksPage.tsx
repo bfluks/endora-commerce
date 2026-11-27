@@ -2,7 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import type { Data } from '@puckeditor/core';
 import type { NewsletterCustomField, NewsletterEmailBlockSummary } from '@endora-commerce/contracts';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { ListPage, ResponsiveTable, useConfirmDialog, type ListPageLoad } from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { Alert, AlertDescription, Button, Card, CardContent, Checkbox, EmptyState, FormField, Input, PageHeader } from '@endora-commerce/admin-kit/ui';
 import {
   EmailEditorPane,
   EmailVariablesProvider,
@@ -12,6 +14,8 @@ import {
 } from '@endora-commerce/page-builder-admin/email';
 import { newsletterVariables } from '../email-variables.js';
 import { newsletterClient } from '../api/newsletter-client.js';
+import { describeDeleteError } from '../describe-delete-error.js';
+import { Blocks, Plus } from 'lucide-react';
 
 const emptyData: Data = { root: { props: {} }, content: [] };
 
@@ -20,12 +24,25 @@ function asData(content: unknown): Data {
   return content as Data;
 }
 
+/**
+ * The newsletter's reusable e-mail blocks.
+ *
+ * The list is the kit's `ListPage` since issue #1749. The block editor — a
+ * whole e-mail canvas — used to be drawn open above the list for a new block
+ * all the time (Hick); *New block* in the header now opens it in place of the
+ * list, as *Edit* does, and *Cancel* or a save comes back to the list.
+ */
 export function BlocksPage(): React.ReactElement {
   const { hasPermission } = useAuth();
+  const t = useTranslation('newsletter');
+  const tc = useTranslation('core');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const canWrite = hasPermission('newsletter:write');
   const [items, setItems] = useState<NewsletterEmailBlockSummary[]>([]);
   const [customFields, setCustomFields] = useState<NewsletterCustomField[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [listLoad, setListLoad] = useState<ListPageLoad>({ kind: 'loading' });
+  const [creating, setCreating] = useState(false);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [createContent, setCreateContent] = useState<Data>(emptyData);
@@ -41,8 +58,11 @@ export function BlocksPage(): React.ReactElement {
   const load = useCallback(() => {
     newsletterClient
       .listBlocks()
-      .then((r) => setItems(r.items))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .then((r) => {
+        setItems(r.items);
+        setListLoad({ kind: 'ready' });
+      })
+      .catch((e: unknown) => setListLoad({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   }, []);
   useEffect(() => load(), [load]);
   useEffect(() => {
@@ -69,6 +89,22 @@ export function BlocksPage(): React.ReactElement {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
+  /** Issue #1464 — a delete asks first, and runs inside the dialog. */
+  async function confirmDelete(block: NewsletterEmailBlockSummary): Promise<void> {
+    setError(null);
+    await confirm({
+      title: t('delete.block.title'),
+      message: t('delete.block.message', { name: block.name, code: block.code }),
+      confirmLabel: t('delete.block.action'),
+      destructive: true,
+      action: async () => {
+        await newsletterClient.deleteBlock(block.id);
+        load();
+      },
+      describeError: describeDeleteError(t),
+    });
+  }
+
   async function run(fn: () => Promise<unknown>): Promise<void> {
     setError(null);
     try {
@@ -82,65 +118,60 @@ export function BlocksPage(): React.ReactElement {
   if (!hasPermission('newsletter:read')) {
     return (
       <Alert>
-        <AlertDescription>You do not have permission to view the newsletter.</AlertDescription>
+        <AlertDescription>{t('common.noPermission')}</AlertDescription>
       </Alert>
     );
   }
 
   const variables = newsletterVariables(customFields.map((f) => ({ key: f.key, label: f.label })));
 
-  return (
-    <div className="space-y-4">
-      <PageHeader title="Newsletter — Email blocks" description="Reusable email-safe blocks (e.g. header / footer)." />
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
-      <EmailVariablesProvider variables={variables}>
-        {canWrite && edit ? (
+  const errorAlert = error ? (
+    <Alert variant="destructive">
+      <AlertDescription>{error}</AlertDescription>
+    </Alert>
+  ) : null;
+
+  if (canWrite && edit) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title={t('emailBlocks.edit.title')} />
+        {errorAlert}
+        <EmailVariablesProvider variables={variables}>
           <Card>
-            <CardHeader>
-              <CardTitle>Edit block</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Input value={edit.code} readOnly disabled className="max-w-sm font-mono" />
-              <Input
-                placeholder="name"
-                value={edit.name}
-                onChange={(e) => setEdit((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
-                className="max-w-sm"
-              />
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-3">
+                <FormField label={t('emailBlocks.field.code')} className="w-full max-w-sm">
+                  <Input value={edit.code} readOnly disabled className="font-mono" />
+                </FormField>
+                <FormField label={t('emailBlocks.field.name')} className="w-full max-w-sm">
+                  <Input
+                    value={edit.name}
+                    onChange={(e) => setEdit((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
+                  />
+                </FormField>
+              </div>
               <EmailEditorPane
                 editorKey={`nl-block:${edit.id}`}
                 data={edit.content}
                 onChange={(data) => setEdit((prev) => (prev ? { ...prev, content: data } : prev))}
                 builderContext="newsletter"
-                {...(canWrite
-                  ? {
-                      onSaveAsTemplate: async (
-                        meta: { name: string; code: string },
-                        canvasData: Data,
-                      ) => {
-                        await saveCanvasAsEmailTemplate({
-                          ...meta,
-                          data: canvasData,
-                          languages: ['en-US'],
-                          activeLanguage: 'en-US',
-                        });
-                      },
-                    }
-                  : {})}
+                onSaveAsTemplate={async (meta: { name: string; code: string }, canvasData: Data) => {
+                  await saveCanvasAsEmailTemplate({
+                    ...meta,
+                    data: canvasData,
+                    languages: ['en-US'],
+                    activeLanguage: 'en-US',
+                  });
+                }}
                 onListTemplatesForApply={() => listEmailTemplatesForApply(null)}
                 onResolveTemplateLayout={(templateId) => loadEmailTemplateCanvas(templateId, 'en-US')}
               />
               <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={edit.active}
                   onChange={(e) => setEdit((prev) => (prev ? { ...prev, active: e.target.checked } : prev))}
                 />
-                Active
+                {t('emailBlocks.field.active')}
               </label>
               <div className="flex gap-2">
                 <Button
@@ -157,23 +188,41 @@ export function BlocksPage(): React.ReactElement {
                     })
                   }
                 >
-                  Save changes
+                  {t('emailBlocks.saveChanges')}
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setEdit(null)}>
-                  Cancel
+                  {tc('common.action.cancel')}
                 </Button>
               </div>
             </CardContent>
           </Card>
-        ) : null}
-        {canWrite && !edit ? (
+        </EmailVariablesProvider>
+      </div>
+    );
+  }
+
+  if (canWrite && creating) {
+    const closeCreate = (): void => {
+      setCreating(false);
+      setCode('');
+      setName('');
+      setCreateContent(emptyData);
+    };
+    return (
+      <div className="space-y-4">
+        <PageHeader title={t('emailBlocks.new.title')} />
+        {errorAlert}
+        <EmailVariablesProvider variables={variables}>
           <Card>
-            <CardHeader>
-              <CardTitle>New block</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Input placeholder="code (e.g. promo_footer)" value={code} onChange={(e) => setCode(e.target.value)} className="max-w-sm" />
-              <Input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} className="max-w-sm" />
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-start gap-3">
+                <FormField label={t('emailBlocks.field.code')} hint={t('emailBlocks.field.codeHint')} className="w-full max-w-sm">
+                  <Input value={code} onChange={(e) => setCode(e.target.value)} className="font-mono" />
+                </FormField>
+                <FormField label={t('emailBlocks.field.name')} className="w-full max-w-sm">
+                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                </FormField>
+              </div>
               <EmailEditorPane
                 editorKey={`nl-block:new:${code || 'draft'}`}
                 data={createContent}
@@ -190,76 +239,88 @@ export function BlocksPage(): React.ReactElement {
                 onListTemplatesForApply={() => listEmailTemplatesForApply(null)}
                 onResolveTemplateLayout={(templateId) => loadEmailTemplateCanvas(templateId, 'en-US')}
               />
-              <Button
-                size="sm"
-                onClick={() =>
-                  void run(async () => {
-                    await newsletterClient.createBlock({
-                      code,
-                      name,
-                      content: createContent as Record<string, unknown>,
-                    });
-                    setCode('');
-                    setName('');
-                    setCreateContent(emptyData);
-                  })
-                }
-              >
-                Create block
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    void run(async () => {
+                      await newsletterClient.createBlock({
+                        code,
+                        name,
+                        content: createContent as Record<string, unknown>,
+                      });
+                      closeCreate();
+                    })
+                  }
+                >
+                  {t('emailBlocks.create')}
+                </Button>
+                <Button variant="outline" size="sm" onClick={closeCreate}>
+                  {tc('common.action.cancel')}
+                </Button>
+              </div>
             </CardContent>
           </Card>
-        ) : null}
-      </EmailVariablesProvider>
-      <Card>
-        <CardContent className="p-0">
-          <table className="w-full text-sm">
-            <thead className="border-b text-left text-muted-foreground">
-              <tr>
-                <th className="p-3 font-medium">Code</th>
-                <th className="p-3 font-medium">Name</th>
-                <th className="p-3 font-medium">Active</th>
-                <th className="p-3 font-medium">System</th>
-                {canWrite ? <th className="p-3 font-medium">Actions</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((b) => (
-                <tr key={b.id} className="border-b last:border-0 hover:bg-muted/40">
-                  <td className="p-3 font-mono text-xs">{b.code}</td>
-                  <td className="p-3">{b.name}</td>
-                  <td className="p-3">{b.active ? 'Yes' : '—'}</td>
-                  <td className="p-3">{b.isSystem ? 'Yes' : '—'}</td>
-                  {canWrite ? (
-                    <td className="p-3">
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => startEdit(b.id)}>
-                          Edit
-                        </Button>
-                        {!b.isSystem ? (
-                          <Button variant="ghost" size="sm" onClick={() => void run(() => newsletterClient.deleteBlock(b.id))}>
-                            Delete
-                          </Button>
-                        ) : (
-                          <span className="self-center text-xs text-muted-foreground">protected</span>
-                        )}
-                      </div>
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-              {items.length === 0 ? (
-                <tr>
-                  <td className="p-3 text-muted-foreground" colSpan={canWrite ? 5 : 4}>
-                    No blocks yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-    </div>
+        </EmailVariablesProvider>
+      </div>
+    );
+  }
+
+  const newBlock = (
+    <Button
+      onClick={() => {
+        setError(null);
+        setCreating(true);
+      }}
+    >
+      <Plus aria-hidden="true" />
+      {t('emailBlocks.new.title')}
+    </Button>
+  );
+  const nothingYet = listLoad.kind === 'ready' && items.length === 0;
+
+  return (
+    <>
+      <ListPage
+        title={t('emailBlocks.title')}
+        actions={canWrite && !nothingYet ? newBlock : null}
+        count={t('emailBlocks.count', { count: items.length })}
+        notice={errorAlert}
+        load={listLoad}
+        onRetry={load}
+      >
+        <ResponsiveTable
+          data={items}
+          keyExtractor={(b) => b.id}
+          emptyState={<EmptyState icon={<Blocks size={20} />} title={t('emailBlocks.empty')} action={canWrite ? newBlock : null} />}
+          columns={[
+            { id: 'name', header: t('common.column.name'), primary: true, render: (b) => <span className="font-medium">{b.name}</span>, meta: (b) => <code className="text-xs">{b.code}</code> },
+            { id: 'code', header: t('common.column.code'), hideOnMobile: true, className: 'font-mono text-xs', render: (b) => b.code },
+            { id: 'active', header: t('emailBlocks.column.active'), render: (b) => (b.active ? t('common.yes') : '—') },
+            { id: 'system', header: t('emailBlocks.column.system'), render: (b) => (b.isSystem ? t('common.yes') : '—') },
+          ]}
+          {...(canWrite
+            ? {
+                renderActions: (b: NewsletterEmailBlockSummary) => (
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => startEdit(b.id)}>
+                      {tc('common.action.edit')}
+                    </Button>
+                    {!b.isSystem ? (
+                      <Button variant="ghost" size="sm" onClick={() => void confirmDelete(b)}>
+                        {tc('common.action.delete')}
+                      </Button>
+                    ) : (
+                      <span className="self-center text-xs text-muted-foreground">{t('emailBlocks.protected')}</span>
+                    )}
+                  </div>
+                ),
+              }
+            : {})}
+        />
+      </ListPage>
+      {confirmDialog}
+    </>
   );
 }
 

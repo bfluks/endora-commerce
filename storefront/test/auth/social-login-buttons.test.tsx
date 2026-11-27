@@ -7,6 +7,8 @@ import type { FederatedProvider } from '../../lib/federated-sign-in';
  * Feature 042 / US4 — federated sign-in links carry the sanitized `next`.
  * Issue #193 — and they render *only* for a provider the platform can actually
  * complete a sign-in with, divider and all.
+ * Issue #1279 — and they point at the storefront's own start route, a relative
+ * path: the API's address (often another host) is the route's to know.
  */
 const BOTH: readonly FederatedProvider[] = ['google', 'microsoft'];
 
@@ -17,7 +19,6 @@ function render(props: {
 }): string {
   return renderToString(
     <SocialLoginButtons
-      backendBaseUrl="http://api.example"
       next="/account/orders"
       locale={props.locale ?? 'en-US'}
       modulePresent={props.modulePresent}
@@ -27,14 +28,22 @@ function render(props: {
 }
 
 describe('SocialLoginButtons', () => {
-  it('renders both providers with the start endpoint and the carried `next`', () => {
+  it('renders both providers linking to the storefront start route with the carried `next`', () => {
     const html = render({ modulePresent: true, availableProviders: BOTH });
     expect(html).toContain('Continue with Google');
     expect(html).toContain('Continue with Microsoft');
-    expect(html).toContain(
-      'http://api.example/api/v1/auth/customer/oauth/google/start?next=%2Faccount%2Forders',
-    );
-    expect(html).toContain('/api/v1/auth/customer/oauth/microsoft/start');
+    expect(html).toContain('href="/auth/federated/start?provider=google&amp;next=%2Faccount%2Forders"');
+    expect(html).toContain('href="/auth/federated/start?provider=microsoft&amp;next=%2Faccount%2Forders"');
+  });
+
+  it('links to no absolute address and to no API path (#1279)', () => {
+    const html = render({ modulePresent: true, availableProviders: BOTH });
+    const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
+    expect(hrefs).toHaveLength(2);
+    for (const href of hrefs) {
+      expect(href.startsWith('/') && !href.startsWith('//')).toBe(true);
+      expect(href).not.toContain('/api/');
+    }
   });
 
   it('renders only the enabled provider when the other one is not available', () => {

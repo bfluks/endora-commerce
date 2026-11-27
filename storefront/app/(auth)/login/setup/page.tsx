@@ -1,15 +1,20 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { sanitiseNext } from '../../../../lib/auth/next-path';
 import { completeMfaSetupTicket } from '../../../../lib/api/mfa';
-import { StorefrontApiError } from '../../../../lib/api/client';
+import { MFA_SETUP_ERRORS } from '../../../../lib/auth/sign-in-errors';
 import {
+  clearAnonCartCookie,
   clearMfaSetupTicketCookie,
   getMfaSetupTicketCookie,
+  setCartMergeFlash,
   setMfaRecoveryFlash,
   setSessionCookie,
 } from '../../../../lib/session';
 import { Hook } from '../../../../components/Hook';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { getServerContext } from '../../../../lib/server-context';
+import { tForLocale } from '../../../../lib/i18n/messages';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -33,26 +38,29 @@ export default async function ForcedSetupPage({
   const nextPath = sanitiseNext(params.next);
   const ticket = await getMfaSetupTicketCookie();
   if (!ticket) {
-    redirect(`/login?next=${encodeURIComponent(nextPath)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
 
   return (
     <>
       <Hook code="login.top" />
       <div className="b2b-auth">
-        <h1>Set up two-factor authentication</h1>
-        <p>Your account requires 2FA. Add this account to your authenticator app, then enter a code.</p>
-        {params.error ? <div className="b2b-auth__error">{params.error}</div> : null}
+        <h1>{t('auth.mfaSetup.heading')}</h1>
+        <p>{t('auth.mfaSetup.intro')}</p>
+        {/* Issue #745 — `?error=` is a code; one this page does not know reads as its own failure. */}
+        {params.error ? <div className="b2b-auth__error">{t(MFA_SETUP_ERRORS.errorKey(params.error)!)}</div> : null}
         <p>
           <code>{ticket.otpauthUri}</code>
         </p>
         <p>
-          Manual key: <code>{ticket.secret}</code>
+          {t('auth.mfa.manualKey')} <code>{ticket.secret}</code>
         </p>
         <form action={completeAction} className="b2b-auth__form">
           <input type="hidden" name="next" value={nextPath} />
           <div className="b2b-auth__field">
-            <label htmlFor="setup-code">6-digit code</label>
+            <label htmlFor="setup-code">{t('auth.mfa.sixDigitCode')}</label>
             <input
               id="setup-code"
               name="code"
@@ -64,7 +72,7 @@ export default async function ForcedSetupPage({
             />
           </div>
           <div className="b2b-auth__actions">
-            <button type="submit">Confirm and continue</button>
+            <button type="submit">{t('auth.mfaSetup.submit')}</button>
           </div>
         </form>
       </div>
@@ -79,29 +87,30 @@ async function completeAction(formData: FormData): Promise<void> {
   const next = sanitiseNext((formData.get('next') as string) ?? '/account');
   const ticket = await getMfaSetupTicketCookie();
   if (!ticket) {
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
 
   let result;
   try {
     result = await completeMfaSetupTicket(ticket.setupTicket, code);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Setup failed. Please try again.';
-    redirect(`/login/setup?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
+    return await localeRedirect(
+      `/login/setup?error=${MFA_SETUP_ERRORS.failureCode(err, 'MFA_SETUP_FAILED')}&next=${encodeURIComponent(next)}`,
+    );
   }
   if (!result.sessionCookieValue) {
-    redirect(`/login/setup?error=${encodeURIComponent('Setup failed. Please try again.')}&next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login/setup?error=MFA_SETUP_FAILED&next=${encodeURIComponent(next)}`);
   }
   await setSessionCookie(result.sessionCookieValue);
   await clearMfaSetupTicketCookie();
+  // Issue #368 — the backend merged the signed-out basket on this call; as on
+  // the password step, drop the drained anonymous cookie and flash the notice.
+  if (result.cartMerge?.outcome === 'adopted' || result.cartMerge?.outcome === 'merged') {
+    await clearAnonCartCookie();
+    await setCartMergeFlash(result.cartMerge.outcome);
+  }
   // Surface the recovery codes once on the security page.
   await setMfaRecoveryFlash(result.recoveryCodes);
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
-function sanitiseNext(input: string | undefined): string {
-  if (!input) return '/account';
-  if (!input.startsWith('/') || input.startsWith('//')) return '/account';
-  return input;
-}

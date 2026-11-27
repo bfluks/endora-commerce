@@ -1,6 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { PriceListReadPort, PriceListRecord } from '@endora-commerce/contracts';
+import type {
+  OrganizationPriceBookRecord,
+  PriceListReadPort,
+  PriceListRecord,
+} from '@endora-commerce/contracts';
 import { PriceList } from '../entities/price-list.entity.js';
+import { pgArray } from './sql-array.js';
 
 /**
  * The row-level read model `price_lists` publishes (feature 075, Phase P).
@@ -31,17 +36,8 @@ export class PriceListReadService implements PriceListReadPort {
     return lists.map(toPriceListRecord);
   }
 
-  async findByCode(code: string): Promise<PriceListRecord | null> {
-    const list = await this.emFactory().findOne(PriceList, { code });
-    return list ? toPriceListRecord(list) : null;
-  }
-
   async listAll(): Promise<PriceListRecord[]> {
-    const lists = await this.emFactory().find(
-      PriceList,
-      {},
-      { orderBy: { priority: 'desc', code: 'asc' } },
-    );
+    const lists = await this.emFactory().find(PriceList, {}, { orderBy: { priority: 'desc', name: 'asc' } });
     return lists.map(toPriceListRecord);
   }
 
@@ -49,29 +45,73 @@ export class PriceListReadService implements PriceListReadPort {
     const lists = await this.emFactory().find(
       PriceList,
       { status: 'active' },
-      { orderBy: { priority: 'desc', code: 'asc' } },
+      { orderBy: { priority: 'desc', name: 'asc' } },
     );
     return lists.map(toPriceListRecord);
+  }
+
+  async listForOrganization(input: {
+    organizationChain: readonly string[];
+    customerGroupId: string | null;
+  }): Promise<OrganizationPriceBookRecord[]> {
+    const chain = [...input.organizationChain];
+    if (chain.length === 0 && !input.customerGroupId) return [];
+    const rows = await this.emFactory().execute<
+      Array<{
+        id: string;
+        name: string;
+        type: string;
+        currency_code: string;
+        priority: number;
+        status: 'scheduled' | 'active';
+        organization_id: string | null;
+        customer_group_id: string | null;
+      }>
+    >(
+      `select l."id", l."name", l."type", l."currency_code", l."priority", l."status",
+              m."organization_id", m."customer_group_id"
+         from "price_lists" l
+         join "price_list_audience_members" m on m."price_list_id" = l."id"
+        where l."is_system" = false
+          and l."status" in ('active', 'scheduled')
+          and (l."starts_at" is null or l."starts_at" <= now())
+          and (l."ends_at" is null or l."ends_at" > now())
+          and (m."organization_id" = any(?::uuid[]) or m."customer_group_id" = ?::uuid)`,
+      [pgArray(chain), input.customerGroupId],
+    );
+    const byBook = new Map<string, OrganizationPriceBookRecord>();
+    for (const row of rows) {
+      const depth = row.organization_id ? chain.indexOf(row.organization_id) : null;
+      const entry: OrganizationPriceBookRecord = {
+        id: row.id,
+        name: row.name,
+        type: row.type === 'sale' ? 'sale' : 'regular',
+        currencyCode: row.currency_code.trim(),
+        priority: Number(row.priority),
+        status: row.status,
+        reason: depth === null ? 'customer_group' : depth === 0 ? 'organization' : 'ancestor',
+        depth,
+      };
+      const held = byBook.get(row.id);
+      if (!held || (entry.depth !== null && (held.depth === null || entry.depth < held.depth))) byBook.set(row.id, entry);
+    }
+    return [...byBook.values()].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
   }
 }
 
 export function toPriceListRecord(list: PriceList): PriceListRecord {
   return {
     id: list.id,
-    code: list.code,
     name: list.name,
-    currency: list.currency,
-    isDefault: list.isDefault,
+    currencyCode: list.currency.trim(),
     priority: list.priority,
     type: list.type,
     status: list.status,
+    audienceKind: list.audienceKind,
     startsAt: list.startsAt ?? null,
     endsAt: list.endsAt ?? null,
-    applicationRule: list.applicationRule,
     isSystem: list.isSystem,
-    modifiedAt: list.modifiedAt,
     createdAt: list.createdAt,
     updatedAt: list.updatedAt,
   };
 }
-

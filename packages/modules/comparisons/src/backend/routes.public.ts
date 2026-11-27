@@ -8,6 +8,8 @@ import {
   type OrganizationDetailsPort,
   comparisonAddProductInputSchema,
   comparisonSetDisplayModeInputSchema,
+  requestScopeLanguage,
+  storefrontPagePathFor,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { productAudienceOf } from '@endora-commerce/platform/http';
@@ -37,6 +39,7 @@ import {
 import type { ShareTokenGenerator } from './services/share-token-generator.js';
 import type { Comparison } from './entities/comparison.entity.js';
 import { customerActor } from './request-actor.js';
+import { buyerViewerOf, languageTagOf } from './buyer-viewer.js';
 
 /**
  * Public HTTP surface — feature 007 / US1 (T027).
@@ -85,27 +88,23 @@ const pdfQuerySchema = z.object({
 });
 
 /**
- * The PDF's language: the first `Accept-Language` tag the channel offers
- * (exactly, or by its primary subtag), else the channel's default language,
- * else `en-US` (FR-032, owner Q7).
+ * The PDF's language (FR-032, owner Q7): the channel content language the whole
+ * `Accept-Language` header asks for, through `requestScopeLanguage` — the tags in
+ * descending `q`, each matched against the channel's languages (exactly, then by base
+ * language), the first one the channel offers winning, else the channel's default.
+ *
+ * Issue #1011 — a content language, not a message-bundle one
+ * (`request.responseLanguage()`): it picks the template's language, the channel's name and
+ * the share page's language prefix, all of which exist per channel language, and it has to
+ * agree with the language the comparison view's product names were read in
+ * (`buyerViewerOf`). It used to strip `;q` without sorting by it, so `en;q=0.2, pl;q=0.9`
+ * exported an English PDF.
  */
 export function pickExportLanguage(
-  acceptLanguage: string | undefined,
-  channel: { defaultLanguage?: string | null; languages?: readonly string[] },
+  acceptLanguage: string | readonly string[] | undefined,
+  channel: { id: string; defaultLanguage: string; languages?: readonly string[] },
 ): string {
-  const offered = [...new Set([...(channel.languages ?? []), ...(channel.defaultLanguage ? [channel.defaultLanguage] : [])])];
-  const tags = (acceptLanguage ?? '')
-    .split(',')
-    .map((part) => part.split(';')[0]?.trim() ?? '')
-    .filter((tag) => tag !== '' && tag !== '*');
-  for (const tag of tags) {
-    const exact = offered.find((code) => code.toLowerCase() === tag.toLowerCase());
-    if (exact) return exact;
-    const primary = tag.split('-')[0]?.toLowerCase();
-    const sameBase = offered.find((code) => code.split('-')[0]?.toLowerCase() === primary);
-    if (sameBase) return sameBase;
-  }
-  return channel.defaultLanguage || 'en-US';
+  return requestScopeLanguage(channel, acceptLanguage);
 }
 
 async function storefrontUrlOf(settings: SettingsReadPort, channelId: string): Promise<string | null> {
@@ -145,7 +144,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        await buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -165,6 +166,7 @@ export async function registerComparisonsPublicRoutes(
         channel.id,
         body.productId,
         productAudienceOf(request),
+        languageTagOf(request),
       );
     } catch (err) {
       throw translate(err);
@@ -174,7 +176,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        await buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -203,7 +207,9 @@ export async function registerComparisonsPublicRoutes(
         data: await comparisonService.buildOwnerView(
           comparison,
           channel.id,
-          { kind: 'buyer', audience: productAudienceOf(request) },
+          await buyerViewerOf(request),
+          // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+          'owner',
         ),
       };
     },
@@ -229,7 +235,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        await buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -248,7 +256,9 @@ export async function registerComparisonsPublicRoutes(
       const view = await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        await buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       );
       if (view.products.length === 0) {
         throw new HttpError(
@@ -274,6 +284,8 @@ export async function registerComparisonsPublicRoutes(
           customerName: account ? `${account.firstName} ${account.lastName}`.trim() || account.email : null,
           organizationName: organization?.name ?? null,
           storefrontUrl: await storefrontUrlOf(context.settings, channel.id),
+          // Feature 167 — the share page in the document's language.
+          pagePath: (path) => storefrontPagePathFor({ path, channel, requestedLanguage: language }),
           hideEmptyRows: hideEmptyRows === 'true',
           now: new Date(),
         });

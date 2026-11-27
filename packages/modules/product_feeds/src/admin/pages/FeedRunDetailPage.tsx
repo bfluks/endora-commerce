@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
-import { CheckCircle2, Download } from 'lucide-react';
-import { Alert, AlertDescription, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { CheckCircle2 } from 'lucide-react';
+import { Alert, AlertDescription, EmptyState, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { DownloadAction } from '../components/DownloadAction.js';
 import { ApiError, formatDateTime, useAuth } from '@endora-commerce/admin-kit/lib';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import {
   productFeedsClient,
   RUN_ISSUE_PAGE_LIMIT,
@@ -37,6 +38,7 @@ const ISSUE_CAP_HINT = 1000;
 
 export function FeedRunDetailPage(): ReactNode {
   const t = useTranslation('product_feeds');
+  const { language } = useTranslationContext();
   const { feedId, runId } = useParams<{ feedId: string; runId: string }>();
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('product_feeds:write');
@@ -73,14 +75,16 @@ export function FeedRunDetailPage(): ReactNode {
       <div>
         <PageHeader
           title={t('runs.detail.title', { date: '' })}
-          back={{ label: t('page.title'), to: `/product-feeds/${feedId ?? ''}` }}
+          back={{ label: t('runs.detail.feedFallback'), to: `/product-feeds/${feedId ?? ''}` }}
         />
         {error !== null ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : (
-          <p className="b2b-help">{t('feeds.criteria.counting')}</p>
+          <p role="status" className="m-0 text-sm text-muted-foreground">
+            {t('feeds.criteria.counting')}
+          </p>
         )}
       </div>
     );
@@ -104,28 +108,23 @@ export function FeedRunDetailPage(): ReactNode {
   return (
     <div>
       <PageHeader
-        title={t('runs.detail.title', { date: formatDateTime(started) })}
+        title={t('runs.detail.title', { date: formatDateTime(started, language) })}
         description={`${t(`runs.trigger.${run.trigger}`)} · ${
           run.durationMs === null ? '—' : `${Math.round(run.durationMs / 100) / 10}s`
         } · ${t('runs.detail.templateState', {
           name: feed.feedTemplateName,
-          date: formatDateTime(run.createdAt),
+          date: formatDateTime(run.createdAt, language),
         })}`}
         back={{ label: feed.name, to: `/product-feeds/${feed.id}` }}
         actions={
-          <a
+          // Present-but-disabled rather than hidden: a read-only operator has
+          // to learn that the file exists and that they may not have it.
+          <DownloadAction
             href={productFeedsClient.runArtefactUrl(feed.id, run.id)}
-            // Present-but-disabled rather than hidden: a read-only operator has
-            // to learn that the file exists and that they may not have it.
-            className={`b2b-btn b2b-btn--outline inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm ${
-              canWrite && run.artefact ? '' : 'pointer-events-none opacity-50'
-            }`}
+            label={t('runs.detail.download')}
+            enabled={canWrite && Boolean(run.artefact)}
             title={writeTitle}
-            aria-disabled={!canWrite || !run.artefact}
-          >
-            <Download size={14} aria-hidden="true" />
-            {t('runs.detail.download')}
-          </a>
+          />
         }
       />
 
@@ -167,20 +166,30 @@ export function FeedRunDetailPage(): ReactNode {
         </div>
       )}
 
+      {run.status === 'withdrawn' ? (
+        // Feature 160 (FR-029), owner ruling 2026-10-23 — not a failure: the
+        // pinned price book did not apply, so the run withdrew the published
+        // file rather than keep serving prices that no longer apply.
+        <Alert variant="warning" className="mb-4" role="status">
+          <AlertDescription className="flex flex-col gap-1">
+            {run.withdrawalReason ? <span>{t(`feeds.pinnedBook.${run.withdrawalReason}`)}</span> : null}
+            <span>{t('runs.withdrawn.notice')}</span>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {run.status === 'empty' ? (
         <Alert className="mb-4">
           <AlertDescription>{t('runs.empty.notice')}</AlertDescription>
         </Alert>
       ) : null}
 
-      {!failed && !hasSkips && !hasWarnings ? (
-        <div className="b2b-empty">
-          <p className="b2b-empty__title flex items-center justify-center gap-2">
-            <CheckCircle2 size={16} aria-hidden="true" />
-            {t('runs.issues.none.title')}
-          </p>
-          <p className="b2b-empty__sub">{t('runs.issues.none.body')}</p>
-        </div>
+      {!failed && run.status !== 'withdrawn' && !hasSkips && !hasWarnings ? (
+        <EmptyState
+          icon={<CheckCircle2 size={20} />}
+          title={t('runs.issues.none.title')}
+          description={t('runs.issues.none.body')}
+        />
       ) : null}
 
       {hasSkips ? (

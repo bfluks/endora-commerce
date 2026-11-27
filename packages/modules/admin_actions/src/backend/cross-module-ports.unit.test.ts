@@ -44,26 +44,18 @@ interface ActionRow {
 }
 
 /** The two tables the palette read may name: its own, and the kernel registry. */
-const OWN_TABLES = ['module_actions as a', 'module_registrations as r'];
+const OWN_TABLES = ['module_actions', 'module_registrations'];
 
 function emReturning(rows: ActionRow[]): () => EntityManager {
-  const knex = (table: string): unknown => {
-    if (!OWN_TABLES.includes(table)) {
-      throw new Error(`admin_actions queried a table it does not own: ${table}`);
+  const execute = async (sql: string): Promise<ActionRow[]> => {
+    for (const [, table] of sql.matchAll(/\b(?:from|join)\s+"?([a-z_][a-z0-9_]*)"?/gi)) {
+      if (!OWN_TABLES.includes(table!)) {
+        throw new Error(`admin_actions queried a table it does not own: ${table}`);
+      }
     }
-    const chain = {
-      join: (joined: string) => {
-        if (!OWN_TABLES.includes(joined)) {
-          throw new Error(`admin_actions joined a table it does not own: ${joined}`);
-        }
-        return chain;
-      },
-      where: () => chain,
-      select: async (): Promise<ActionRow[]> => rows,
-    };
-    return chain;
+    return rows;
   };
-  return () => ({ getKnex: () => knex }) as unknown as EntityManager;
+  return () => ({ execute }) as unknown as EntityManager;
 }
 
 function actionRow(over: Partial<ActionRow> = {}): ActionRow {
@@ -96,6 +88,12 @@ describe('admin_actions — the cross-module demand is two ports and a registry 
     // class, which also assigns and revokes roles.
     const permissions: PermissionReadPort = {
       listPermissions: async () => ['catalog:read'],
+      resolveRole: async () => {
+        throw new Error('admin_actions reads permissions, never a role');
+      },
+      resolveRoles: async () => {
+        throw new Error('admin_actions reads permissions, never a role');
+      },
     };
 
     const service = new AdminActionsService({
@@ -143,6 +141,12 @@ describe('admin_actions — the cross-module demand is two ports and a registry 
     };
     const permissions: PermissionReadPort = {
       listPermissions: async () => ['*'],
+      resolveRole: async () => {
+        throw new Error('admin_actions reads permissions, never a role');
+      },
+      resolveRoles: async () => {
+        throw new Error('admin_actions reads permissions, never a role');
+      },
     };
 
     const service = new AdminActionsService({
@@ -211,7 +215,15 @@ describe('admin_actions — the cross-module demand is two ports and a registry 
       emFactory: em,
       registry,
       i18nService: { translate: async (m, k) => `${m}/${k}` },
-      permissionService: { listPermissions: async () => [] },
+      permissionService: {
+        listPermissions: async () => [],
+        resolveRole: async () => {
+          throw new Error('admin_actions reads permissions, never a role');
+        },
+        resolveRoles: async () => {
+          throw new Error('admin_actions reads permissions, never a role');
+        },
+      },
       requireAdmin: () => async () => undefined,
       resolveAdminContext: () => ({ adminUserId: 'admin-1' }),
       presence: { isPlatformAvailable: () => true, isActivated: () => true, version: () => 0 },

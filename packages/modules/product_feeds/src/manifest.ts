@@ -264,6 +264,19 @@ export const manifest = defineModuleManifest({
   activation: { settingCode: PRODUCT_FEED_SETTING_CODES.ACTIVATION, default: true },
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  /**
+   * Issue #631 (#86) — the feed form's three state refusals, which were `400
+   * VALIDATION_FAILED` with an English `field: message` literal the envelope
+   * never replaces. They are this module's first declared codes: the five older
+   * `PRODUCT_FEED_*` codes stay with `catalog`, where the deleted prefix chain
+   * routed them, and this module raises them with no sentence. No tokens: each
+   * code is one refusal, and its values travel as scalar `details`.
+   */
+  errorCodes: [
+    { code: 'PRODUCT_FEED_CURRENCY_NOT_OFFERED' },
+    { code: 'PRODUCT_FEED_LANGUAGE_INACTIVE' },
+    { code: 'PRODUCT_FEED_SLUG_TAKEN' },
+  ],
   permissions: [
     {
       code: PRODUCT_FEEDS_READ_PERMISSION,
@@ -286,7 +299,8 @@ export const manifest = defineModuleManifest({
       icon: 'Rss',
       targetRoute: '/product-feeds',
       requiredPermission: PRODUCT_FEEDS_READ_PERMISSION,
-      keywords: ['feed', 'feed produktowy', 'google merchant', 'meta', 'katalog', 'xml', 'csv'],
+      keywords: ['feed', 'google merchant', 'meta', 'xml', 'csv'],
+      keywordsKey: 'actions.openProductFeeds.keywords',
       weight: 250,
     },
     {
@@ -296,7 +310,8 @@ export const manifest = defineModuleManifest({
       icon: 'PlusCircle',
       targetRoute: '/product-feeds/new',
       requiredPermission: PRODUCT_FEEDS_WRITE_PERMISSION,
-      keywords: ['feed', 'nowy feed', 'feed produktowy', 'google merchant', 'meta'],
+      keywords: ['feed', 'google merchant', 'meta'],
+      keywordsKey: 'actions.createProductFeed.keywords',
       weight: 251,
     },
     {
@@ -306,7 +321,8 @@ export const manifest = defineModuleManifest({
       icon: 'FileText',
       targetRoute: '/product-feeds/templates',
       requiredPermission: PRODUCT_FEEDS_READ_PERMISSION,
-      keywords: ['szablon feedu', 'template', 'feed', 'xml', 'csv', 'pola'],
+      keywords: ['template', 'feed', 'xml', 'csv'],
+      keywordsKey: 'actions.openFeedTemplates.keywords',
       weight: 252,
     },
     {
@@ -318,7 +334,8 @@ export const manifest = defineModuleManifest({
       icon: 'Upload',
       targetRoute: '/product-feeds/templates/import',
       requiredPermission: PRODUCT_FEEDS_WRITE_PERMISSION,
-      keywords: ['import', 'szablon feedu', 'template', 'wczytaj', 'json'],
+      keywords: ['import', 'template', 'json'],
+      keywordsKey: 'actions.importFeedTemplate.keywords',
       weight: 253,
     },
     {
@@ -333,7 +350,8 @@ export const manifest = defineModuleManifest({
       // mapping needs the write one, and the palette row is the way in rather
       // than the save (issue #232).
       requiredPermission: PRODUCT_FEEDS_READ_PERMISSION,
-      keywords: ['taksonomia', 'mapowanie kategorii', 'kategorie', 'google merchant', 'meta'],
+      keywords: ['google merchant', 'meta'],
+      keywordsKey: 'actions.openFeedCategoryMapping.keywords',
       weight: 254,
     },
     {
@@ -346,14 +364,8 @@ export const manifest = defineModuleManifest({
       icon: 'Download',
       targetRoute: '/product-feeds/taxonomy-revisions',
       requiredPermission: PRODUCT_FEEDS_READ_PERMISSION,
-      keywords: [
-        'aktualizacja taksonomii',
-        'nowa wersja',
-        'wersja taksonomii',
-        'pobieranie taksonomii',
-        'taxonomy update',
-        'revision',
-      ],
+      keywords: ['taxonomy update', 'revision'],
+      keywordsKey: 'actions.openFeedTaxonomyRevisions.keywords',
       weight: 255,
     },
   ],

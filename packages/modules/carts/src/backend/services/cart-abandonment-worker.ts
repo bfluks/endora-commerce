@@ -3,6 +3,7 @@ import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type { CartAuditService } from './cart-audit-service.js';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
+import { anyRowExists, type WorkRows } from './scheduled-work-probe.js';
 
 /**
  * CartAbandonmentWorker — feature 027 US5.
@@ -59,7 +60,39 @@ import { withSystemScope } from '@endora-commerce/platform/tenancy';
  * untouched and eligible for the next tick. The notification e-mail is the one
  * thing that stays best-effort — it is dispatched after the batch is durable,
  * exactly as it was after the per-cart write before.
+ *
+ * ## Orphaned working baskets (issue #602)
+ *
+ * A working basket (`status = 'working'`, issue #169) is the cart an order is
+ * placed from when the request names the lines; it lives for the length of one
+ * placement, which completes it or discards it. A process that dies between
+ * the two leaves it behind, and nothing ever reads it again. Each sweep removes
+ * the working baskets created more than {@link ORPHANED_WORKING_BASKET_MINUTES}
+ * ago, lines and audit rows with them (both `on delete cascade`).
+ *
+ * The predicate is `status = 'working'` and nothing else, so no buyer's basket
+ * — active, abandoned, completed or rejected — can match it, however old. It
+ * runs whether or not the abandonment threshold is enabled: that setting is a
+ * business choice about buyers' baskets, and this is housekeeping of rows no
+ * buyer can see.
+ *
+ * ## The clock (issue #1119)
+ *
+ * The sweep runs on a BullMQ Job Scheduler the module installs itself —
+ * `workers/cart-abandonment-sweep-worker.ts` — and the `carts abandonment-sweep`
+ * command stays for a manual pass. The scheduled tick asks
+ * {@link CartAbandonmentWorker.hasSweepWork} first, with no tenant context, and
+ * enters the system scope (and so writes its `tenant.escape_hatch` audit row)
+ * only when something is due; the pass it then runs is
+ * {@link CartAbandonmentWorker.sweepInScope}, which enters no second scope.
  */
+
+/**
+ * Age after which a working basket is taken to be orphaned. A placement reads
+ * and completes its working basket inside the request that created it, so a
+ * live one is seconds old; an hour leaves a wide margin over any request.
+ */
+export const ORPHANED_WORKING_BASKET_MINUTES = 60;
 
 /**
  * Eligible carts read, flipped, audited and flushed per round trip.
@@ -97,110 +130,175 @@ export interface CartAbandonmentWorkerDeps {
 export interface CartAbandonmentSweepResult {
   abandonedCount: number;
   notifiedCount: number;
+  /** Orphaned working baskets removed by this sweep (issue #602). */
+  workingBasketsRemoved: number;
 }
 
 export class CartAbandonmentWorker {
   constructor(private readonly deps: CartAbandonmentWorkerDeps) {}
 
+  /**
+   * Whether a pass at `now` has anything to do — the scheduled tick's question,
+   * asked **outside any tenant scope** (issue #1119;
+   * `docs/docs/architecture/tenant-scoping.md` § *A scheduled tick with nothing
+   * to do enters no scope*).
+   *
+   * It stays legitimate by learning one bit: it goes through `anyRowExists`,
+   * which writes the statement itself and returns a boolean, so no row, id or
+   * count of any Organization's cart leaves it. The setting it reads first is
+   * platform configuration. Its answer is never handed to the pass, which
+   * re-reads everything inside the scope.
+   */
+  async hasSweepWork(now: Date = new Date()): Promise<boolean> {
+    const inactivityMinutes = await this.deps.resolveInactivityMinutes();
+    return anyRowExists(this.deps.emFactory(), this.dueRows(now, inactivityMinutes));
+  }
+
+  /**
+   * The carts a pass at `now` would act on, as row sources: orphaned working
+   * baskets always, and idle active carts while the threshold is enabled. The
+   * conditions are the pass's own — `removeOrphanedWorkingBaskets` and the
+   * eligibility filter in {@link sweepInScope} — and
+   * `cart-abandonment-worker.integration.test.ts` holds the two to the same
+   * answer.
+   */
+  dueRows(now: Date, inactivityMinutes: number): WorkRows[] {
+    const rows: WorkRows[] = [
+      {
+        from: `from "carts" where "status" = 'working' and "created_at" < ?`,
+        params: [new Date(now.getTime() - ORPHANED_WORKING_BASKET_MINUTES * 60_000)],
+      },
+    ];
+    if (Number.isFinite(inactivityMinutes) && inactivityMinutes > 0) {
+      rows.push({
+        from:
+          `from "carts" where "status" = 'active' and "last_activity_at" < ?` +
+          ` and "abandonment_notified_at" is null`,
+        params: [new Date(now.getTime() - inactivityMinutes * 60_000)],
+      });
+    }
+    return rows;
+  }
+
+  /** One pass under its own system scope — the CLI command's entry. */
   async sweep(now: Date = new Date()): Promise<CartAbandonmentSweepResult> {
     // Feature 050 — system-wide sweep across all customers; run under a system
     // scope so the Cart reads/writes carry a tenant context (fail-closed guard).
-    return withSystemScope('cart-abandonment sweep', async () => {
-      const inactivityMinutes = await this.deps.resolveInactivityMinutes();
-      if (!Number.isFinite(inactivityMinutes) || inactivityMinutes <= 0) {
-        return { abandonedCount: 0, notifiedCount: 0 };
+    return withSystemScope('cart-abandonment sweep', () => this.sweepInScope(now));
+  }
+
+  /**
+   * One pass, for a caller that has already entered a system scope — the
+   * scheduled consumer, which enters it as the queue's entry point. Entering a
+   * second one here would write a second escape-hatch audit row per tick.
+   */
+  async sweepInScope(now: Date = new Date()): Promise<CartAbandonmentSweepResult> {
+    const em = this.deps.emFactory();
+    const workingBasketsRemoved = await this.removeOrphanedWorkingBaskets(em, now);
+
+    const inactivityMinutes = await this.deps.resolveInactivityMinutes();
+    if (!Number.isFinite(inactivityMinutes) || inactivityMinutes <= 0) {
+      return { abandonedCount: 0, notifiedCount: 0, workingBasketsRemoved };
+    }
+
+    const cutoff = new Date(now.getTime() - inactivityMinutes * 60_000);
+    const batchSize = Math.max(1, this.deps.batchSize ?? DEFAULT_SWEEP_BATCH_SIZE);
+
+    let abandonedCount = 0;
+    let notifiedCount = 0;
+    /** Read once, on the first batch that has work — as it was per sweep. */
+    let recipient: string | null = null;
+
+    for (;;) {
+      const batch = await em.find(
+        Cart,
+        {
+          status: 'active',
+          lastActivityAt: { $lt: cutoff },
+          abandonmentNotifiedAt: null,
+        },
+        { limit: batchSize },
+      );
+      if (batch.length === 0) break;
+
+      if (recipient === null) recipient = await this.deps.resolveNotificationRecipient();
+      const shouldNotify =
+        recipient.trim().length > 0 && Boolean(this.deps.dispatchNotification);
+
+      const lineCounts = await this.countLines(
+        em,
+        batch.map((c) => c.id),
+      );
+
+      for (const cart of batch) {
+        cart.status = 'abandoned';
+        cart.abandonmentNotifiedAt = now;
+      }
+      this.deps.cartAuditService.recordWithin(
+        em,
+        batch.map((cart) => ({
+          cartId: cart.id,
+          actorType: 'sweep' as const,
+          action: 'abandonment_swept' as const,
+          fromState: 'active',
+          toState: 'abandoned',
+          metadata: { lineCount: lineCounts.get(cart.id) ?? 0, inactivityMinutes },
+        })),
+      );
+      // One flush, one transaction: the flip and the rows auditing it.
+      await em.flush();
+      abandonedCount += batch.length;
+
+      // Notification fan-out happens AFTER the batch is durable so a failure
+      // in the e-mail dispatch cannot leave status in a transient state.
+      if (shouldNotify && this.deps.dispatchNotification) {
+        notifiedCount += await this.dispatchFor(batch, recipient, lineCounts);
       }
 
-      const em = this.deps.emFactory();
-      const cutoff = new Date(now.getTime() - inactivityMinutes * 60_000);
-      const batchSize = Math.max(1, this.deps.batchSize ?? DEFAULT_SWEEP_BATCH_SIZE);
+      // The identity map is the other half of the old superlinear cost: every
+      // later flush walked the carts and audit rows of every earlier batch.
+      // Nothing above this line survives the batch, so dropping it is free.
+      em.clear();
 
-      let abandonedCount = 0;
-      let notifiedCount = 0;
-      /** Read once, on the first batch that has work — as it was per sweep. */
-      let recipient: string | null = null;
+      if (batch.length < batchSize) break;
+    }
 
-      for (;;) {
-        const batch = await em.find(
-          Cart,
-          {
-            status: 'active',
-            lastActivityAt: { $lt: cutoff },
-            abandonmentNotifiedAt: null,
-          },
-          { limit: batchSize },
-        );
-        if (batch.length === 0) break;
+    return { abandonedCount, notifiedCount, workingBasketsRemoved };
+  }
 
-        if (recipient === null) recipient = await this.deps.resolveNotificationRecipient();
-        const shouldNotify =
-          recipient.trim().length > 0 && Boolean(this.deps.dispatchNotification);
-
-        const lineCounts = await this.countLines(
-          em,
-          batch.map((c) => c.id),
-        );
-
-        for (const cart of batch) {
-          cart.status = 'abandoned';
-          cart.abandonmentNotifiedAt = now;
-        }
-        this.deps.cartAuditService.recordWithin(
-          em,
-          batch.map((cart) => ({
-            cartId: cart.id,
-            actorType: 'sweep' as const,
-            action: 'abandonment_swept' as const,
-            fromState: 'active',
-            toState: 'abandoned',
-            metadata: { lineCount: lineCounts.get(cart.id) ?? 0, inactivityMinutes },
-          })),
-        );
-        // One flush, one transaction: the flip and the rows auditing it.
-        await em.flush();
-        abandonedCount += batch.length;
-
-        // Notification fan-out happens AFTER the batch is durable so a failure
-        // in the e-mail dispatch cannot leave status in a transient state.
-        if (shouldNotify && this.deps.dispatchNotification) {
-          notifiedCount += await this.dispatchFor(batch, recipient, lineCounts);
-        }
-
-        // The identity map is the other half of the old superlinear cost: every
-        // later flush walked the carts and audit rows of every earlier batch.
-        // Nothing above this line survives the batch, so dropping it is free.
-        em.clear();
-
-        if (batch.length < batchSize) break;
-      }
-
-      return { abandonedCount, notifiedCount };
-    });
+  /**
+   * Delete the working baskets older than {@link ORPHANED_WORKING_BASKET_MINUTES}
+   * (issue #602). One statement; lines and audit rows go with each cart through
+   * their `on delete cascade` foreign keys.
+   */
+  private async removeOrphanedWorkingBaskets(em: EntityManager, now: Date): Promise<number> {
+    const cutoff = new Date(now.getTime() - ORPHANED_WORKING_BASKET_MINUTES * 60_000);
+    // command-coverage-ignore: removes the transient working state of a
+    // placement that never finished; nothing was placed and nothing is recorded.
+    return em.nativeDelete(Cart, { status: 'working', createdAt: { $lt: cutoff } });
   }
 
   /**
    * Lines per cart for a whole batch, as one grouped count.
    *
-   * Executed through `em.execute` rather than awaited on the knex builder, so
-   * it runs on the EntityManager's transaction context — a bare knex call would
-   * take its own connection and, inside a wrapping transaction, would not see
-   * the rows the caller has written but not committed.
+   * Executed through `em.execute`, so it runs on the EntityManager's
+   * transaction context — a statement on a connection of its own would not,
+   * inside a wrapping transaction, see the rows the caller has written but not
+   * committed.
    */
   private async countLines(
     em: EntityManager,
     cartIds: readonly string[],
   ): Promise<Map<string, number>> {
     if (cartIds.length === 0) return new Map();
-    const knex = em.getKnex();
     // The table name comes from the entity's own metadata rather than a
-    // literal, so a rename stays a one-file change.
+    // literal, so a rename stays a one-file change; it goes in as an
+    // identifier placeholder (`??`), every id as a `?` value placeholder.
     const table = em.getMetadata().get(CartItem).tableName;
+    const ids = [...cartIds];
     const rows = await em.execute<Array<{ cart_id: string; line_count: string | number }>>(
-      knex(table)
-        .select('cart_id')
-        .count({ line_count: '*' })
-        .whereIn('cart_id', [...cartIds])
-        .groupBy('cart_id'),
+      `select "cart_id", count(*) as "line_count" from ?? where "cart_id" in (${ids.map(() => '?').join(', ')}) group by "cart_id"`,
+      [table, ...ids],
     );
     return new Map(rows.map((r) => [r.cart_id, Number(r.line_count)]));
   }

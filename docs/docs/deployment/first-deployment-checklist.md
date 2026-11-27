@@ -1,8 +1,8 @@
 ---
-title: First Production Deployment Checklist
+title: First production deployment checklist
 ---
 
-# First Production Deployment Checklist
+# First production deployment checklist
 
 **Status: open. No item on this list has been executed.** Endora Commerce has no production
 deployment yet.
@@ -120,8 +120,8 @@ encryption keys are base64-decoded, so a hex string fails there (64 hex characte
 | --- | --- | --- | --- |
 | `SESSION_COOKIE_SECRET` | `openssl rand -hex 32` | The backend and the worker exit at boot with `SESSION_COOKIE_SECRET must be set in production`. | Any non-empty string is accepted, so a placeholder boots and signs cookies with a public key. |
 | `NEWSLETTER_TOKEN_SECRET` | `openssl rand -base64 32` | Works. Newsletter confirmation and unsubscribe links are signed with `SESSION_COOKIE_SECRET` instead (`packages/platform/src/composition/newsletter-token-secret.ts`), so rotating the session key invalidates every link still waiting in an inbox. Set it so the two can rotate independently. | Any non-empty string is accepted as the signing key. |
-| `SETTINGS_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (must decode to 32 bytes) | The backend boots and logs `[settings] SETTINGS_SECRET_ENCRYPTION_KEY is not set`. Secret settings and secret credential fields (for example an API token a module stores) cannot be saved or read until the key is set and the backend restarted. | Not checked at boot. The backend starts **without a warning**, then every save of a secret setting fails with `SETTINGS_SECRET_ENCRYPTION_KEY is misconfigured — it must decode to 32 bytes (got N)`, raised by the `credentials` module. |
-| `MFA_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (must decode to 32 bytes) | The `mfa` module serves its screens and refuses every enrolment, so no administrator can turn on a second factor (D4). | With `mfa` installed, the backend does not boot: `MFA_SECRET_ENCRYPTION_KEY must decode to 32 bytes (got N)`. |
+| `SETTINGS_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (must decode to 32 bytes) | The backend boots and logs `[settings] SETTINGS_SECRET_ENCRYPTION_KEY is not set`. Secret settings and secret credential fields (for example an API token a module stores) cannot be saved or read until the key is set and the backend restarted. A secret setting that still stores a plaintext value (one saved before its type became secret) also gets a warning on every boot, naming its code and saying the key is absent; the value is encrypted at the first boot with a valid key. | Not checked at boot when no secret setting stores plaintext: the backend then starts **without a warning**. When one does, every boot logs a warning naming each such code and saying the key is malformed. Either way, every save of a secret setting fails with `SETTINGS_SECRET_ENCRYPTION_KEY is misconfigured — it must decode to 32 bytes (got N)`, raised by the `credentials` module. |
+| `MFA_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (must decode to 32 bytes) | The `mfa` module serves its screens and refuses every enrolment, so no administrator can turn on a second factor (D4). Turning on `mfa.admin.totp_enforced` is refused with `409 MFA_ENFORCEMENT_UNAVAILABLE`; if it is already on, it is not applied: **Settings** shows *Not in force: no encryption key* under it, and every boot logs an error saying so. The same holds for the customer requirements: turning on `mfa.storefront.totp_enforced`, or an organization's policy, is refused with the same code, and either one already on is not applied. No second factor is asked for at all: a role that requires one is not applied either (the Roles screen says so), and accounts that enrolled while a key was set sign in without a code. | With `mfa` installed, the backend does not boot: `MFA_SECRET_ENCRYPTION_KEY must decode to 32 bytes (got N)`. |
 | `ASSETS_LIBRARY_HMAC_KEY` | `openssl rand -hex 32` | The backend boots. Every request that signs or checks a private asset link fails with `ASSETS_LIBRARY_HMAC_KEY is unset`. | A value starting with `change-me` — the placeholder older env examples carried — is refused at the first private asset link, as an unset key is: `ASSETS_LIBRARY_HMAC_KEY is still the placeholder an env example carried`. Any other value that is not hex is used as raw bytes and accepted. |
 | `MEILI_MASTER_KEY` | `openssl rand -base64 32` | `deploy/compose.prod.yml` runs Meilisearch with `MEILI_ENV: production`, which refuses to start without a master key. The backend reads the same value as `MEILISEARCH_API_KEY`. | Meilisearch accepts any key of at least 16 bytes, so a placeholder gives a publicly known key to the search engine. |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 32` (hex, not base64: the value goes unescaped into `DATABASE_URL`, where a `/` or `+` breaks the URL) | `deploy/compose.prod.yml` falls back to `b2b` (`${POSTGRES_PASSWORD:-b2b}`). | A placeholder works and is publicly known. |
@@ -162,7 +162,9 @@ both failed silently. Both have since been fixed, in different ways:
   plus the analytics and marketing modules). Unset, the revalidator is a silent no-op and the
   storefront endpoint answers 401: content changes do not appear until the fetch cache expires
   on its own. It is now in `deploy/.env.prod.example` and handed to **both** the backend and the
-  storefront container — the same value, or the seam does not close.
+  storefront container — the same value, or the seam does not close. Two different values are
+  logged by the backend as `[storefront-revalidate] refused` with status `401`, at most once a
+  minute.
 
 **Do (engineer).** Generate `REVALIDATE_SECRET` (`openssl rand -hex 32`) into `deploy/.env`.
 Confirm `API_DOMAIN` is the real public API domain.
@@ -171,6 +173,19 @@ Confirm `API_DOMAIN` is the real public API domain.
 shows the public API origin, not `localhost`. In the Admin UI, a gateway's configuration screen
 shows a callback URL on that domain, and that URL is what is registered in the provider's own
 portal. Publish a category change and confirm it appears on the storefront without waiting.
+
+**The admin panel's address, `ADMIN_BASE_URL`.** It is the absolute `http`/`https` address the
+admin panel is served at, with its path when it has one (`https://shop.example.com/admin`), and
+every e-mail the platform sends an administrator links into the panel from it.
+`compose.prod.yml` derives it from `ADMIN_DOMAIN`; a scaffolded instance's `.env` asks for it.
+It is optional: unset, those e-mails carry no link to the panel, and a sign-in redirect to the
+panel carries no absolute address (outside production it falls back to `http://localhost:3002`).
+A value that is set but is not an absolute `http`/`https` address with a host, or that has a query
+or a fragment (`admin.example.com`, `/admin`), **refuses the boot** in every environment, with
+an error naming the variable and that rule (`packages/platform/src/kernel/admin-base-url.ts`,
+called first thing in `composeApp()`).
+Confirm `ADMIN_DOMAIN` is the real admin domain, or set `ADMIN_BASE_URL` to the panel's address
+when the panel is served somewhere else.
 
 ### B3. Point `SMTP_URL` at a real relay
 
@@ -195,7 +210,7 @@ verification e-mail in a real inbox. Do this before the client's first customer 
 **Why.** The migration history was rebuilt and the frozen-name map retired on the same
 no-production-deployment grounds — the ordering of the pre-`20260801T000000` block is
 uncorrected by design
-(`backend/src/db/migration-order.ts`), and the chain has only ever been applied to databases
+(`packages/platform/src/db/migration-order.ts`), and the chain has only ever been applied to databases
 that were free to be thrown away. The first production database is the first one that has to
 keep its rows.
 
@@ -205,13 +220,20 @@ the same order, that `deploy/compose.prod.yml` runs as `backend-migrate` and `ba
 before the API starts:
 
 ```bash
+# In the root of the instance:
+DATABASE_URL=…/b2b_rehearsal pnpm run setup
+
+# In a checkout of the Endora Commerce repository:
 DATABASE_URL=…/b2b_rehearsal pnpm --filter backend run setup
 ```
 
-`setup` (in `backend/package.json`) is `db:fresh` followed by `module:install --all`. Running
-`db:fresh` alone is not a rehearsal of the deployment: a database whose first act after the
-migrations is a boot never runs its install hooks. Never run `db:fresh`, `setup` or `db:reset`
-without an explicit `DATABASE_URL`: unprefixed they rebuild the developer's own database, and
+An instance's `setup` is `generate` (when the instance has one), `build`, `migrate` and
+`module:install --all`; the repository's (in `backend/package.json`) is `db:fresh` followed by
+`module:install --all`. On an empty database both are the whole chain followed by every install
+hook. Running the migrations alone (`migrate`, `db:fresh`) is not a rehearsal of the deployment:
+a database whose first act after the migrations is a boot never runs its install hooks. Never run
+`setup`, `db:fresh` or `db:reset` without an explicit `DATABASE_URL`: unprefixed they work on the
+developer's own database — in a checkout `db:fresh`, `setup` and `db:reset` rebuild it, and
 `db:reset` also runs the demo seed.
 
 **Verify.** Both steps complete with no ordering failure and no failed install hook, and the
@@ -320,8 +342,9 @@ Those two, and no others. The promotion rule builder and the PWA push-audience b
 show a group list, but each reads it through **its own** module's endpoint
 (`/api/v1/admin/promotions/rule-targets/customer-groups`,
 `/api/v1/admin/pwa/rule-targets/customer-groups`) behind that module's own read permission, so
-they are unaffected by this grant. The price-list rule builder was the exception until
-recently; it now reads its list behind `price_lists:read`, which is the subject of D3.
+they are unaffected by this grant. The price-book editor's customer-group picker is the same
+kind of case: it reads `GET /api/v1/admin/price-books/targets/customer-groups` behind
+`price_lists:read`, which is the subject of D3.
 
 The same grant can be made over the API:
 `PUT /api/v1/admin/admin-roles/<code>` with the role's full permission list including the new
@@ -335,68 +358,95 @@ grant must still get `403` — that is the other half of the proof.
 
 ### D3. Grant `price_lists:read` and `price_lists:write`
 
-**Why.** The `price_lists` module used to declare no permissions of its own: all 25 of
-its admin routes were gated by `catalog:write`. A role granted `catalog:write` so somebody could
-edit product descriptions could also create, edit and delete price lists — that is, change what
-customers pay. Nobody chose that boundary; it was the side effect of a missing declaration. The
-module now owns `price_lists:read` and `price_lists:write`
-(`packages/modules/price_lists/src/manifest.ts`), split by what each route does rather than
-mapped wholesale: reading a list, its product roster, its brackets, the display-mode overrides
-and the rule-target pickers is `:read`; anything that persists is `:write`.
+**Why.** Pricing has permissions of its own, separate from the catalogue: a role granted
+`catalog:write` so somebody can edit product descriptions must not thereby be able to change what
+customers pay. The `price_lists` module declares `price_lists:read` and `price_lists:write`
+(the `price_lists` module's manifest, `src/manifest.ts`), split by what each route does: seeing price
+books, their prices, base prices, the price explainer and *Pricing settings*, and the pickers
+behind them, is `:read`; anything that persists — books, rows, base prices, display modes, the
+list-price setting — is `:write`. The admin API is `/api/v1/admin/price-books/…`, with the
+display-mode overrides under `/api/v1/admin/pricing/display-mode-overrides`.
 
-The same change closed the last surviving legacy gate:
-`GET /api/v1/admin/pricing/rule-targets/customer-groups` answered on `catalog:write`, so a
-catalogue editor could enumerate the client's customer groups. It now answers on
-`price_lists:read`, matching its `promotions` and `pwa` twins.
-
-**Nothing grants the new codes automatically**, and — as in D2 — a compatibility gate accepting
-`catalog:write` alongside them was offered and refused, because it keeps a wrong permission
-alive past the moment it stopped being right. A role holding only `catalog:write` therefore has
-**no** pricing access at all: the sidebar entry disappears, `/price-lists` 403s, and the
-**Pricing** tab on the product editor renders its error state instead of the linked price lists
-(it reads `GET /api/v1/admin/products/:productId/price-lists`, now a `price_lists:read` route).
-The wildcard `*` role is unaffected.
+**Nothing grants the codes automatically**, and a compatibility gate accepting `catalog:write`
+alongside them was offered and refused, because it keeps a wrong permission alive past the moment
+it stopped being right. A role holding only `catalog:write` therefore has **no** pricing access at
+all: the **Price books** sidebar entry and the ⌘K actions disappear, `/price-lists` answers as
+forbidden, and the product editor's **Pricing** tab shows no base prices (the panel reads
+`GET /api/v1/admin/price-books/base-prices`, a `price_lists:read` route). The wildcard `*` role is
+unaffected.
 
 **Do (operator).** On `/admin-roles`, for every role that is not `*`, decide pricing explicitly:
 
 | A role whose holder… | needs |
 | --- | --- |
-| manages price lists, brackets, rules or display-mode overrides (`/price-lists`, `/price-lists/:id`, `/price-lists/display-modes`) | `price_lists:read` + `price_lists:write` |
-| only needs to see a quoted price explained — reads price lists, or opens the **Pricing** tab on a product | `price_lists:read` |
-| works in another module's screen that offers price-list or currency pickers — they read `GET /api/v1/admin/price-lists-engine` and `GET /api/v1/admin/pricing/rule-targets/currencies` | `price_lists:read`, on top of that module's own permissions |
+| manages price books, base prices or display modes (`/price-lists`, `/price-lists/new`, `/price-lists/:id`, `/price-lists/display-modes`, the product's *Base prices* panel) | `price_lists:read` + `price_lists:write`, and `catalog:read` to add product lines through the product browser (the role editor shows the shortfall) |
+| only needs to see a quoted price explained — reads price books, opens the price explainer or the product's *Pricing* tab | `price_lists:read` |
+| prefills agreed prices on the admin quote-request screens, which call `POST /api/v1/admin/price-books/resolve` | `price_lists:read`, on top of that module's own permissions (`rfqs:handle` declares it as required) |
 | edits catalogue content and must **not** change prices | neither — leave `catalog:write` as it is |
 
-The last row is the point of the change: after this, `catalog:write` means catalogue content and
-nothing else. Review every existing role that holds it and decide which of the first two rows,
-if either, it also belongs in.
+The last row is the point of the split: `catalog:write` means catalogue content and nothing else.
+Review every existing role that holds it and decide which of the first rows, if any, it also
+belongs in.
 
 The same grant can be made over the API:
 `PUT /api/v1/admin/admin-roles/<code>` with the role's full permission list including the new
 codes.
 
-**Verify.** Sign in as a holder of each edited role and confirm four things: the **Price lists**
-entry appears in the sidebar; `GET /api/v1/admin/price-lists-engine` returns `200` rather than
-`403`; a role granted only `price_lists:read` gets `403` from
-`POST /api/v1/admin/price-lists-engine`, so the read/write split is real; and a role holding
-`catalog:write` and neither pricing code gets `403` from `GET /api/v1/admin/price-lists-engine`
-and from `GET /api/v1/admin/pricing/rule-targets/customer-groups` — that negative case is the
-half that proves the boundary moved, not just widened.
+**Verify.** Sign in as a holder of each edited role and confirm four things: the **Price books**
+entry appears in the sidebar and `⌘K` → "price books" offers the action; `GET
+/api/v1/admin/price-books` returns `200` rather than `403`; a role granted only `price_lists:read`
+gets `403` from `POST /api/v1/admin/price-books`, so the read/write split is real; and a role
+holding `catalog:write` and neither pricing code gets `403` from `GET /api/v1/admin/price-books`
+and from `GET /api/v1/admin/price-books/targets/customer-groups` — that negative case is the half
+that proves the boundary holds.
 
-### D4. Turn on two-factor authentication for the Admin UI
+### D4. Turn on two-step verification for the Admin UI
 
 **Why.** The MFA module is active by default, but every capability inside it ships **off**:
 `mfa.admin.totp_enabled` and `mfa.admin.totp_enforced` both default to `false`
 (`packages/modules/mfa/src/manifest.ts:37-51`). A deployment that changes nothing has
 password-only admin access on a public domain.
 
-**Do (operator + engineer).** Set `MFA_SECRET_ENCRYPTION_KEY` (B1), then allow admin 2FA,
+**Do (operator + engineer).** Set `MFA_SECRET_ENCRYPTION_KEY` (B1), then allow admin two-step verification,
 enrol every administrator, and only then enforce it — enforcing before enrolment locks
 everybody out.
 
 **Verify.** A second sign-in attempt asks for the code, and an account with no enrolment is
 refused once enforcement is on. While enforcement is on, `/platform/modules` also refuses to
 switch `mfa` off (`409 MFA_DEACTIVATION_BLOCKED`): turn enforcement off first if the module
-really has to go.
+really has to go. Without `MFA_SECRET_ENCRYPTION_KEY`, enforcement cannot be turned on
+(`409 MFA_ENFORCEMENT_UNAVAILABLE`).
+
+### D5. Register the federated sign-in redirect URIs, if you offer Google or Microsoft sign-in
+
+**Why.** The provider sends the browser back to the **backend**, at an address it must already
+know: a redirect URI that was not registered, or that differs from `BACKEND_PUBLIC_URL` in scheme,
+host or port, makes the provider refuse every sign-in. A storefront sign-in then returns the buyer
+to the storefront of the sales channel it started on — the channel's **Storefront URL** setting
+(`sales_channels.storefront_url`), else `STOREFRONT_BASE_URL` — and finishes there, so that
+address must be the host the channel's buyers actually use.
+
+**Do (engineer).** Create an OAuth client with each provider you offer, set
+`MFA_OAUTH_GOOGLE_CLIENT_ID` / `MFA_OAUTH_GOOGLE_CLIENT_SECRET` and
+`MFA_OAUTH_MICROSOFT_CLIENT_ID` / `MFA_OAUTH_MICROSOFT_CLIENT_SECRET` (and
+`MFA_OAUTH_MICROSOFT_TENANT`, `common` by default) in the backend's environment, and register
+the redirect URIs of the surfaces you enable:
+
+```text
+${BACKEND_PUBLIC_URL}/api/v1/auth/customer/oauth/google/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/customer/oauth/microsoft/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/admin/oauth/google/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/admin/oauth/microsoft/callback
+```
+
+**Do (operator).** Switch the providers on per surface (`mfa.storefront.google_enabled`,
+`mfa.storefront.microsoft_enabled` per sales channel, `mfa.admin.google_enabled`,
+`mfa.admin.microsoft_enabled`), and set **Storefront URL** on every sales channel served on a
+host of its own.
+
+**Verify.** On every storefront host, a buyer who signs in with each provider lands signed in on
+that same host, with the basket filled before signing in still there; in the Admin UI, an
+administrator does too. The `mfa` module page has the details.
 
 ---
 
@@ -416,10 +466,12 @@ storefront elements whether or not anyone asked for it.
 they are not using. Switching off is non-destructive and reversible: it drops no data,
 configuration, permissions or schema. **Do not rely on the confirmation prompt to tell you what
 a deactivation costs** — today it only names the module
-(`admin/src/modules/platform/ModuleActivationControl.tsx:88`). What breaks when a module goes
-off is recorded in the deactivation-consequence ledger, which
-`pnpm --filter backend run check:port-dependencies` builds; ask an engineer to read it for any
-module the client is not obviously done with.
+(`packages/admin-shell/src/modules/platform/ModuleActivationControl.tsx:112`). What breaks when a module goes
+off is recorded in the
+[deactivation-consequence ledger](../architecture/kernel.md#the-deactivation-consequence-ledger);
+ask an engineer to read it for any module the client is not obviously done with. An instance has
+no command that builds it: it is a static check over the platform's module tree, run in a checkout
+of the Endora Commerce repository as `pnpm --filter backend run check:port-dependencies`.
 
 **Verify.** For each module switched off: its sidebar entry is gone, its palette actions are
 gone, and its API answers `503 MODULE_DISABLED`. For each left on, somebody can name why.

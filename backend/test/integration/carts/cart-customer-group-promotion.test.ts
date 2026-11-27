@@ -53,7 +53,7 @@ describe('cart — customer-group targeted promotions (issue #177)', () => {
       code: 'i177-wholesale',
       name: 'Wholesale (issue 177)',
     });
-    await em.persistAndFlush([vip, wholesale]);
+    await em.persist([vip, wholesale]).flush();
     vipGroupId = vip.id;
 
     const member = await em.findOne(CustomerAccount, { id: TEST_CUSTOMER_ID });
@@ -62,7 +62,7 @@ describe('cart — customer-group targeted promotions (issue #177)', () => {
     otherGroup!.customerGroupId = wholesale.id;
     const noGroup = await em.findOne(CustomerAccount, { id: TEST_CUSTOMER_EMPTY_ID });
     noGroup!.customerGroupId = null;
-    await em.persistAndFlush([member!, otherGroup!, noGroup!]);
+    await em.persist([member!, otherGroup!, noGroup!]).flush();
 
     for (const cookies of [MEMBER, OTHER_GROUP, NO_GROUP]) {
       const add = await h.app.inject({
@@ -82,7 +82,10 @@ describe('cart — customer-group targeted promotions (issue #177)', () => {
   beforeEach(async () => {
     const conn = h.em().getConnection();
     await conn.execute('truncate table promotions cascade');
-    await conn.execute('update carts set applied_promotion_code = null');
+    // Only the three baskets this file fills (issue #607).
+    await conn.execute('update carts set applied_promotion_code = null where customer_account_id in (?)', [
+      [TEST_CUSTOMER_ID, TEST_CUSTOMER_RFQ_ID, TEST_CUSTOMER_EMPTY_ID],
+    ]);
   });
 
   async function createPromotion(payload: Record<string, unknown>): Promise<void> {

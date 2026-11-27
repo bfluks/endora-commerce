@@ -43,9 +43,9 @@ describe('check-channel-resolution / analyzeSource', () => {
     expect(v.some((x) => x.kind === 'request-channel-reresolution')).toBe(true);
   });
 
-  it('does NOT flag reading channel.isPublic off an already-resolved channel', () => {
+  it('does NOT flag reading a display property off an already-resolved channel', () => {
     const v = analyzeSource(
-      `const showPrice = channel?.isPublic ?? true; const c = request.salesChannel;`,
+      `const open = channel?.anonymousAccess ?? true; const c = request.salesChannel;`,
       SURFACE,
     );
     expect(v).toHaveLength(0);

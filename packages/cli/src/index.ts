@@ -12,6 +12,8 @@ export {
 export {
   bundleEntries,
   emitModuleFiles,
+  entitySource,
+  initMigrationSource,
   entityClassOf,
   entityFileOf,
   migrationClassOf,
@@ -45,6 +47,18 @@ export {
   type ScaffoldPermission,
   type TenantScope,
 } from './new-module/spec.js';
+export {
+  emitOverlayModuleFiles,
+  planOverlayModule,
+  resolveOverlayHost,
+  type OverlayHost,
+  type OverlayModulePlan,
+} from './new-module/overlay.js';
+export {
+  runNewMigration,
+  type NewMigrationOptions,
+  type NewMigrationResult,
+} from './new-migration/index.js';
 export {
   defaultModulesRootOf,
   findRepoRoot,
@@ -125,9 +139,13 @@ export {
   GenerateHostError,
   GenerateInputError,
   runGenerate,
+  type DeclaredReleaseModule,
   type GeneratedArtefact,
   type GenerateOptions,
   type GenerateResult,
+  type GenerateStep,
+  type ReleaseModuleNeed,
+  type UnlistedReleaseModule,
 } from './generate/index.js';
 export {
   resolveStorefrontSource,

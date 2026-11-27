@@ -22,10 +22,10 @@ import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product } from '../../helpers/package-entities.js';
 import { StockLevel } from '../../helpers/package-entities.js';
-import { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
-import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
 import { ApiKey } from '../../helpers/package-entities.js';
 import { Order } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 062 / T020 — `POST /api/v1/external/orders` + the orders half of the
@@ -124,11 +124,14 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     channelId = channel.id;
     await h.salesChannels.cache.invalidate('ext-orders');
+    // Issue #699 — the intake places only on one of the bound Organization's
+    // active assigned channels.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['ext-orders']);
+    await addOrganizationChannels(h, TEST_SUSPENDED_ORGANIZATION_ID, ['ext-orders']);
 
     // A product with no resolvable price anywhere (no bracket, no default).
     const unpriced = em.create(Product, {
@@ -136,13 +139,13 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
       slug: 'ext-noprice-product',
       type: 'simple',
       status: 'active',
-      name: { 'en-US': 'Unpriceable product' },
-      description: { 'en-US': '' },
+      name: 'Unpriceable product',
+      description: '',
       visibility: 'public',
       manageStock: false,
       attributeValues: {},
     });
-    await em.persistAndFlush(unpriced);
+    await em.persist(unpriced).flush();
 
     // Publish product 101 + the unpriced product on the bound channel.
     await em.getConnection().execute(
@@ -150,23 +153,13 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
       [channelId, SEED_PRODUCT_101_ID, channelId, unpriced.id],
     );
 
-    // Org-targeted price list — the intake must charge the ORG price (100),
-    // not the channel default (19.99).
-    const priceLists = new PriceListService(() => h.em(), undefined, undefined, undefined, neighbourReadPorts(() => h.em()));
-    const list = await priceLists.create({
-      name: 'Org A intake base',
-      type: 'base',
-      applicationRule: {
-        kind: 'criterion',
-        type: 'organization',
-        values: [TEST_ORGANIZATION_ID],
-      },
+    // Organization price book — the intake must charge the ORG price (100),
+    // not the base price (19.99).
+    await seedPriceBookSql(em, {
+      name: 'Org A intake',
+      audience: { organizations: [TEST_ORGANIZATION_ID] },
+      rows: [{ productId: SEED_PRODUCT_101_ID, fixed: '100.00' }],
     });
-    await priceLists.addProduct(list.id, SEED_PRODUCT_101_ID);
-    await priceLists.replaceBrackets(list.id, SEED_PRODUCT_101_ID, {
-      PLN: [{ minQuantity: 1, maxQuantity: null, amount: '100.00' }],
-    });
-    await priceLists.activate(list.id);
 
     boundToken = await mint({
       name: 'Intake key A',
@@ -204,7 +197,7 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
       lastFour: LEGACY_ORDERS_TOKEN.slice(-4),
       scopes: ['orders:write', 'orders:read'],
     });
-    await em.persistAndFlush(legacy);
+    await em.persist(legacy).flush();
   });
 
   afterAll(async () => {
@@ -298,7 +291,8 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
     const body = res.json() as {
       error: { code: string; details: Array<{ path: string; issue: string }> };
     };
-    expect(body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    // Its own code since issue #627; the per-line array is unchanged.
+    expect(body.error.code).toBe(ERROR_CODES.ORDER_INTAKE_LINES_REFUSED);
     const issues = body.error.details;
     expect(issues.some((d) => d.path === 'lines.1.sku' && d.issue === ERROR_CODES.SKU_NOT_IN_ASSORTMENT)).toBe(true);
     expect(issues.some((d) => d.path === 'lines.2.sku' && d.issue === ERROR_CODES.SKU_NOT_IN_ASSORTMENT)).toBe(true);
@@ -318,7 +312,7 @@ describe('POST /api/v1/external/orders — contract (062 / T020)', () => {
     const body = res.json() as {
       error: { code: string; details: Array<{ path: string; issue: string }> };
     };
-    expect(body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(body.error.code).toBe(ERROR_CODES.ORDER_INTAKE_LINES_REFUSED);
     expect(
       body.error.details.some(
         (d) => d.path === 'lines.0.sku' && d.issue === ERROR_CODES.PRICE_UNAVAILABLE,

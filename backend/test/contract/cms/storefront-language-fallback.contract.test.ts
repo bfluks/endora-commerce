@@ -23,10 +23,9 @@ describe('CMS storefront language fallback (T062)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
   });
 
   afterAll(async () => {

@@ -4,6 +4,8 @@ import type {
   DocumentTypeRegistryPort,
   CatalogAttributeReadPort,
   CatalogGalleryPort,
+  CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   ListingPricePort,
@@ -12,7 +14,6 @@ import type {
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { ComparisonService } from './services/comparison-service.js';
 import { ComparisonAdminService } from './services/comparison-admin.service.js';
@@ -82,10 +83,11 @@ export function registerModule(ctx: ModuleContext): void {
             // same read answers 503 when `catalog` is off, which is the
             // binding dependency this manifest declares.
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
-            // Issue #259 — the channel assortment gate on the add seam. A
-            // kernel registration, so there is no module edge to declare and
-            // nothing to switch off underneath it.
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            // Issue #259 / feature 163 — the availability gate on the add seam
+            // and each column's `available` flag: `catalog`'s answer, with the
+            // kernel's channel membership inside it. `catalog` is already a
+            // binding dependency of this manifest.
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             // Feature 075 / D-87 — the base image of a column, over `catalog`'s
             // batch gallery read. It used to be a three-table join written
             // here, reaching two of `catalog`'s tables and one of
@@ -121,6 +123,9 @@ export function registerModule(ctx: ModuleContext): void {
             // `check:port-dependencies` reads the manifest's transitive
             // closure.
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            // Feature 163 (T113a, R28) — a column links to the product's effective
+            // URL key at the reader's (channel, language); `catalog` owns the port.
+            lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
           ),
       )
       .singleton(),

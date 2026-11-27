@@ -1,5 +1,6 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { LocalizedLink } from '../lib/i18n/localized-link';
+import { miniCartCountLabel } from '../lib/i18n/chrome-counts';
 
 /**
  * MiniCartBadge (feature 027 US1).
@@ -19,11 +20,13 @@ interface MiniCartBadgeProps {
   itemCount: number;
   label: string;
   ariaLabel: string;
+  /** The page's locale: the count badge's "3 items in cart" is said in it (issue #85). */
+  locale: string;
 }
 
-export function MiniCartBadge({ itemCount, label, ariaLabel }: MiniCartBadgeProps): ReactNode {
+export function MiniCartBadge({ itemCount, label, ariaLabel, locale }: MiniCartBadgeProps): ReactNode {
   return (
-    <Link
+    <LocalizedLink
       href="/cart"
       className="inline-flex items-center gap-1.5 text-fg-soft hover:text-fg"
       aria-label={ariaLabel}
@@ -33,12 +36,12 @@ export function MiniCartBadge({ itemCount, label, ariaLabel }: MiniCartBadgeProp
       {itemCount > 0 ? (
         <span
           className="ml-1 inline-block min-w-[1.25em] rounded-full bg-[#cc0000] px-[0.4em] py-[0.1em] text-center text-[0.75rem] font-semibold leading-none text-white"
-          aria-label={`${itemCount} items in cart`}
+          aria-label={miniCartCountLabel(itemCount, locale)}
         >
           {itemCount}
         </span>
       ) : null}
-    </Link>
+    </LocalizedLink>
   );
 }
 

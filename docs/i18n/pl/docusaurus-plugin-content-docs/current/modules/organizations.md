@@ -1,71 +1,361 @@
 ---
-title: organizations
+title: Organizacje
 description: Organizacje klientów, rejestracja, zaproszenia
 ---
 
-# `organizations`
+# Organizacje (`organizations`)
 
 Organizacje klientów — rejestracja, weryfikacja e-mailem, zarządzanie członkami, zaproszenia i
-zawieszanie. Pierwszy użytkownik rejestrujący organizację zostaje jej administratorem
-(`organization_admin`).
+zawieszanie. Pierwszy użytkownik rejestrujący organizację otrzymuje jej rolę Administrator
+(zob. *Role* niżej).
 
 ## API publiczne
 
-Trasy dostępne tylko dla administratora organizacji są chronione po stronie serwera funkcją
-`assertOrganizationAdmin`. Trasy administracyjne platformy (`/api/v1/admin/*`) są chronione przez
-`customers:manage`.
+Trasy oznaczone *administrator organizacji* są zastrzeżone dla członka z rolą Administrator
+organizacji — sprawdza to serwer przez `organizationPermissionPort.isAdministrator` i odmawia
+z `403 FORBIDDEN`; żadne uprawnienie ich nie nadaje (zob. *Role* niżej). Odczyty administracyjne
+platformy (`GET /api/v1/admin/*`) przyjmują `customers:read` albo `customers:manage`, a zapisy
+wymagają `customers:manage`, chyba że wiersz podaje inny kod.
 
 | Metoda i ścieżka | Kto | Przeznaczenie |
 | --- | --- | --- |
-| `POST /api/v1/organizations/register` | anonimowy | Rejestracja organizacji i jej pierwszego członka, wysłanie e-maila weryfikacyjnego |
+| `POST /api/v1/organizations/register` | anonimowy | Rejestracja organizacji i jej pierwszego członka, wysłanie e-maila weryfikacyjnego; przenosi pola niestandardowe otwarte przy rejestracji (zob. *Pola niestandardowe przy rejestracji* niżej) |
 | `POST /api/v1/auth/email-verification/verify` | anonimowy | Użycie tokenu weryfikacyjnego |
 | `POST /api/v1/auth/customer/login` | anonimowy | Logowanie klienta → ustawia ciasteczko `b2b_session`; łączy koszyk anonimowy |
 | `POST /api/v1/auth/customer/logout` | klient | Zakończenie sesji |
-| `POST /api/v1/auth/password-reset/request` | anonimowy | Zawsze 202 (ochrona przed sprawdzaniem, czy konto istnieje) |
+| `POST /api/v1/auth/password-reset/request` | anonimowy | Zawsze 202 (ochrona przed sprawdzaniem, czy konto istnieje). Gdy adres należy do konta, e-mail `customer_password_reset` zawiera link do resetu hasła — w sklepie kanału sprzedaży, z którego przyszło żądanie, pod prefiksem jego języka |
 | `POST /api/v1/auth/password-reset/confirm` | anonimowy | Użycie tokenu resetu z e-maila. Wykorzystanie tokenu wylogowuje konto ze **wszystkich** sesji, unieważnia pozostałe niewykorzystane tokeny resetu i wycofuje każde rozpoczęte, a niedokończone logowanie. |
-| `GET /api/v1/me` | klient | Bieżący klient i jego organizacja oraz `impersonation: { impersonatorAdminUserId }`, gdy administrator działa jako kupujący |
+| `GET /api/v1/me` | klient | Bieżący klient (z `organizationRole`, `permissions` i `preferredLanguage`, `null`, dopóki nieznany) i jego organizacja oraz `impersonation: { impersonatorAdminUserId }`, gdy administrator działa jako kupujący |
 | `POST /api/v1/me/password` | klient | Zmiana hasła (odrzucana przy błędnym `currentPassword`). Udana zmiana wylogowuje konto ze wszystkich pozostałych sesji (sesja, z której wysłano żądanie, zostaje), unieważnia niewykorzystane tokeny resetu hasła i wycofuje każde rozpoczęte, a niedokończone logowanie. |
-| `GET /api/v1/organizations/mine/members` | administrator organizacji | Lista członków |
+| `GET /api/v1/organizations/mine/members` | administrator organizacji | Lista członków, każdy z `organizationRole` |
 | `DELETE /api/v1/organizations/mine/members/:id` | administrator organizacji | Usunięcie członka (z ochroną ostatniego administratora) |
-| `PATCH /api/v1/organizations/mine/members/:id/role` | administrator organizacji | Nadanie lub odebranie roli administratora (z ochroną ostatniego administratora) |
-| `GET /api/v1/organizations/mine/invitations` | administrator organizacji | Lista oczekujących zaproszeń |
-| `POST /api/v1/organizations/mine/invitations` | administrator organizacji | Zaproszenie nowego użytkownika; e-mail z linkiem wysyła wstrzyknięty mechanizm poczty |
+| `PATCH /api/v1/organizations/mine/members/:id/role` | administrator organizacji | Przypisanie roli (`{ roleId }`; z ochroną ostatniego administratora) |
+| `GET /api/v1/organizations/mine/invitations` | administrator organizacji | Lista oczekujących zaproszeń (nieprzyjętych, nieunieważnionych i niewygasłych), każde z `organizationRole` |
+| `POST /api/v1/organizations/mine/invitations` | administrator organizacji | Zaproszenie nowego użytkownika (`{ email, roleId? }`, domyślnie rola Członek); e-mail z linkiem wysyła wstrzyknięty mechanizm poczty |
 | `DELETE /api/v1/organizations/mine/invitations/:id` | administrator organizacji | Unieważnienie oczekującego zaproszenia |
-| `POST /api/v1/organizations/invitations/:token/accept` | anonimowy | Przyjęcie zaproszenia, utworzenie konta klienta |
+| `POST /api/v1/organizations/invitations/:token/accept` | anonimowy | Przyjęcie zaproszenia, utworzenie konta klienta z rolą wskazaną w zaproszeniu |
 | `GET /api/v1/organizations/mine/addresses` | klient | Lista adresów dostawy i do faktury |
-| `POST /api/v1/organizations/mine/addresses` | klient | Utworzenie adresu |
-| `PATCH /api/v1/organizations/mine/addresses/:id` | klient | Aktualizacja |
-| `DELETE /api/v1/organizations/mine/addresses/:id` | klient | Usunięcie |
-| `GET /api/v1/admin/organizations` | administrator | Lista z `filter[status]` / `filter[vatStatus]` / `q` |
-| `GET /api/v1/admin/organizations/:id` | administrator | Organizacja z listą członków (`updatedAt`, członkowie z `lastLoginAt`) |
-| `PATCH /api/v1/admin/organizations/:id` | administrator | Zmiana nazwy, `status` lub `vatStatus`; opcjonalne `expectedUpdatedAt` → `409 VERSION_CONFLICT`, gdy dane są nieaktualne |
-| `POST /api/v1/admin/organizations/:id/members/invite` | administrator | Zaproszenie e-mailem z rolą (z poziomu platformy) |
-| `POST /api/v1/admin/organizations/:id/members` | administrator | Bezpośrednie utworzenie członka z hasłem |
-| `PATCH /api/v1/admin/organizations/:id/members/:customerAccountId/role` | administrator | Zmiana roli; opcjonalne `expectedUpdatedAt` członka |
+| `POST /api/v1/organizations/mine/addresses` | klient (`addresses.manage`) | Utworzenie adresu |
+| `PATCH /api/v1/organizations/mine/addresses/:id` | klient (`addresses.manage`) | Aktualizacja |
+| `DELETE /api/v1/organizations/mine/addresses/:id` | klient (`addresses.manage`) | Usunięcie |
+| `GET /api/v1/admin/organizations` | administrator | Lista z `filter[status]` / `filter[vatStatus]` / `q` (nazwa albo NIP, zob. *Numery podatkowe* niżej). Organizacje osobiste są pomijane, chyba że podano `includePersonal=true`; wtedy `filter[isPersonal]=true\|false` zostawia jeden rodzaj. `customFieldFilters` — pola niestandardowe organizacji oznaczone jako filtry listy, jako JSON, w kształcie przyjmowanym przez listy zamówień i projektów; pole, którego lista nie oferuje, daje `400 CUSTOM_FIELD_FILTER_UNAVAILABLE` z jego nazwą. Przedstawiciel handlowy widzi tylko organizacje ze swojego zasięgu (zob. pod tabelą), z filtrem czy bez |
+| `GET /api/v1/admin/organizations/custom-field-filters` | administrator (`customers:read` lub `customers:manage`) | `{ data: CustomFieldListFilterField[] }` — pola niestandardowe organizacji oznaczone jako filtry listy |
+| `POST /api/v1/admin/organizations` | administrator (`customers:manage`) | Utworzenie organizacji z jej kanałami sprzedaży (zob. *Kanały sprzedaży* niżej) i wartościami pól niestandardowych (`customFieldValues`). Opcjonalne `parentId` tworzy ją jako oddział (tylko administrator platformy, zob. *Numery podatkowe* niżej) |
+| `GET /api/v1/admin/organizations/tax-id-scope` | administrator (`organizations:manage-tax-id-scope`, administrator platformy) | Obowiązujący zakres unikalności NIP, kiedy i przez kogo został ustawiony, ile numerów jest współdzielonych i czy baza danych go egzekwuje (zob. *Zakres unikalności NIP* niżej) |
+| `PUT /api/v1/admin/organizations/tax-id-scope` | administrator (`organizations:manage-tax-id-scope`, administrator platformy) | Zmiana zakresu unikalności NIP (`{ scope: 'global' \| 'per-tree-root' }`) |
+| `POST /api/v1/admin/organizations/:id/convert-to-company` | administrator (`organizations:convert-to-company`; z `validateTaxId: true` także `customers:manage`) | Zamiana organizacji osobistej na firmową (zob. *Zamiana organizacji osobistej na firmową* niżej) |
+| `POST /api/v1/admin/organizations/:id/change-tax-id` | administrator (`organizations:change-tax-id`; z `validateTaxId: true` także `customers:manage`) | Korekta NIP organizacji firmowej (`{ taxId, validateTaxId? }` → `{ data, changed, vatValidation }`; zob. *Korekta NIP* niżej) |
+| `GET /api/v1/admin/organizations/sales-channel-options` | administrator (`customers:manage`) | Kanały oferowane w formularzu tworzenia |
+| `GET /api/v1/admin/organizations/:id/sales-channels` | administrator (`customers:read` lub `customers:manage`) | Kanały przypisane do organizacji i kanały, które można jej przypisać. `404 NOT_FOUND` dla organizacji spoza zasięgu przedstawiciela handlowego (zob. pod tabelą), jak dla organizacji, która nie istnieje |
+| `PUT /api/v1/admin/organizations/:id/sales-channels` | administrator (`customers:manage`) | Zastąpienie przypisanych kanałów (`{ salesChannelIds }`, co najmniej jeden); `404 NOT_FOUND` poza zasięgiem przedstawiciela handlowego, jak przy odczycie |
+| `GET /api/v1/admin/organizations/:id` | administrator | Organizacja z listą członków (`updatedAt`, członkowie z `lastLoginAt` i `organizationRole`; `predefinedRoles` podaje role Administrator i Członek) |
+| `PATCH /api/v1/admin/organizations/:id` | administrator | Zmiana nazwy, `vatStatus`, `orderConfirmationEmails` lub `fulfilmentStrategy` (z `fulfilmentStrategyWarehouseOrder`) i scalenie wartości pól niestandardowych (`customFieldValues`); opcjonalne `expectedUpdatedAt` → `409 VERSION_CONFLICT`, gdy dane są nieaktualne. **`status` jest odrzucany** odpowiedzią `400 VALIDATION_ERROR` przy `status` i nic z żądania nie zostaje zapisane: status zmienia się wyłącznie przez `POST …/approve`, `…/reject`, `…/block` i `…/unblock`. Jeden wpis audytu, `organization.admin_patch`, zapisywany razem ze zmianą: kody statusu (jako kontekst; PATCH nigdy go nie zmienia), statusu VAT i strategii realizacji przed zmianą i po niej oraz nazwy zmienionych pól (`changedFields`) i pól niestandardowych (`changedCustomFields`) — nigdy nazwa, adresy e-mail do potwierdzeń zamówień ani wartość pola niestandardowego |
+| `DELETE /api/v1/admin/organizations/:id` | administrator (`customers:manage`) | Usunięcie miękkie (`204`); odrzucane z `409 ORGANIZATION_HAS_CHILDREN`, dopóki organizacja ma organizację podrzędną (zob. *Hierarchia organizacji*) |
+| `GET /api/v1/admin/organizations/:id/addresses` | administrator | Książka adresowa organizacji |
+| `POST /api/v1/admin/organizations/:id/members/invite` | administrator | Zaproszenie e-mailem (`{ email, roleId? }`, domyślnie rola Członek; z poziomu platformy) |
+| `POST /api/v1/admin/organizations/:id/members` | administrator | Bezpośrednie utworzenie członka z hasłem (`roleId?`, domyślnie rola Członek) i wartościami pól niestandardowych konta (`customFieldValues`) |
+| `PATCH /api/v1/admin/organizations/:id/members/:customerAccountId/role` | administrator | Przypisanie roli (`{ roleId, expectedUpdatedAt? }`) |
+| `PATCH /api/v1/admin/organizations/:id/members/:customerAccountId/rollup` | administrator | Włączenie lub wyłączenie wglądu członka w organizacje podrzędne (`{ subtreeRollupEnabled, expectedUpdatedAt? }`) |
+| `PATCH /api/v1/admin/organizations/:id/members/:customerAccountId` | administrator | Edycja `firstName`, `lastName` lub `email` członka (co najmniej jednego; `expectedUpdatedAt?` → `409 VERSION_CONFLICT`, gdy nieaktualne) |
 | `DELETE /api/v1/admin/organizations/:id/members/:customerAccountId` | administrator | Usunięcie miękkie członka (z ochroną ostatniego administratora) |
-| `POST /api/v1/admin/organizations/:id/recover-admin-access` | administrator | Procedura awaryjna — nadanie istniejącemu członkowi roli `organization_admin` |
+| `POST /api/v1/admin/organizations/:id/recover-admin-access` | administrator | Procedura awaryjna — nadanie istniejącemu członkowi roli Administrator |
+
+**Do których organizacji sięga przedstawiciel handlowy.** Reguła jest jedna i stosuje ją każdy ekran panelu: przedstawiciel handlowy sięga do każdej organizacji, której **nie prowadzi inny przedstawiciel**. O tym, kto prowadzi organizację, decydują jej własne przypisania; z `organizations:rollup` — najbliższa organizacja w łańcuchu „ona sama i jej organizacje nadrzędne”, która ma jakiekolwiek przypisanie. Przedstawiciel sięga więc do organizacji przypisanych do niego (z roll-upem także do poddrzewa poniżej, bez gałęzi przypisanych komuś innemu) i do każdej organizacji, do której nie przypisano żadnego przedstawiciela — rejestracji oczekującej na zatwierdzenie oraz każdej organizacji osobistej (B2C), do której nie można nikogo przypisać.
+
+Ta sama reguła rozstrzyga na każdym ekranie: na każdej trasie `/api/v1/admin/organizations/:id` (odczyty i zapisy, także zagnieżdżone), na liście organizacji i w polach wyboru, w wyszukiwarce panelu oraz przy każdym odczycie i zapisie objętym izolacją tenantów — członkowie, klienci, zamówienia, faktury, koszyki, zwroty, zapytania ofertowe i ustawienia na poziomie klienta. Organizacja spoza zasięgu odpowiada `404 NOT_FOUND`, dokładnie tak jak organizacja, która nie istnieje, i nie pojawia się na żadnej liście; nieznany identyfikator odpowiada tak samo każdemu administratorowi. Każda inna rola administratora sięga do wszystkich organizacji. Przed zgłoszeniem #305 odczyty objęte izolacją uwzględniały tylko przypisania, więc organizacja nieprzypisana otwierała się na swoim ekranie, ale nie pokazywała członków ani zapytań, a lista pokazywała organizacje, których ekran odpowiadał potem `404`.
 
 Ustaw **`SMTP_URL`** w środowisku backendu, aby poczta była wysyłana przez SMTP, a nie wypisywana do
 konsoli.
 
 ## Encje
 
-`Organization`, `OrganizationInvitation`, `EmailVerificationToken`. Unikalności NIP pilnuje baza
-danych; powtórna rejestracja zwraca `409 ORGANIZATION_TAX_ID_EXISTS`.
+`Organization`, `OrganizationInvitation`, `EmailVerificationToken` oraz jednowierszowa
+`OrganizationTaxIdPolicy` (tabela `organization_tax_id_policy`), w której zapisany jest zakres
+unikalności NIP instalacji. Organizacja firmowa zawsze ma NIP, a osobista nigdy; to, gdzie ten sam
+NIP może się powtórzyć, rozstrzyga zakres unikalności NIP, a egzekwuje baza danych (zob. *Numery
+podatkowe* niżej).
 
 ## Emitowane zdarzenia
 
-`organization.registered.v1`, `organization.verified.v1`, `organization.suspended.v1`,
-`organization.member_invited.v1`, `organization.member_role_changed.v1`.
+`organization.registered.v1`, `organization.verified.v1`,
+`organization.status_changed.v1` (`{ organizationId, newStatus, previousStatus, reason,
+notifyCustomer }`, po zatwierdzeniu, odrzuceniu, zablokowaniu lub odblokowaniu; `reason` to powód
+podany przez operatora przy odrzuceniu lub zablokowaniu, w pozostałych przypadkach `null`;
+`notifyCustomer` mówi, czy klient zostaje powiadomiony — `true` przy zatwierdzeniu i przy
+odrzuceniu, chyba że wywołujący wyłączył powiadomienie, `false` przy zablokowaniu i odblokowaniu.
+Na jego podstawie własny subskrybent tego modułu wysyła e-maile o zatwierdzeniu i odrzuceniu, po
+zatwierdzeniu zmiany), `organization_role.permissions_changed.v1` (`{ organizationId,
+roleId, added, removed }`, po zmianie uprawnień roli),
+`organization.converted_to_company.v1` (`OrganizationConvertedToCompanyEvent`: `{ eventId,
+occurredAt, organizationId, convertedAt }` — bez nazwy i bez NIP; wysyłane raz, po zatwierdzeniu
+zamiany), `organization.tax_id_changed.v1` (`OrganizationTaxIdChangedEvent`: `{ eventId,
+occurredAt, organizationId, changedAt }` — bez starego i bez nowego NIP; wysyłane raz, po
+zatwierdzeniu korekty NIP, i nie dla korekty na wartość, która jest już zapisana).
 
 ## Punkty rozszerzenia
 
-- **Wysyłka weryfikacji** — `email-verification-service.ts` udostępnia wymienny interfejs wysyłki
-  poczty; w kompozycji produkcyjnej zastąp wypisywanie do konsoli prawdziwym sterownikiem SMTP lub
-  SendGrid.
-- **Ochrona ostatniego administratora** — zapisana w `role-service.ts#changeRole` i
-  `invitation-service.ts#revoke`; nowe miejsca, w których „musi zostać co najmniej jeden
-  administrator”, dodawaj właśnie tam.
+- **Wysyłka weryfikacji** — trasa rejestracji wysyła e-mail weryfikacyjny szablonem
+  `email_verification`, gdy jest zdefiniowany, a w przeciwnym razie przez skomponowany `emailMailer`
+  (`EmailMailerPort`, z modułu `email`); `SMTP_URL` (albo `SMTP_HOST` + `SMTP_PORT`) decyduje, czy
+  jest to SMTP, czy wypisywanie do konsoli.
+- **Wysyłka resetu hasła** — samodzielne żądanie resetu wysyła szablon `customer_password_reset`
+  w języku kanału sprzedaży, z którego przyszło żądanie, z linkiem do `/password-reset/confirm`
+  pod adresem `sales_channels.storefront_url` tego kanału (w przeciwnym razie
+  `STOREFRONT_BASE_URL`). Bez definicji szablonu wysyłana jest zwykła wiadomość po angielsku przez
+  `emailMailer`. Tego e-maila nie można wyłączyć, bo to dzięki niemu klient, który zapomniał hasła,
+  odzyskuje dostęp do konta.
+- **Ochrona ostatniego administratora** — zapisana w Commandach modułu `customer_accounts`
+  `customer-account-change-role.command.ts` i `customer-account-remove-member.command.ts` oraz
+  w `organization-invitation-revoke.command.ts` tego modułu; nowe miejsca, w których „musi zostać
+  co najmniej jeden administrator”, dodawaj właśnie tam.
+- **Zapisy po stronie serwera** — publikowany port `organizationCommandPort`, port zapisu
+  organizacji, dla każdej operacji, którą wykonuje na niej administrator (zob. *Zapisy po stronie
+  serwera* niżej).
+- **Zadeklarowane kolumny rozszerzeń** — `organizations` to rozszerzalna tabela: zainstalowany
+  pakiet modułu zależny od tego modułu może zadeklarować w niej własne kolumny `x_<moduleId>_*`, a
+  odczyty szczegółów i listy w panelu administracyjnym (`GET /api/v1/admin/organizations/:id`,
+  `GET /api/v1/admin/organizations`) przyjmują `?extensions=<moduleId>[,…]` i dołączają te
+  wartości jako `extensions`. Bez parametru odpowiedzi się nie zmieniają. Zobacz *Zadeklarowane
+  kolumny rozszerzeń* w przewodniku po architekturze.
+- **Hooki poleceń** — sześć zapisów organizacji są zadeklarowane jako dostępne dla hooków, więc inny
+  moduł może brać w nich udział wewnątrz ich transakcji (zob. *Akcje dostępne dla hooków* poniżej).
+
+### Akcje dostępne dla hooków
+
+Inny moduł — moduł nakładki wdrożenia albo zainstalowany pakiet — może uruchomić wewnątrz tych
+zapisów hook poleceń `beforeCommit`. Rejestruje go wobec referencji z
+`ORGANIZATION_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`) i musi wymienić `organizations` w
+`dependencies` swojego manifestu. Hook widzi zapis w niezatwierdzonej transakcji, może zapisywać własne
+tabele albo uruchomić polecenie przez `ctx.run` i może odrzucić zapis własnym kodem błędu, co
+wycofuje cały zapis. Jak hooki są uruchamiane, porządkowane i odrzucane, opisuje strona
+architektury *Command Bus*.
+
+| Akcja | Referencja | Zapisywana przez | Dane hooka |
+| --- | --- | --- | --- |
+| `organization.create` | `ORGANIZATION_HOOKABLE_ACTIONS.create` | `POST /api/v1/admin/organizations`, `organizationCommandPort.create` | `organization`, `salesChannelIds` |
+| `organization.register` | `ORGANIZATION_HOOKABLE_ACTIONS.register` | `POST /api/v1/organizations/register` | `organization`, `customerAccountId`, `salesChannelId`, `registryLookupOutcome` |
+| `organization.admin_patch` | `ORGANIZATION_HOOKABLE_ACTIONS.adminPatch` | `PATCH /api/v1/admin/organizations/:id` | `organization`, `changedFields`, `changedCustomFields` |
+| `organization.set_custom_field_values` | `ORGANIZATION_HOOKABLE_ACTIONS.setCustomFieldValues` | `organizationCommandPort.setCustomFieldValues` | `organization`, `changedFields`, `changedCustomFields` |
+| `organization.convert_to_company` | `ORGANIZATION_HOOKABLE_ACTIONS.convertToCompany` | `POST /api/v1/admin/organizations/:id/convert-to-company`, `organizationCommandPort.convertToCompany` | `organizationId`, `status`, `vatStatus`, `changedFields`, `approvalStamped` |
+| `organization.tax_id.change` | `ORGANIZATION_HOOKABLE_ACTIONS.changeTaxId` | `POST /api/v1/admin/organizations/:id/change-tax-id`, `organizationCommandPort.changeTaxId` | `organizationId`, `changedFields`, `vatValidationReset` |
+
+Wszystkie sześć oferuje obie fazy. Odbiorca `afterCommit` jest obsługiwany przez kolejkę dostarczeń platformy
+po zatwierdzeniu zapisu, co najmniej raz i w kontekście przypiętym do organizacji; jego `data` zawiera
+tylko identyfikatory i kody — `organizationId`, a do tego `customerAccountId` i `status` przy
+rejestracji, `status` przy utworzeniu, `changedFields` / `changedCustomFields` przy obu
+aktualizacjach, `status` i `changedFields` przy zamianie na firmę oraz `changedFields` przy korekcie
+NIP-u. Zmiany
+zgłoszone przez hook trafiają do jedynego wpisu audytu organizacji jako nazwy, w
+`extensions.<moduleId>.changedFields`. Hook rejestracji nigdy nie widzi tokenu weryfikacji e-mail.
+Hooki zamiany na firmę i korekty NIP dostają wyłącznie identyfikatory, kody i nazwy pól — nigdy
+NIP-u, nazwy ani adresu. Korekta NIP-u na tę samą wartość niczego nie zmienia, a jej hooki i tak
+są uruchamiane z pustym `changedFields`: wpis audytu powstaje tylko wtedy, gdy hook zgłosił zapis, i
+wtedy ten jeden wpis wymienia wyłącznie pola hooka. Dane rozszerzeń (`extensions`) może przekazać
+tylko kod po stronie serwera, w ostatnim argumencie każdej metody `organizationCommandPort` — a
+żadne ciało żądania HTTP ich jeszcze nie przenosi. Przenoszenie organizacji w hierarchii,
+moderacja, ograniczenia i przypisywanie przedstawicieli handlowych nie są zadeklarowane jako
+dostępne dla hooków.
+
+**Hook, który ma widzieć każdą zmianę wartości pól niestandardowych, rejestruje się zarówno na
+`organization.admin_patch`, jak i na `organization.set_custom_field_values`.** Edycja w panelu
+zapisuje wartości razem z pozostałymi polami w jednym `organization.admin_patch`; kod po stronie
+serwera zapisuje je osobno przez `organizationCommandPort.setCustomFieldValues`.
+
+## Zapisy po stronie serwera
+
+Inny moduł, moduł nakładki albo proces integracyjny (konektor ERP lub CRM) zapisuje organizację
+przez **`organizationCommandPort`**, port zapisu agregatu organizacji, zadeklarowany jako
+`OrganizationCommandPort` w `@endora-commerce/contracts`. Nigdy nie zapisuje sam tabel tego
+modułu. Pobieraj go przy każdym użyciu przez
+`lazyPort<OrganizationCommandPort>(ctx, 'organizationCommandPort')`, z `organizations` w
+`dependencies` manifestu modułu wywołującego.
+
+| Metoda | Akcja audytu | Co w panelu robi to samo |
+| --- | --- | --- |
+| `create(input, options?)` | `organization.create` | `POST /api/v1/admin/organizations` |
+| `update(id, patch, options?)` | `organization.update` | — (pola identyfikacyjne i kontaktowe) |
+| `setParent(id, { parentId }, options?)` | `organization.set_parent`, `organization.move` | `POST /api/v1/admin/organizations/:id/parent` |
+| `approve(id, options?)` | `organization.approved` | `POST /api/v1/admin/organizations/:id/approve` |
+| `reject(id, { reason, notifyCustomerEmail? }, options?)` | `organization.rejected` | `POST /api/v1/admin/organizations/:id/reject` |
+| `block(id, { reason? }, options?)` | `organization.blocked` | `POST /api/v1/admin/organizations/:id/block` |
+| `unblock(id, options?)` | `organization.unblocked` | `POST /api/v1/admin/organizations/:id/unblock` |
+| `delete(id, options?)` | `organization.delete` | `DELETE /api/v1/admin/organizations/:id` |
+| `setCustomFieldValues(id, merge, options?)` | `organization.set_custom_field_values` | — (panel wysyła wartości w `PATCH`) |
+| `convertToCompany(id, input, options?)` | `organization.convert_to_company` | `POST /api/v1/admin/organizations/:id/convert-to-company` |
+| `changeTaxId(id, { taxId }, options?)` | `organization.tax_id.change` | `POST /api/v1/admin/organizations/:id/change-tax-id` |
+| `setSalesChannels(id, { salesChannelIds }, options?)` | `organization.sales_channels.set` | `PUT /api/v1/admin/organizations/:id/sales-channels` |
+| `setRestrictions(id, lists, options?)` | `organization.allow_lists_replace` | `PUT /api/v1/admin/organizations/:id/restrictions` |
+| `patchRestriction(id, kind, { add?, remove? }, options?)` | `organization.allow_list_patch` | `PATCH /api/v1/admin/organizations/:id/restrictions/*` |
+| `setCreditInheritanceMode(id, { mode }, options?)` | `organization.set_credit_mode` | `PUT /api/v1/admin/organizations/:id/credit-inheritance-mode` |
+| `assignSalesRep(id, { adminUserId }, options?)` | `organization.sales_rep_assign` | `POST /api/v1/admin/organizations/:id/sales-reps` |
+| `unassignSalesRep(id, { adminUserId }, options?)` | `organization.sales_rep_unassign` | `DELETE /api/v1/admin/organizations/:id/sales-reps/:adminUserId` |
+
+**Jedna ścieżka zapisu.** Każda metoda uruchamia to samo polecenie (Command), które uruchamia
+endpoint panelu, zbudowane przez tę samą fabrykę, więc oba zapisy nie mogą się różnić: jeden wpis
+audytu z tym samym stanem i to samo zdarzenie. Zatwierdzenie i odrzucenie wysyłają klientowi
+powiadomienie po zatwierdzeniu zmiany, dokładnie tak jak z panelu — powiadomienie wysyła
+subskrybent `organization.status_changed.v1` tego modułu, więc wychodzi także wtedy, gdy
+zatwierdzenie odbywa się wewnątrz innego polecenia. Dane wejściowe to ciała żądań endpointów bez
+ich `version`, walidowane w tych samych granicach, a odmowy to błędy endpointów z ich kodami
+(`422 VALIDATION_FAILED` dla danych poza granicami, `404 NOT_FOUND`,
+`422 ORGANIZATION_STATUS_INVALID`, `409 VERSION_CONFLICT` i własne kody każdej operacji). Jedyna
+różnica: `create` i `setSalesChannels` odpowiadają na kanał sprzedaży, który nie istnieje, kodem
+`422 UNKNOWN_SALES_CHANNEL`, a endpointy panelu kodem `422 VALIDATION_FAILED`.
+
+**Kto zapisał.** Aktor jest aktorem z bieżącego kontekstu, nigdy parametrem: administrator w
+żądaniu panelu albo w `withSystemScopeActingFor`; aktor **system** w `withSystemScope` w procesie
+w tle, który nie zapisuje administratora — zatwierdzenie przez system nie zapisuje
+zatwierdzającego administratora. Bez żadnego kontekstu tenanta zapis jest odrzucany, zanim
+cokolwiek zostanie zapisane. Port nie sprawdza uprawnień — o dostępie decyduje wywołujący — więc
+nigdy nie pobieraj go dla trasy dostępnej dla klienta. Nie ma w nim też własnych reguł panelu:
+w panelu tylko administrator platformy może zmienić organizację nadrzędną, tryb kredytu i
+przedstawicieli handlowych, a przedstawiciel handlowy sięga tylko do części organizacji; kod
+serwera działający w czyimś imieniu sam stosuje te reguły.
+
+**Opcje** (ostatni parametr każdej metody):
+
+- `source` — kod z małych liter nazywający integrację (`erp`, `erp.customer-master`, co najwyżej
+  64 znaki), zapisywany jako `source` we wpisie audytu obok aktora. To on odróżnia dwie
+  integracje, gdy obie zapisują jako system. Każda inna wartość jest odrzucana z
+  `422 VALIDATION_FAILED`, zanim cokolwiek zostanie odczytane lub zapisane.
+- `expectedVersion` — odczytana wartość `version` organizacji; gdy organizacja zmieniła się w
+  międzyczasie, zapis jest odrzucany z `409 VERSION_CONFLICT` i `currentVersion`. Uwzględniają ją
+  `update`, cztery metody moderacji i dwie metody ograniczeń, bo ich endpointy panelu sprawdzają
+  wersję; bez niej zapisują na odczytanej wersji, a reguły statusu nadal obowiązują
+  (zatwierdzenie organizacji, która jest już aktywna, jest odrzucane). Pozostałe metody ją
+  pomijają.
+- `extensions` — dane dla hooków poleceń akcji (zob. *Akcje dostępne dla hooków* wyżej). Klucz,
+  którego nie przejmuje żaden zainstalowany moduł hooka, jest odrzucany z
+  `422 COMMAND_EXTENSION_UNCLAIMED`, zanim cokolwiek zostanie zapisane.
+
+**Moderacja.** `reject` wymaga powodu długości od 1 do 2000 znaków; jest on zapisywany w
+organizacji i wysyłany w powiadomieniu, nigdy nie trafia do wpisu audytu. Przekaż
+`notifyCustomerEmail: false`, gdy klienta powiadamiasz sam. `block` przyjmuje opcjonalny powód i
+nie wysyła powiadomienia; `unblock` też nie.
+
+**Umieszczanie organizacji w drzewie.** `setParent` z identyfikatorem organizacji nadrzędnej
+przypisuje pierwszą organizację nadrzędną (`organization.set_parent`) albo przenosi oddział pod
+inną (`organization.move`); `parentId: null` odłącza organizację, która staje się korzeniem.
+
+**Kanały sprzedaży.** `setSalesChannels` zastępuje cały zestaw przekazanymi identyfikatorami —
+co najmniej jednym, każdym raz; można przypisać kanał nieaktywny. Oprócz własnego wpisu
+`organization.sales_channels.set` w tej samej transakcji zapisywany jest jeden wpis audytu na
+każdy dodany lub usunięty kanał, a członkowie organizacji od następnego żądania są oceniani według
+nowego zestawu. Przekazanie zestawu, który organizacja już ma, niczego nie zmienia i niczego nie
+zapisuje.
+
+**Same wartości pól niestandardowych.** `setCustomFieldValues` przyjmuje `merge` — funkcję z
+bieżących wartości w nowe — i uruchamia ją wewnątrz swojego polecenia. Moduł nie waliduje:
+wywołaj `CustomFieldValuePort.validateAndMerge` wewnątrz `merge` (zob. *Ustawianie wartości pól
+niestandardowych z kodu po stronie serwera* niżej). Edycja w panelu, `organization.admin_patch`,
+która zapisuje pola i wartości razem, celowo nie jest w porcie: pola obsługuje `update`, a
+wartości `setCustomFieldValues`.
+
+**Celowo nieoferowane:** członkowie, zaproszenia i role (przeniesienie konta to `membershipPort`);
+zakres unikalności NIP, który jest ustawieniem platformy; walidacje numeru VAT, które nie są
+zapisem organizacji.
+
+Modułu `organizations` nie można wyłączyć, więc port jest zawsze dostępny.
+
+### Wycofywane: `organizationWritePort` i `organizationCustomFieldWritePort`
+
+Oba wąskie porty są wycofywane od wersji 0.113.0 i zostaną usunięte w jednym z kolejnych wydań. Do
+tego czasu każda metoda przekazuje wywołanie swojemu następcy, więc zapisuje te same wpisy i
+zwraca te same odmowy co dotąd:
+
+| Wycofywane wywołanie | Użyj zamiast niego |
+| --- | --- |
+| `organizationWritePort.findByTaxId(taxId)` | `organizationDetailsPort.findByTaxId(taxId)` |
+| `organizationWritePort.create(input)` | `organizationCommandPort.create(input)` |
+| `organizationWritePort.update(id, patch, { expectedVersion })` | `organizationCommandPort.update(id, patch, { expectedVersion })` |
+| `organizationCustomFieldWritePort.setCustomFieldValues(id, merge, { extensions })` | `organizationCommandPort.setCustomFieldValues(id, merge, { extensions })` |
+
+`create` i `update` przyjmują te same typy danych co dotąd (`OrganizationWriteCreateInput`,
+`OrganizationWriteUpdatePatch`):
+
+- **`create`** uruchamia polecenie `organization.create`, to samo co *Nowa organizacja* w panelu
+  administracyjnym, z tymi samymi kontrolami: nazwa, NIP i adres rejestrowy w granicach formularza,
+  kraj udostępniony przez operatora, co najmniej jeden kanał sprzedaży przypisany w tej samej
+  transakcji oraz NIP dozwolony w obowiązującym zakresie unikalności. NIP jest normalizowany przed
+  sprawdzeniem i zapisem. Przyjmuje też `legalName`, `customFieldValues` (walidowane według reguł
+  administratora) i `parentId`, który zakłada organizację jako oddział tego drzewa — w zakresie
+  `per-tree-root` oddział może mieć NIP swojej centrali. Status to `active` albo
+  `pending_verification`.
+- **`update`** uruchamia polecenie `organization.update` dla nazwy, nazwy prawnej (`null` ją
+  usuwa), statusu VAT, adresu rejestrowego i adresów e-mail do potwierdzeń zamówień. Pominięty klucz
+  pozostaje bez zmian, a każdy inny klucz jest odrzucany — zwłaszcza NIP: jego korekta to
+  `changeTaxId` (zob. *Korekta NIP* niżej). Aktualizacja, która niczego nie zmienia, niczego nie
+  zapisuje i nie tworzy wpisu w dzienniku audytu, więc ponowne wysłanie tego samego rekordu jest
+  bezpieczne.
+
+Ich odmowy:
+
+| Kod | Kiedy |
+| --- | --- |
+| `422 VALIDATION_FAILED` | Dane poza powyższymi granicami (pusta nazwa, NIP, który po normalizacji nie ma od 8 do 32 znaków, kod kraju inny niż dwuliterowy, pusta lub powtarzająca się lista kanałów, nieprawidłowy e-mail) albo klucz `update`, którego port nie zapisuje |
+| `409 DICTIONARY_ENTRY_NOT_FOUND` / `DICTIONARY_ENTRY_INACTIVE` | Kraj, który nie jest dostępny. Przy `update` sprawdzany tylko, gdy kraj się zmienia |
+| `409 ORGANIZATION_TAX_ID_EXISTS` | `create` z NIP, na który nie pozwala obowiązujący zakres unikalności. Usunięte organizacje też się liczą, więc `findByTaxId` może zwrócić `[]`, a `create` mimo to odmówić |
+| `422 UNKNOWN_SALES_CHANNEL` | `create` z kanałem, który nie istnieje |
+| `422 CUSTOM_FIELD_VALUE_INVALID` | `create` z wartościami pól niestandardowych, które odrzucają reguły administratora |
+| `422 ORGANIZATION_TREE_INVALID` | `create` pod organizacją nadrzędną na maksymalnej głębokości drzewa |
+| `404 NOT_FOUND` | `create` pod organizacją nadrzędną, która nie istnieje lub została usunięta; `update` organizacji, która nie istnieje lub została usunięta |
+| `409 VERSION_CONFLICT` | `update` z `expectedVersion`, którą organizacja już przekroczyła |
+| `409 ORGANIZATION_WRITE_CONTENDED` | Równoległa zmiana organizacji trzymała blokadę; ponów próbę |
+
+## Kanały sprzedaży
+
+Członkowie organizacji mogą logować się i kupować dokładnie w tych sklepach, których kanały
+sprzedaży są przypisane do organizacji. Brak przypisania oznacza brak dostępu; organizacja zawsze
+zachowuje co najmniej jeden kanał.
+
+- **Logowanie.** Członek, którego organizacja nie jest przypisana do sklepu, w którym się loguje,
+  dostaje odmowę `403 SALES_CHANNEL_NOT_PERMITTED` — *„To konto nie ma dostępu do tego sklepu.”* — po
+  sprawdzeniu hasła, a przed prośbą o drugi składnik i utworzeniem sesji. Logowanie przez
+  zewnętrznego dostawcę tożsamości jest odrzucane tak samo i wraca na stronę logowania sklepu z tym
+  komunikatem. Błędne hasło nadal dostaje najpierw `401`, więc odmowa nie zdradza niczego o
+  przypisaniach komuś, kto nie zna hasła.
+- **Zalogowany, gdy dostęp zostaje odebrany.** Następna strona członka w tym sklepie pokazuje ekran
+  *Brak dostępu do tego sklepu* z listą sklepów, z których może korzystać, i przyciskiem
+  wylogowania.
+
+### Kto dostaje który kanał
+
+| Jak powstaje organizacja | Przypisane kanały |
+| --- | --- |
+| Rejestracja firmy w storefroncie (`POST /api/v1/organizations/register`) | dokładnie kanał sklepu, w którym się zarejestrowała — także w sklepie zamkniętym dla niezalogowanych odwiedzających, gdzie o wejściu firmy decyduje moderacja |
+| Samodzielna rejestracja klienta indywidualnego (organizacja osobista) | dokładnie kanał sklepu, w którym się zarejestrował; w sklepie zamkniętym dla niezalogowanych odwiedzających odrzucana |
+| *Nowa organizacja* w panelu administracyjnym | kanały wybrane w formularzu |
+| Inny moduł, przez `organizationCommandPort.create` | kanały, które wskaże |
+| Każda inna ścieżka — logowanie przez zewnętrznego dostawcę tożsamości, które zakłada nowe konto, importy, dane demonstracyjne | domyślny kanał systemowy |
+
+Przyjęcie zaproszenia dodaje członka do istniejącej organizacji i nie zmienia żadnego z jej kanałów.
+
+Przy wprowadzeniu tej reguły każda istniejąca organizacja otrzymała domyślny kanał systemowy oraz
+każdy kanał, w którym miała już zamówienia.
+
+### W panelu administracyjnym
+
+- **Panel Kanały sprzedaży** — na stronie organizacji, z etykietą *Działa od razu* w nagłówku.
+  Z uprawnieniem `customers:manage` to lista pól wyboru, po jednym na kanał, a każde zaznaczenie lub
+  odznaczenie jest zapisywane od razu — panel nie ma własnego przycisku Zapisz i nie jest częścią
+  zapisu strony. Podczas zapisu panel o tym informuje (*„Dodawanie kanału Trade…”*) i do jego końca nie
+  przyjmuje kolejnej zmiany; zmiana, której nie udało się zapisać, przywraca pole wyboru i podaje
+  powód. Bez tego uprawnienia — lista tylko do odczytu. Nieaktywne kanały są oznaczone *(nieaktywny)*,
+  a domyślny kanał systemowy ma etykietę. Odznaczenie ostatniego kanału jest odrzucane: *„Organizacja
+  musi mieć przypisany co najmniej jeden kanał sprzedaży.”* Usunięcie kanału nie wymaga potwierdzenia:
+  ponowne zaznaczenie go przywraca.
+  Każda zmiana zapisuje jeden wpis audytu organizacji (`organization.sales_channels.set`) i jeden
+  wpis na każdy dodany lub usunięty kanał. Zmiana obowiązuje od razu na
+  serwerze, który ją zapisał, a na każdym innym serwerze w ciągu 30 sekund.
+- **Nowa organizacja** — przycisk na liście organizacji i akcja w palecie poleceń (⌘K / Ctrl+K),
+  widoczne z uprawnieniem `customers:manage`. Formularz pyta o nazwę, NIP, adres siedziby, status
+  (*Aktywna* lub *Oczekuje na weryfikację*) i kanały sprzedaży, z domyślnym kanałem systemowym
+  zaznaczonym na starcie. Administrator platformy (nie przedstawiciel handlowy) dostaje też
+  opcjonalną *organizację nadrzędną*, pod którą organizacja powstaje jako oddział; po jej wybraniu
+  pole NIP podpowiada, że oddział może mieć NIP centrali, gdy zakres unikalności NIP to *Jedno
+  drzewo na numer*. Utworzenie to jedno polecenie zapisywane w dzienniku audytu; po zapisie
+  otwiera się strona nowej organizacji. Członków zaprasza się z tej strony, gdy organizacja już
+  istnieje.
 
 ## Organizacja jako strona transakcji i jej moderacja
 
@@ -77,6 +367,15 @@ Każda nowo zarejestrowana organizacja zaczyna w stanie `pending_verification`. 
 platformy `organizations.moderation.mode` (`manual` / `auto`) decyduje, czy przed pierwszą
 transakcją administrator musi ją ręcznie zatwierdzić. Gdy status jest inny niż `active`, platforma
 odrzuca składanie zamówień, wysyłanie zapytań ofertowych i dodawanie pozycji do koszyka z HTTP 423.
+
+Każde przejście — zatwierdzenie, odrzucenie, zablokowanie, odblokowanie — jest jednym poleceniem:
+`organization.approved`, `organization.rejected`, `organization.blocked` i `organization.unblocked`.
+Zmiana statusu i jej wpis w dzienniku audytu zapisują się w jednej transakcji, a wpis wskazuje, kto
+działał: administratora albo nikogo przy zatwierdzeniu, którego tryb `auto` dokonuje przy rejestracji
+(aktor `system`). Zdarzenie `organization.status_changed.v1` wychodzi dopiero po zatwierdzeniu
+zmiany w bazie i nigdy dla zmiany odrzuconej lub wycofanej. Wiadomość e-mail do klienta o
+zatwierdzeniu lub odrzuceniu wysyłana jest po zapisie, a wiadomość, której nie udało się wysłać, nie
+cofa przejścia.
 
 Dawny status `suspended` zmieniono na `blocked` w migracji
 `20260611T140349_organizations_consolidation.ts`, która w każdym przepisanym wierszu zapisuje
@@ -94,10 +393,16 @@ Endpointy administracyjne:
 Każda treść żądania zawiera `expectedVersion: number` (token blokady optymistycznej z kolumny
 `organizations.version`), a operacja jest wykonywana w `em.transactional`. Nieaktualne
 `expectedVersion` zwraca `409 VERSION_CONFLICT` z `currentVersion` w treści. Niedozwolone przejście
-statusu (np. zatwierdzenie już aktywnej organizacji) zwraca `422 VALIDATION_FAILED`.
+statusu (np. zatwierdzenie już aktywnej organizacji) zwraca `422 ORGANIZATION_STATUS_INVALID` z
+`details.currentStatus` i `details.requiredStatus` oraz ich etykietami w języku odbiorcy jako
+`currentStatusLabel` i `requiredStatusLabel`, które wymienia komunikat (zgłoszenie #629; wcześniej
+`422 VALIDATION_FAILED`).
 
 Po stronie klienta: storefront dostaje przetłumaczony komunikat „dlaczego nie możesz składać
 zamówień” w polach `organization.canTransact` i `organization.moderationMessage` z `GET /api/v1/me`.
+Ten komunikat, podobnie jak `reason` w odpowiedzi 423 ze wstępnej weryfikacji checkoutu, jest
+napisany w języku, w którym udzielana jest odpowiedź (`Accept-Language` storefrontu, a w jego braku
+domyślny język kanału sprzedaży), na podstawie kluczy `moderation.*` z bundla tego modułu.
 Strony koszyka i checkoutu wyświetlają nad formularzem `<OrganizationModerationBanner>`, gdy
 `canTransact === false`.
 
@@ -108,6 +413,11 @@ każdej nowej rejestracji organizacji `OrgRegistrationNotifier` zapisuje jedno p
 wszystkich (`audience='all_admins'`, `kind='organization.registered'`) i wysyła po jednym e-mailu na
 każdy adres z ustawienia `organizations.notifications.new_registration_recipients`. Panel odpytuje
 `GET /api/v1/admin/notifications` co 30 s.
+
+Wpis w dzwonku zawiera tekst angielski oraz klucze `notifications.newRegistration.*` z bundla tego
+modułu, więc każdy administrator czyta go we własnym języku. E-mail korzysta z szablonu
+`new_org_registration`, jeśli taki jest zdefiniowany; w przeciwnym razie moduł składa go sam, z tego
+samego bundla, w języku domyślnego systemowego kanału sprzedaży.
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
@@ -152,12 +462,21 @@ Wstępne sprawdzenie w storefroncie:
 
 ### Cenniki obowiązujące organizację i promocje dla organizacji
 
-`OrganizationEffectivePriceListsService.listApplicable(orgId)` korzysta z istniejącego
-`application-rule-evaluator` z modułu `price_lists`, aby wyliczyć wszystkie cenniki obecnie
-obowiązujące organizację, każdy z tablicą `reasons[]` (`direct_organization_match` /
-`customer_group_match` / `sales_channel_inheritance` / `segment_rule_match`). Wynik jest dostępny pod
-`GET /api/v1/admin/organizations/:id/applicable-price-lists` i wyświetlany jako tabela tylko do
-odczytu na stronie szczegółów organizacji w panelu.
+Strona szczegółów organizacji w panelu administracyjnym pokazuje, tylko do odczytu, **cenniki, które
+obecnie obowiązują organizację**: cenniki, których odbiorcy wskazują samą organizację, cenniki
+wskazujące którąś z jej organizacji nadrzędnych (dziedziczone w hierarchii) oraz cenniki jej grupy
+klientów. Każdy ma oznaczenie, jak dociera do organizacji — `direct_organization_match`,
+`ancestor_organization_match` albo `customer_group_match` — a cenniki dla wszystkich nie są
+wymieniane. O tym, który z nich wygrywa dla danego produktu, decyduje kolejność cen modułu
+`price_lists`; odnośnik **Wyjaśnij cenę dla tej organizacji** na tej samej stronie otwiera dla niej
+wyjaśnienie ceny.
+
+Dla programistów: `OrganizationEffectivePriceListsService.listApplicable(orgId)` pyta moduł
+`price_lists` przez `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })`
+(kontener `priceListReadPort`), przekazując łańcuch organizacji od najbliższej oraz jej własną grupę
+klientów. Odpowiedź jest dostępna pod `GET /api/v1/admin/organizations/:id/applicable-price-lists`.
+Gdy modułu `price_lists` nie ma, wywołanie jest odrzucane, zamiast zwracać pustą listę. Powody
+`sales_channel_inheritance` i `segment_rule_match` nie są już zwracane.
 
 Promocje: gdy promocja jest skierowana do konkretnej organizacji (`promotions.organization_id` jest
 ustawione), platforma stosuje ją tylko wtedy, gdy organizacja koszyka ma status `active`. Sprawdzenie
@@ -168,16 +487,20 @@ jest podłączone przez wymagany argument konstruktora `resolveOrganizationStatu
 ### Przypisanie handlowców
 
 `organization_sales_rep_assignments` (tabela łącząca `(organization_id, admin_user_id)`) wiąże
-handlowców z organizacjami. Gdy rola administratora wywołującego to `sales_representative`, listy
-zamówień i zapytań ofertowych w panelu są ograniczane do organizacji przypisanych temu handlowcowi.
-Administratorzy platformy widzą wszystko.
+handlowców z organizacjami. Gdy rola administratora wywołującego to `sales_representative`, każdy
+ekran panelu jest ograniczany do organizacji z zasięgu tego handlowca (zob. *Do których organizacji
+sięga przedstawiciel handlowy*): zakresem tenanta każdego żądania panelu jest „każda organizacja
+oprócz prowadzonych przez innego przedstawiciela”, obliczany raz na żądanie z tej tabeli i z tabeli
+`organization_reach_governor`, która dla każdej organizacji przechowuje najbliższego przodka (lub ją samą)
+z przypisanym handlowcem i jest aktualizowana w transakcji każdego zapisu, który może to zmienić. Nic nie
+jest buforowane. Administratorzy platformy widzą wszystko.
 
 Tę relację obsługują trzy endpointy, należące do tego modułu i przez niego rejestrowane:
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
-| `GET /api/v1/admin/organizations/:id/sales-reps` | Lista handlowców przypisanych do organizacji. |
-| `POST /api/v1/admin/organizations/:id/sales-reps` | Przypisanie handlowca. |
+| `GET /api/v1/admin/organizations/:id/sales-reps` | Lista handlowców przypisanych do organizacji. `404 NOT_FOUND` dla organizacji spoza zasięgu przedstawiciela handlowego (zob. *Do których organizacji sięga przedstawiciel handlowy*), jak dla organizacji, która nie istnieje. |
+| `POST /api/v1/admin/organizations/:id/sales-reps` | Przypisanie handlowca. Organizacja osobista jest odrzucana z `422 ORGANIZATION_PERSONAL` (token `sales_rep`, `details.organizationId`, `organizationName`). |
 | `DELETE /api/v1/admin/organizations/:id/sales-reps/:adminUserId` | Usunięcie przypisania. |
 
 Są chronione przez `organizations:assign-sales-rep`. Do 2026-08 rejestrował je moduł zapytań
@@ -197,7 +520,7 @@ Port `VatValidator` mają dwie produkcyjne implementacje klienta HTTP:
 
 - `ViesClient` → `POST` na endpoint REST VIES (`/check-vat-number`). Limit czasu 5 s; jedno
   przerwanie przy błędzie sieci.
-- `MinisterstwoFinansowClient` → `GET` na `wl-api.mf.gov.pl/api/search/nip/{nip}`. Ograniczenie do
+- `MinisterstwoFinansowClient` → `GET` na `wykazpodatnikowvat.mf.gov.pl/api/search/nip/{nip}`. Ograniczenie do
   10 żądań na sekundę w procesie; 7-dniowa pamięć podręczna z kluczem `(nip, today)`, oparta na
   historii w usłudze `OrganizationTaxIdValidation` (jeden wiersz na próbę).
 
@@ -213,6 +536,351 @@ nigdy nie kończy się błędem z powodu problemu zewnętrznego.
 | --- | --- |
 | `POST /api/v1/admin/organizations/:id/vat-validations` | Jedna próba walidacji (`providerHint`, `applyAutoFill`) |
 | `GET /api/v1/admin/organizations/:id/vat-validations` | Historia, od najnowszych |
+
+Każdy wpis historii mówi, skąd pochodzi: `origin: 'admin'` dla „Zweryfikuj teraz”, `'registration'` dla
+danych z rejestru, które przyniosła samodzielna rejestracja (zobacz niżej). Wpis z rejestracji ma też
+`registryDetails`, `submittedValues` i `divergence`; wpis administratora ma we wszystkich trzech `null`.
+Kształt opisuje `organizationTaxIdValidationRecordSchema` w `@endora-commerce/contracts`.
+
+### Samodzielna rejestracja: wszystko albo nic
+
+Firma rejestrująca się w storefroncie tworzy naraz pięć rzeczy: Organizację
+(w stanie `pending_verification`), jej powiązanie z kanałem sprzedaży, jej
+pierwszego użytkownika — *Administratora* Organizacji — dane z rejestru, gdy
+kupujący z nich skorzystał, oraz token weryfikacji adresu e-mail. Są zapisywane
+w **jednej transakcji**: po rejestracji istnieją albo wszystkie, albo żadna. Gdy
+rejestracja nie powiedzie się na którymkolwiek etapie — adres e-mail zajęła
+przed chwilą inna rejestracja, wystąpił błąd bazy danych, proces się przerwał —
+nie zostaje po niej Organizacja bez administratora, więc kupujący może po prostu
+spróbować ponownie z tym samym NIP-em.
+
+Sprawdzenia, które niczego nie zapisują, odbywają się najpierw, zanim cokolwiek
+zostanie zapisane: kraj, to, czy NIP albo adres e-mail są już zarejestrowane,
+dane z rejestru i wartości pól niestandardowych. Hasło również jest haszowane
+przed transakcją. `organization.registered.v1` i `customer_account.created.v1`
+są wysyłane po jednym razie, po zatwierdzeniu rejestracji.
+
+Dla programisty: zapis to polecenie `organization.register`
+(`commands/register-organization.command.ts`) uruchamiane przez Command Bus.
+Pierwsze konto tworzy polecenie `customer_account.create` modułu
+`customer_accounts`, przygotowane przez `customerAccountMemberCommandPort`
+i uruchomione jako polecenie **podrzędne** przez `ctx.run`. Publiczny endpoint,
+jego treść żądania, odpowiedzi i kody błędów pozostają bez zmian.
+
+### Pobieranie danych firmy z rejestru przy rejestracji
+
+Firma rejestrująca się w sklepie może pobrać swoje dane z publicznego rejestru po numerze podatkowym,
+a formularz rejestracji wypełnia się nimi. Każde uzupełnione pole można zmienić; dane mają charakter
+wyłącznie informacyjny i żaden wynik wyszukiwania — brak w rejestrze, firma niebędąca czynnym
+podatnikiem VAT, awaria rejestru — nie blokuje rejestracji. **Funkcja jest domyślnie wyłączona.**
+
+**Rejestry i wybór rejestru.** Numer jest najpierw normalizowany (usuwane są spacje, myślniki i
+kropki, rozpoznawany jest unijny przedrostek kraju, `GR` jest czytane jako `EL` z VIES), a suma
+kontrolna polskiego NIP-u jest sprawdzana **zanim** zostanie odpytany jakikolwiek rejestr: błędny numer
+albo kraj spoza UE nie powodują żadnego zapytania.
+
+- **Polskie NIP-y** trafiają do rejestrów wybranych w ustawieniu *rejestry dla polskich NIP-ów*:
+  - `gus_mf` (domyślnie) — **GUS REGON** (BIR1.1) i **Biała lista podatników VAT** Ministerstwa
+    Finansów równolegle. GUS dostarcza pełną nazwę, REGON i uporządkowany adres; Biała lista — status
+    VAT, a także dane, gdy GUS nie jest skonfigurowany, nie odpowiada albo nie zna numeru.
+  - `gus` — wyłącznie GUS REGON. Biała lista nie jest odpytywana, więc jej dzienny limit zostaje dla
+    „Zweryfikuj teraz”; status VAT jest pokazywany jako *niesprawdzony*. **Bez działających danych
+    dostępowych GUS ustawienie `gus` oznacza, że dla polskich NIP-ów nie ma wyszukiwania wcale** — każde
+    polskie wyszukiwanie odpowiada „rejestr niedostępny”. Wybierz je dopiero wtedy, gdy dane dostępowe
+    GUS działają.
+  - `mf` — wyłącznie Biała lista. Klucz GUS nie jest potrzebny, ale adres przychodzi jako jeden wiersz i
+    jest dzielony na ulicę, kod pocztowy i miasto najlepiej, jak się da; czego nie da się podzielić,
+    uzupełnia kupujący.
+- **Pozostałe unijne numery VAT** zawsze trafiają do **VIES**, niezależnie od ustawienia dla Polski.
+  Niektóre państwa (m.in. Niemcy) nie udostępniają nazwy ani adresu: kupujący dowiaduje się, że numer
+  jest prawidłowy, i wpisuje dane sam.
+
+**Ustawienia** (grupa *Organizations* na ekranie Ustawienia; otwiera go akcja palety poleceń
+*Ustawienia pobierania danych firmy przy rejestracji*):
+
+| Ustawienie | Wartość domyślna | Znaczenie |
+| --- | --- | --- |
+| `organizations.registration.registry_lookup_enabled` | `false` | Włącza wyszukiwanie. Po wyłączeniu sklep pokazuje formularz do ręcznego wypełnienia, a `POST /api/v1/organizations/registry-lookup` odpowiada dokładnie tak jak nieistniejąca ścieżka. Działa bez restartu. |
+| `organizations.registration.registry_lookup_pl_sources` | `gus_mf` | `gus_mf` \| `gus` \| `mf`, jak wyżej. Odczytywane przy każdym wyszukiwaniu; nieczytelna wartość liczy się jako `gus_mf`. Ekran Ustawienia ostrzega obok niego, gdy wybrano `gus`, a nie wybrano danych dostępowych GUS. |
+| `organizations.registration.gus_credentials` | puste | Dane dostępowe GUS REGON używane przez wyszukiwanie. Opcjonalne przy `gus_mf` i `mf`. |
+
+**Dane dostępowe GUS.** Utwórz je na ekranie **Dane dostępowe** z typem *GUS REGON registry (BIR1.1)*:
+**klucz użytkownika** wydany przez GUS (tajny — przechowywany w postaci zaszyfrowanej, pokazywany
+zamaskowany, nigdy nie zwracany w całości) oraz **środowisko**, *Production* albo *Test*. Zmiana
+środowiska wymaga ponownego podania klucza. Aby wypróbować wyszukiwanie bez klucza produkcyjnego,
+użyj środowiska *Test* z publicznym kluczem testowym GUS `abcde12345abcde12345`; rejestr testowy
+zawiera dane zanonimizowane. Następnie wskaż te dane dostępowe w
+`organizations.registration.gus_credentials`. Gdy moduł `credentials` jest wyłączony, gdy danych
+dostępowych nie da się odczytać albo gdy GUS odrzuci klucz, polskie wyszukiwania działają tak jak bez
+danych dostępowych.
+
+Klient GUS korzysta z wbudowanego w Node magazynu certyfikatów, który akceptuje serwery GUS i VIES;
+wdrożenie, które go zastępuje (`--use-openssl-ca`, własny pakiet urzędów certyfikacji), musi zadbać o to,
+by nadal im ufało.
+
+**Limity i pamięć podręczna.** Wyszukiwanie nie jest otwartym pośrednikiem do rejestrów:
+
+- **Na klienta:** 10 wyszukiwań na 10 minut z jednego adresu (powyżej `429 RATE_LIMITED`). Sklep
+  przekazuje `X-Forwarded-For` kupującego, więc limit liczy kupującego tylko tam, gdzie backend ufa
+  sklepowi jako pośrednikowi (`TRUSTED_PROXY_HOPS` / `TRUSTED_PROXY_ADDRESSES`); bez tego wszyscy
+  kupujący sklepu renderowanego po stronie serwera dzielą jeden limit.
+- **Na rejestr, dla całej platformy:** GUS i VIES — 300 zapytań na godzinę (UTC); Biała lista — 60 na
+  dobę według czasu warszawskiego, co zostawia resztę jej dziennego limitu na adres IP (100 zapytań
+  `search`) dla „Zweryfikuj teraz”. Po wyczerpaniu limitu rejestr jest traktowany jako niedostępny;
+  rejestr wyłączony ustawieniem dla Polski nie zużywa limitu wcale.
+- **Pamięć podręczna:** odpowiedzi są zapamiętywane według kraju, wyboru rejestrów dla Polski i numeru
+  — znalezione na 6 godzin, nieznalezione na 30 minut, niedostępne na 60 sekund — więc powtórne
+  wyszukiwanie nie odpytuje rejestru, a zmiana wyboru rejestrów nigdy nie zwraca odpowiedzi pobranej
+  przy poprzednim wyborze.
+- **Czas:** wyszukiwanie odpowiada w ciągu 8 sekund, niezależnie od rejestrów.
+- **Redis:** pamięć podręczna, limity i identyfikatory wyszukiwań są przechowywane w Redisie. Gdy Redis
+  zawodzi, wyszukiwanie odpowiada „rejestr niedostępny” zamiast działać bez limitów; rejestracja działa
+  normalnie.
+
+Odpowiedź nigdy nie zdradza, czy dany numer należy już do organizacji na tej platformie; rejestracja
+odrzuca duplikat istniejącym kodem 409.
+
+**Co widzą moderatorzy.** Rejestracja poprzedzona wyszukiwaniem zapisuje jeden wpis w historii
+walidacji VAT, oznaczony jako *Rejestracja*, z odpowiedzią rejestru (źródło, pełna nazwa, adres, REGON,
+status VAT i działalności, obowiązujący wybór rejestrów dla Polski, rejestry, które zawiodły albo nie
+zostały odpytane) i danymi wpisanymi przez klienta. Panel pokazuje kartę *Dane z rejestru przy
+rejestracji* z jednym i drugim obok siebie i oznacza każde pole, które **się różni**; różnice wyłącznie
+w wielkości liter, znakach diakrytycznych, odstępach, interpunkcji albo popularnym zapisie formy
+prawnej (`sp. z o.o.`, `S.A.` …) się nie liczą. Organizacja oczekująca na weryfikację, której dane się
+różnią, pokazuje komunikat w akcjach moderacji. Pola samej organizacji zawierają to, co wpisał klient —
+pełną nazwę z rejestru można przejąć wyłącznie przez „Zweryfikuj i uzupełnij pełną nazwę”.
+
+**Bez JavaScriptu.** Przycisk *Pobierz dane firmy* wysyła formularz na serwer, a strona wraca z
+uzupełnionymi polami firmy i wszystkim innym, co wpisał kupujący — poza hasłem, które nigdy nie jest
+odsyłane — bez żadnych danych w pasku adresu. Naciśnięcie Enter w polu poniżej NIP-u pobiera wtedy dane
+zamiast rejestrować; z JavaScriptem Enter pobiera dane tylko w polu NIP.
+
+| Metoda i ścieżka | Przeznaczenie |
+| --- | --- |
+| `GET /api/v1/organizations/registration-options` | Czy wyszukiwanie jest włączone i dla których krajów (sklep zapamiętuje odpowiedź do 5 minut i odświeża ją po zmianie ustawienia) |
+| `POST /api/v1/organizations/registry-lookup` | Jedno wyszukiwanie (`{ taxId, country }`); odpowiada `found`, `not_found`, `unavailable`, `invalid_tax_id` albo `unsupported_country` wraz z `lookupId` |
+| `POST /api/v1/organizations/register` | Przyjmuje opcjonalne `registryLookupId` na najwyższym poziomie; dane z rejestru są odczytywane z magazynu platformy, nigdy z żądania |
+
+### Pola niestandardowe przy rejestracji
+
+Administrator może poprosić rejestrującą się firmę o więcej niż własne pola
+platformy — skąd wie o sklepie, z jakiej jest branży, numer telefonu — bez
+zmiany kodu: definiuje pole na ekranie **Pola niestandardowe** dla
+*Organizacji* albo *Klientów* i zaznacza **Zbieraj od kupującego podczas
+rejestracji**. Formularz rejestracji pokazuje je wtedy z etykietą w języku
+sklepu i z oznaczeniem, gdy jest wymagane: pola organizacji w sekcji firmy, pola
+klienta w sekcji danych osobowych. To, co wypełniono, zapisuje się w nowej
+organizacji i na koncie osoby, która się rejestruje, razem z samą rejestracją;
+moderator odczytuje to w panelach *Pola niestandardowe* organizacji i klienta.
+
+- **Przyjmowane są tylko pola zaznaczone do rejestracji.** Wartość dla każdego
+  innego pola — wewnętrznego, pola drugiego typu rekordu, nieistniejącego — jest
+  odrzucana, nigdy pomijana, podobnie jak wartość złego typu albo kształtu.
+  Tekst ma najwyżej 1 000 znaków, a pól każdego typu rekordu można wysłać
+  najwyżej 50.
+- **Odrzucona rejestracja niczego nie tworzy**: ani organizacji, ani konta, ani
+  powiązania z kanałem sprzedaży. Każda odmowa jest podana przy swoim polu, w
+  języku kupującego, a formularz wraca ze wszystkim, co wpisano, poza hasłem.
+- **Wymagane pole zaznaczone do rejestracji trzeba wypełnić**; wymagane pole,
+  które nie jest zaznaczone, nie jest wymagane przy rejestracji.
+- Wpis rejestracji w dzienniku audytu zapisuje, **które** pola wypełniono,
+  nigdy ich wartości.
+
+Formularz *Nowa organizacja* i formularz bezpośredniego tworzenia członka
+pokazują te same pola — każde, które administrator może edytować — i wysyłają je
+razem z utworzeniem; pole wymagane trzeba wypełnić także tam, a odmowa jest
+pokazywana przy polu. Utworzenia w panelu sprawdzają wartości według reguł
+administratora — wypełnić można każde pole danego typu rekordu, nie tylko te
+otwarte przy rejestracji.
+
+**Żądanie.** `POST /api/v1/organizations/register` przyjmuje dwie opcjonalne
+grupy, każda to mapa kluczy pól na wartości, a żądanie bez nich działa dokładnie
+tak jak wcześniej:
+
+```json
+{
+  "organization": {
+    "name": "Acme Sp. z o.o.",
+    "taxId": "PL5260250274",
+    "registeredAddress": { "street": "ul. Prosta 1", "city": "Warszawa", "postalCode": "00-001", "country": "PL" },
+    "customFieldValues": { "acquisition_source": "trade_fair" }
+  },
+  "firstUser": {
+    "email": "anna@acme.example",
+    "password": "…",
+    "firstName": "Anna",
+    "lastName": "Nowak",
+    "customFieldValues": { "phone": "+48 600 000 000" }
+  },
+  "acceptedTermsVersion": "2025-01"
+}
+```
+
+`organization.customFieldValues` zawiera pola organizacji,
+`firstUser.customFieldValues` — pola osoby. Pole *Tak / Nie* to `true` albo
+`false`, liczba to liczba JSON, data to `YYYY-MM-DD`, wybór to zapisana wartość
+opcji, wielokrotny wybór to tablica takich wartości.
+
+**Odmowa.** `422` `CUSTOM_FIELD_VALUE_INVALID`, jeden wpis `details` na każde
+odrzucone pole. `field` podaje grupę i klucz (`organization.<key>`,
+`firstUser.<key>`; samą grupę, gdy przeniosła więcej niż 50 pól), `code` to
+powód, a `message` to zdanie dla kupującego w języku żądania, które nie podaje
+ani klucza, ani wartości:
+
+```json
+{ "error": { "code": "CUSTOM_FIELD_VALUE_INVALID", "message": "Some fields are missing or invalid. Correct them and try again.", "details": [
+  { "field": "organization.acquisition_source", "code": "missing_required", "message": "This field is required.", "path": "organization.acquisition_source", "issue": "This field is required." },
+  { "field": "firstUser.credit_tier", "code": "not_open_for_input", "message": "This field cannot be filled in here.", "path": "firstUser.credit_tier", "issue": "This field cannot be filled in here." }
+] } }
+```
+
+Kody to `not_open_for_input`, `too_many_keys`, `missing_required`,
+`wrong_type`, `out_of_range`, `unknown_option` i `duplicate_option`. Pokazuj
+`message`; od `code` uzależniaj działanie tylko wtedy, gdy tego potrzebujesz.
+
+#### Dodanie pól do storefrontu utworzonego przed tym wydaniem
+
+Referencyjny storefront sam pokazuje otwarte pola. Storefront utworzony z
+wcześniejszego wydania ma własną kopię strony rejestracji i potrzebuje trzech
+zmian, wszystkich opartych na powyższym API.
+
+1. **Odczytaj otwarte pola** na stronie rejestracji, po stronie serwera:
+   `GET /api/v1/custom-fields/input-surfaces/organization.register`, z językiem
+   strony w `Accept-Language`. Nie wymaga sesji i odpowiada także w sklepie
+   zamkniętym dla anonimowych odwiedzających. `data.entities.organization` i
+   `data.entities.customer` to pola obu sekcji, każde
+   `{ key, valueType, required, label, options: [{ value, label }], sortOrder }`
+   w kolejności wyświetlania; typu bez otwartego pola nie ma w odpowiedzi albo
+   ma `[]`, a nieznana powierzchnia daje `200` z `entities: {}`. Zapisuj odpowiedź
+   w pamięci podręcznej (referencyjny storefront robi to na pięć minut) i
+   traktuj **każdy** błąd jako „brak dodatkowych pól”, żeby strona nigdy nie
+   zawiodła z ich powodu.
+2. **Pokaż jedną kontrolkę na pole** w jego sekcji, z jego `label`, z
+   oznaczeniem, gdy `required`: pola tekstowe i liczbowe, pole daty, pole
+   wyboru dla *Tak / Nie* (wyślij `false`, gdy nie jest zaznaczone), listę
+   rozwijaną albo grupę przycisków opcji dla pojedynczego wyboru i grupę pól
+   wyboru dla wielokrotnego wyboru.
+3. **Wyślij i pokaż z powrotem.** Umieść wartości w
+   `organization.customFieldValues` i `firstUser.customFieldValues`, pomijając
+   pola pozostawione puste. Przy `422` `CUSTOM_FIELD_VALUE_INVALID` umieść
+   `message` każdego wpisu `details` przy polu, które wskazuje jego `field`, i
+   pokaż formularz ponownie z tym, co wpisano — nigdy w adresie strony.
+
+Minimalny Server Component dla kroku 1 i pierwszej sekcji kroku 2 (Next.js App
+Router; `API_URL` to adres backendu):
+
+```tsx
+type OpenField = {
+  key: string;
+  valueType: 'text' | 'number' | 'boolean' | 'date' | 'select' | 'multiselect';
+  required: boolean;
+  label: string;
+  options: { value: string; label: string }[];
+};
+
+async function openRegistrationFields(language: string): Promise<{ organization: OpenField[]; customer: OpenField[] }> {
+  try {
+    const response = await fetch(`${process.env.API_URL}/api/v1/custom-fields/input-surfaces/organization.register`, {
+      headers: { 'Accept-Language': language },
+      next: { revalidate: 300 },
+    });
+    if (!response.ok) return { organization: [], customer: [] };
+    const { data } = (await response.json()) as { data: { entities: Record<string, OpenField[]> } };
+    return { organization: data.entities.organization ?? [], customer: data.entities.customer ?? [] };
+  } catch {
+    return { organization: [], customer: [] };
+  }
+}
+
+export async function CompanyExtraFields({ language }: { language: string }) {
+  const { organization } = await openRegistrationFields(language);
+  return organization.map((field) => (
+    <label key={field.key}>
+      {field.label}
+      {field.required ? ' *' : null}
+      {field.valueType === 'select' ? (
+        <select name={`cf.organization.${field.key}`} required={field.required}>
+          <option value="" />
+          {field.options.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          name={`cf.organization.${field.key}`}
+          type={field.valueType === 'date' ? 'date' : 'text'}
+          required={field.required}
+        />
+      )}
+    </label>
+  ));
+}
+```
+
+Akcja serwera odczytuje następnie każdą wartość formularza `cf.organization.<key>`
+do `organization.customFieldValues` (a `cf.customer.<key>` do
+`firstUser.customFieldValues`), zamieniając pole liczbowe przez `Number(...)`.
+Przykład pomija kontrolki *Tak / Nie* i wielokrotnego wyboru oraz rozmieszczenie
+błędów z kroku 3.
+
+### Ustawianie wartości pól niestandardowych z kodu po stronie serwera
+
+Niektórych wartości nikt nie wpisuje: źródło pozyskania, które integracja
+ustala po rejestracji firmy, segment wyliczany przez moduł nakładki,
+identyfikator, który worker przynosi z zewnętrznego systemu. Takie pole jest
+zwykle *wewnętrzne*, więc rejestracja nie przyjmie go od kupującego, a kod,
+który zna wartość, nie ma żądania administratora, z którym mógłby ją wysłać.
+
+Taki kod zapisuje przez `organizationCommandPort.setCustomFieldValues` (zob. *Zapisy po stronie
+serwera* wyżej), pobierany przez
+`lazyPort<OrganizationCommandPort>(ctx, 'organizationCommandPort')`, z `organizations` w
+`dependencies` manifestu modułu wywołującego. Wycofywane
+`organizationCustomFieldWritePort.setCustomFieldValues` robi to samo, dopóki nie zostanie usunięte.
+
+```ts
+setCustomFieldValues(
+  organizationId: string,
+  merge: (current: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  options?: AggregateCommandOptions,
+): Promise<OrganizationRecord>;
+```
+
+- **Scalasz i walidujesz ty.** Port wczytuje organizację, przekazuje `merge`
+  jej bieżące wartości i zapisuje to, co `merge` zwróci — odczyt, scalenie i
+  zapis w jednej transakcji, więc równoległa zmiana nie ginie. Port nie
+  waliduje: wywołaj `CustomFieldValuePort.validateAndMerge` wewnątrz `merge`.
+  Stosuje ono reguły administratora, więc pole wewnętrzne jest przyjmowane,
+  nieznane klucze są pomijane, a każde pole wymagane jest sprawdzane:
+
+  ```ts
+  ctx.subscribe('organization.registered.v1', async (payload) => {
+    const { organizationId } = payload as unknown as { organizationId: string };
+    await organizationWrites.setCustomFieldValues(organizationId, (current) =>
+      customFieldValues.validateAndMerge('organization', current, { acquisition_source: 'trade_fair' }),
+    );
+  });
+  ```
+
+- **Błąd niczego nie zmienia.** Gdy `merge` rzuci wyjątek — także błąd
+  walidacji — nic nie zostaje zapisane ani zarejestrowane w audycie, a wyjątek
+  dociera do ciebie w niezmienionej postaci. Nieznana albo usunięta organizacja
+  daje `404 NOT_FOUND`, zanim `merge` zostanie wywołane.
+- **Jeden wpis audytu**, `organization.set_custom_field_values`, z nazwami
+  kluczy, których wartość się zmieniła (`changedCustomFields`), nigdy z samymi
+  wartościami: dziennik audytu platformy jest globalny, więc wartości klienta
+  do niego nie trafiają. Wykonawcą jest ten, w czyim imieniu działa wywołanie:
+  nikt (system) w subskrybencie albo workerze, administrator wewnątrz jego
+  żądania. Subskrybent `organization.registered.v1` działa jako system, bo
+  rejestracja jest anonimowa. Kod działający poza jakimkolwiek żądaniem czy
+  zadaniem, na przykład zwykły timer, najpierw otwiera zakres przez
+  `enterSystemScope`.
+- **Po rejestracji, nie razem z nią.** Subskrybent `organization.registered.v1`
+  działa, gdy rejestracja jest już zatwierdzona. Jeśli jego zapis się nie uda,
+  organizacja pozostaje zarejestrowana bez tej wartości; błąd trafia do logu i
+  nigdy nie dociera do kupującego.
+
+Nigdy nie zapisuj kolumny `organizations.custom_field_values` bezpośrednio.
+Bezpośredni zapis omija walidację, wpis audytu i granicę modułu.
 
 ### Lista wyboru i wyszukiwanie bez polskich znaków
 
@@ -234,6 +902,10 @@ edycji.
 | --- | --- | --- | --- |
 | `organizations.moderation.mode` | wyliczenie `string` | `'manual'` | `manual` ⇒ pending_verification; `auto` ⇒ active od razu po rejestracji |
 | `organizations.notifications.new_registration_recipients` | tablica `json` | `[]` | Adresy e-mail powiadamiane o nowej organizacji |
+| `organizations.hierarchy.credit_inheritance_mode` | wyliczenie `string` | `'shared_pool'` | `shared_pool` \| `independent_default`: jak oddział bez własnego limitu kredytowego korzysta z limitu organizacji nadrzędnej (zob. *Hierarchia organizacji*) |
+| `organizations.registration.registry_lookup_enabled` | `boolean` | `false` | Pobieranie danych firmy z rejestru przy rejestracji (zobacz wyżej) |
+| `organizations.registration.registry_lookup_pl_sources` | wyliczenie `string` | `'gus_mf'` | Rejestry odpytywane o polski NIP: `gus_mf` \| `gus` \| `mf` |
+| `organizations.registration.gus_credentials` | `credential_ref` | `''` | Dane dostępowe GUS REGON (typ `organizations_gus_bir`) |
 
 ### Migracje
 
@@ -245,16 +917,65 @@ edycji.
   `admin_notification_reads` dla każdego administratora.
 - `20260611T140351_customer_accounts_organization_optional.ts` (należy do `customer_accounts`) — dopuściła `NULL` w
   `customer_accounts.organization_id` dla kont gościnnych. **To rozwiązanie jest martwe**: zastąpiły
-  je organizacje prywatne, a kolumnę ponownie zaostrzono — zobacz
+  je organizacje osobiste, a kolumnę ponownie zaostrzono — zobacz
   `20260825T141659_customer_accounts_organization_required` w `customer_accounts`.
-- `20260717T151403_organizations_personal_organizations.ts` — dodaje `organizations.is_personal` i tworzy organizację prywatną
-  dla każdego wcześniej istniejącego konta bez organizacji (zobacz „Organizacje prywatne” niżej).
+- `20260717T151403_organizations_personal_organizations.ts` — dodaje `organizations.is_personal` i tworzy organizację osobistą
+  dla każdego wcześniej istniejącego konta bez organizacji (zobacz „Organizacje osobiste” niżej).
+- `20261103T173304_organizations_organization_roles.ts` — tworzy `organization_roles`, daje każdej organizacji role
+  Administrator i Członek (oraz wyzwalacz, który robi to dla każdej nowej), odbiera roli Członek dwa kody akceptacji
+  koszyka tam, gdzie organizacja wymagała akceptacji koszyków, i daje każdemu zaproszeniu odwołanie do roli (zobacz
+  „Role” niżej).
+- `20261105T121034_organizations_registry_lookup_provenance.ts` — dodaje do `organization_tax_id_validations`
+  kolumny `origin` (`admin` dla każdego istniejącego wiersza), `registry_details` i `submitted_values` oraz dopuszcza
+  dostawcę `gus_pl` (zobacz „Pobieranie danych firmy z rejestru przy rejestracji” wyżej).
+- `20261109T144721_organizations_reach_governor.ts` — tworzy `organization_sales_rep_assignments`, jeśli ta tabela
+  jeszcze nie istnieje, a potem tworzy `organization_reach_governor` (dla każdej organizacji
+  najbliższy przodek lub ona sama z przypisanym handlowcem), wypełnia ją i dodaje wyzwalacze na `organizations` i
+  `organization_sales_rep_assignments`, które utrzymują ją aktualną w transakcji zapisu (zobacz „Przypisanie
+  handlowców” wyżej).
 
-### Organizacje prywatne (B2C)
+  **Kto tworzy tabelę przypisań.** Właścicielem `organization_sales_rep_assignments` jest ten moduł, a to
+  pierwsza z jego migracji, która jej potrzebuje, więc tworzy ją tutaj. Przed zgłoszeniem #1033 tworzyła ją
+  wyłącznie migracja `20260503T141344_quote_requests_workflow.ts` modułu `quote_requests`, więc platforma
+  składająca ten moduł bez `quote_requests` zatrzymywała się na tej migracji. Teraz obie migracje tworzą tabelę
+  z `if not exists`, z tymi samymi kolumnami i nazwami ograniczeń, a jej dwa indeksy, `orgsa_admin_user_idx`
+  i `orgsa_organization_idx`, tworzy wyłącznie ta migracja. Tabelę tworzy migracja, która uruchomi się
+  pierwsza, a druga jej nie zmienia. W bazie, która zastosowała już obie migracje, nic nie uruchamia
+  się ponownie i nic się nie zmienia. Zainstalowanie `quote_requests` po tym module pozostawia tabelę i jej
+  wiersze bez zmian. Metoda `down()` tej migracji nigdy nie usuwa tabeli.
+
+  **Odtwarzanie danych z wyłączonymi wyzwalaczami.** Odtworzenie samych danych przez
+  `pg_restore --disable-triggers` (albo każdy inny zapis tych dwóch tabel przy wyłączonych
+  wyzwalaczach) pozostawia `organization_reach_governor` nieaktualną, a nieaktualny wiersz poszerza
+  zasięg przedstawiciela handlowego. Po odtworzeniu uruchom
+  `select organizations_reach_governor_rebuild(null);`.
+- `20261110T135922_organizations_personal_tax_id_removal.ts` — czyści NIP każdej organizacji
+  osobistej, zapisuje jej konto w `personal_account_id` (odczytane z dawnego zastępczego numeru;
+  wiersz osobisty, którego NIP nie był takim numerem, jest czyszczony i pozostaje bez powiązania, a
+  ich liczba jest zgłaszana jako komunikat) i dodaje `organizations_tax_id_presence`. **Odmawia
+  uruchomienia i niczego nie zmienia w bazie, która ma organizacje, ale nie zastosowała migracji
+  `20260825T141659_customer_accounts_organization_required` modułu `customer_accounts`
+  (0.100.0)**: najpierw zaktualizuj do wydania 0.100.x–0.110.x.
+- `20261110T135941_organizations_tax_id_scope.ts` — dodaje zapisaną kolumnę generowaną
+  `organizations.root_id` (pierwszy segment `path`; jej dodanie przepisuje tabelę pod wyłączną
+  blokadą), rozszerzenie `btree_gist` i jednowierszową tabelę `organization_tax_id_policy`
+  z wartością `global` (zob. „Numery podatkowe” niżej).
+- `20261110T173752_organizations_tax_id_write_lock.ts` — wyzwalacz wierszowy
+  `organizations_tax_id_write_lock` przy wstawianiu i przy zmianie `tax_id` lub `path`: dwie
+  transakcje zapisujące ten sam NIP wykonują się po kolei, więc druga dostaje 409 zamiast
+  zakleszczenia.
+- `20261110T183238_organizations_tax_id_normalise.ts` — przepisuje każdy NIP do postaci
+  znormalizowanej i dodaje `organizations_tax_id_normalised`. **Odmawia uruchomienia i niczego nie
+  zmienia, gdy po normalizacji dwie organizacje miałyby ten sam NIP** tam, gdzie zakres tego
+  zabrania, i wypisuje do 50 takich grup; przed aktualizacją znajdziesz je zapytaniem
+  `select upper(regexp_replace(tax_id, '[[:space:]-]', '', 'g')), array_agg(id) from organizations where tax_id is not null group by 1 having count(*) > 1;`
+  i nadaj każdej organizacji własny NIP.
+
+### Organizacje osobiste (B2C)
 
 Organizacja jest jedynym pojęciem tenanta w platformie. Klient B2C, czyli osoba fizyczna, **nie** jest
 przypadkiem „bez organizacji”: każda samodzielna rejestracja klienta tworzy jednoosobową
-**organizację prywatną** (`is_personal = true`). Organizacja i konto są zapisywane **w jednej
+**organizację osobistą** (`is_personal = true`). Organizacja i konto są zapisywane **w jednej
 transakcji**, przez moduł, który jest właścicielem wiersza konta, na obu ścieżkach tworzenia konta —
 przy samodzielnej rejestracji i przy logowaniu przez zewnętrznego dostawcę tożsamości. Oznacza to, że:
 
@@ -263,27 +984,605 @@ przy samodzielnej rejestracji i przy logowaniu przez zewnętrznego dostawcę to�
   zapewnia kolumna, a nie zabezpieczenie w kodzie: MikroORM stosuje filtr tenanta do `SELECT` /
   `UPDATE` / `DELETE`, ale nie do `INSERT`.
 - **Izolacja wynika ze struktury.** Zabezpieczenie izolacji tenantów traktuje każdą organizację
-  prywatną jako osobnego tenanta — dwóch klientów B2C nigdy nie widzi swoich danych, bez żadnego
+  osobistą jako osobnego tenanta — dwóch klientów B2C nigdy nie widzi swoich danych, bez żadnego
   szczególnego przypadku dla braku organizacji.
 - **Wartości domyślne dla osób fizycznych.** `status = active`, `vat_status = vat_exempt`, `name` z
-  imienia i nazwiska klienta (albo z części adresu e-mail przed `@`) oraz syntetyczny 32-znakowy
-  szesnastkowy `tax_id` utworzony z identyfikatora konta (kolumna ma globalne `UNIQUE`, a osoba
-  fizyczna nie ma firmowego NIP).
-- **Niewidoczne na ekranach B2B w panelu.** Organizacje prywatne są domyślnie pomijane na listach i
+  imienia i nazwiska klienta (albo z części adresu e-mail przed `@`) i **brak NIP** (`tax_id` ma
+  wartość `NULL`, a każde API odpowiada `taxId: null`). Konto, dla którego organizację utworzono,
+  jest zapisane w `personal_account_id` — dzięki temu tworzenie jest idempotentne i zawsze
+  odnajduje „własną organizację osobistą klienta”.
+- **Niewidoczne na ekranach B2B w panelu.** Organizacje osobiste są domyślnie pomijane na listach i
   listach wyboru w panelu, nie można przypisać do nich handlowca i nie trafiają do kolejki moderacji
   (powstają jako `active`). Lista organizacji w panelu przyjmuje `?includePersonal=true`, aby je w
-  razie potrzeby pokazać.
+  razie potrzeby pokazać. Ponieważ nie można do nich przypisać handlowca, każdy przedstawiciel
+  handlowy sięga do każdej organizacji osobistej oraz do jej zamówień, faktur, koszyków i zwrotów.
 - **Dostępność zależna od kanału.** Samodzielną rejestrację (B2C) w każdym kanale sprzedaży włącza
   ustawienie `customers.allow_registration_without_organization`; kanał tylko dla B2B odrzuca
   rejestrację i niczego nie tworzy. Nazwa ustawienia to pozostałość po wcześniejszym rozwiązaniu —
   dotyczy rejestracji poza organizacją *firmową*, a nie rejestracji bez organizacji.
 - **Odłączenie członka od firmy przenosi go tutaj.** `DELETE /api/v1/admin/customers/:id/organization`
   w panelu zapisywało kiedyś `organization_id = NULL`; teraz tworzy (albo odnajduje) organizację
-  prywatną klienta i przenosi go do niej, zachowując w audycie akcję
+  osobistą klienta i przenosi go do niej, zachowując w audycie akcję
   `customer_account.organization_unassigned`.
+- **Bez walidacji VAT.** Walidacja NIP organizacji osobistej jest odrzucana
+  `422 VALIDATION_FAILED` (*„This organization has no tax ID.”*), zanim zostanie zapytany
+  jakikolwiek rejestr, a strona organizacji nie pokazuje dla niej panelu walidacji VAT.
+
+Do tego wydania organizacja osobista miała syntetyczny, 32-znakowy szesnastkowy NIP utworzony z
+identyfikatora konta. Migracja aktualizacyjna go czyści i przenosi powiązanie do
+`personal_account_id`. **Dokumenty zapisane przed aktualizacją nie są przepisywane**: zamówienie,
+faktura, dokument oferty czy wpis audytu utworzony wcześniej dla organizacji osobistej nadal
+pokazuje ten zastępczy numer tam, gdzie pokazywał go wtedy. Zamówienia, które go zawierają, można
+znaleźć zapytaniem
+`select id from orders where billing_address->>'taxId' ~ '^[0-9a-f]{32}$'`.
+
+Operator dodający członka bezpośrednio do organizacji osobistej
+(`POST /api/v1/admin/organizations/:id/members`) dostaje odmowę
+`422 ORGANIZATION_PERSONAL` (token `add_member`, `details.organizationId`,
+`organizationName`).
 
 Organizacje firmowe (B2B) pozostają bez zmian — reguła jednoosobowości (`assertMembershipAllowed`)
-odrzuca tylko dodanie drugiego członka do organizacji prywatnej.
+odrzuca tylko dodanie drugiego członka do organizacji osobistej.
+
+### Zamiana organizacji osobistej na firmową
+
+Klient, który kupował jako osoba prywatna, a potem założył firmę, może zachować swoją historię:
+operator zamienia jego organizację osobistą na firmową **w miejscu**. Klient nie może zrobić tego
+sam — żadna trasa storefrontu, klienta ani publiczna nie prowadzi do tej zamiany.
+
+**Kto i gdzie.** Operator z uprawnieniem `organizations:convert-to-company` (*Zamiana organizacji
+osobistych na firmowe*) widzi na stronie organizacji osobistej przycisk **Zamień na firmę**; na
+organizacji firmowej go nie ma. Ten sam formularz jest dostępny z palety poleceń (⌘K / Ctrl+K,
+*Zamień organizację osobistą*) i z menu w nagłówku listy organizacji, pod adresem
+`/organizations/convert-to-company`: najpierw wybierasz organizację osobistą (wyszukiwaną po
+nazwisku klienta), potem wpisujesz dane firmy.
+
+**Formularz** pyta o nazwę firmy, opcjonalną nazwę prawną, numer podatkowy (spacje i myślniki są
+usuwane po wyjściu z pola; od 8 do 32 znaków), adres siedziby, status VAT (domyślnie *Czynny
+podatnik VAT*) i *Zweryfikuj numer podatkowy po zamianie* (domyślnie zaznaczone). Weryfikacja
+wymaga też uprawnienia `customers:manage`, czyli uprawnienia samej walidacji VAT, więc pole jest
+widoczne tylko dla operatora, który je ma; bez niego formularz zamienia organizację bez weryfikacji.
+Przez API `validateTaxId: true` bez `customers:manage` powoduje odrzucenie całego żądania `403`.
+
+**Co się zmienia** — w jednej transakcji zapisywanej w dzienniku audytu
+(`organization.convert_to_company`):
+
+- Organizacja staje się firmową, z wpisaną nazwą, nazwą prawną, NIP, adresem siedziby i statusem
+  VAT. **Jej identyfikator się nie zmienia**, a zamówienia, koszyki, adresy, ceny i kanały
+  sprzedaży pozostają przy niej.
+- Jej członek zachowuje rolę *Administrator*, więc może teraz zapraszać współpracowników i
+  zarządzać rolami; zakładka **Członkowie i role** strony organizacji pokazuje role, a storefront przy
+  następnej stronie oferuje członkowi ekrany firmowe.
+- **Status jest zachowany** (aktywny klient pozostaje aktywny; zamiana nie wysyła organizacji do
+  kolejki moderacji). Jeśli organizacja nigdy nie została zatwierdzona, zostaje oznaczona jako
+  zatwierdzona przez operatora, który ją zamienił.
+- Powiązanie z kontem klienta jest usuwane, a czas zamiany zapisywany. Jeśli ten członek zostanie
+  później odłączony od firmy, dostaje **nową** organizację osobistą; zamieniona firma zachowuje
+  swój identyfikator. Ponieważ jedyny członek zamienionej firmy jest jej ostatnim administratorem,
+  jego odłączenie wymaga najpierw drugiego administratora — jak w każdej firmie.
+- Zwrot zamówienia złożonego **przed** zamianą nadal jest traktowany jako odstąpienie od umowy
+  przez konsumenta; zamówienia złożone później należą do firmy.
+- Wpis audytu zapisuje, które pola się zmieniły, czy dopisano zatwierdzenie, i zakres unikalności
+  NIP — nigdy nazwy, NIP ani adresu.
+- Po zatwierdzeniu transakcji raz wysyłane jest zdarzenie `organization.converted_to_company.v1`.
+
+**Weryfikacja NIP.** Gdy pole jest zaznaczone, walidacja VAT uruchamia się **po** zatwierdzeniu
+zamiany, tą samą ścieżką co *Zweryfikuj teraz* (Biała lista Ministerstwa Finansów dla polskiego
+NIP, VIES dla innego prefiksu UE, w pozostałych przypadkach tylko sprawdzenie formatu). Jej wynik
+jest pokazany w potwierdzeniu; awaria rejestru ani negatywny wynik nigdy nie cofają zamiany —
+ponów weryfikację w panelu walidacji VAT.
+
+**Odmowy.** Gdy zamiana zostaje odrzucona, nic się nie zmienia:
+
+| Odpowiedź | Kiedy |
+| --- | --- |
+| `409 ORGANIZATION_TAX_ID_EXISTS` | NIP należy już do innej organizacji tam, gdzie zakres unikalności NIP zabrania go współdzielić (zob. *Zakres unikalności NIP*) |
+| `409 ORGANIZATION_CONVERSION_REFUSED` `not_personal` | Organizacja już jest firmowa |
+| `409 ORGANIZATION_CONVERSION_REFUSED` `deleted` | Organizacja jest usunięta albo jej klient został zanonimizowany przez proces retencji |
+| `409 ORGANIZATION_CONVERSION_REFUSED` `owner_not_administrator` | Członek nie ma roli *Administrator* — to błąd danych do zgłoszenia, a nie błąd operatora |
+| `409 ORGANIZATION_WRITE_CONTENDED` | Równoległa zmiana organizacji (na przykład zmiana zakresu unikalności NIP) trzymała blokadę; spróbuj ponownie |
+| `404 NOT_FOUND` | Nieznana albo poza zasięgiem przedstawiciela handlowego |
+
+**Zamiany nie można cofnąć**; nie ma operacji, która zamienia firmę z powrotem na organizację
+osobistą.
+
+**Dla kodu serwerowego.** Wpis kontenera `organizationCommandPort`
+(`OrganizationCommandPort.convertToCompany(organizationId, input)` w
+`@endora-commerce/contracts`) uruchamia to samo polecenie z bieżącym aktorem — na przykład w
+imporcie z ERP albo w module nakładki. **Nie sprawdza żadnego uprawnienia i nie uruchamia walidacji
+VAT**: bramką jest wywołujący, więc nigdy nie pobieraj go w trasie dostępnej dla klienta.
+
+## Numery podatkowe
+
+### Jak zapisywany jest NIP
+
+NIP jest zapisywany w jednej, kanonicznej postaci: **bez spacji i myślników, wielkimi literami**
+(`normalizeTaxId` w `@endora-commerce/contracts`), więc `pl 526-025-09-95` zostaje zapisany jako
+`PL5260250995`. Rejestracja, tworzenie w panelu i zamiana normalizują wpisaną wartość, a potem
+wymagają **od 8 do 32 znaków**; krótsza albo dłuższa wartość jest odrzucana `400` (więc `--------`
+zostaje odrzucone, a nie zapisane jako pusty numer). Kropki i inne znaki interpunkcyjne **nie** są
+usuwane — to osobne, szersze czyszczenie wyszukiwania w rejestrze, które nie zmienia tego, co
+zostaje zapisane. Ograniczenie bazy danych `organizations_tax_id_normalised` odrzuca każdą inną
+postać od każdego zapisującego, w tym od danych testowych, seedów i kodu nakładek.
+
+Organizacja firmowa zawsze ma NIP, a osobista nigdy; ograniczenie `organizations_tax_id_presence`
+odrzuca wiersz, który łamie którąkolwiek z tych reguł.
+
+NIP wpisuje się przy tworzeniu (albo zamianie) organizacji. `PATCH /api/v1/admin/organizations/:id`
+go nie przyjmuje; błędny NIP poprawia się przyciskiem **Zmień numer podatkowy** (zob. *Korekta NIP*
+niżej) — osobną operacją zapisywaną w dzienniku audytu.
+
+### Korekta NIP
+
+NIP błędnie wpisany przy tworzeniu albo oddział, któremu nadano NIP centrali, choć w
+rzeczywistości jest osobnym podatnikiem, poprawia się **w miejscu**: organizacja zachowuje
+identyfikator, członków, role, zamówienia i historię. Klient nie może zrobić tego sam — żadna trasa
+storefrontu, klienta ani publiczna nie prowadzi do tej operacji.
+
+**Kto i gdzie.** Operator z uprawnieniem `organizations:change-tax-id` (*Zmiana numeru podatkowego
+organizacji firmowej*) widzi na stronie organizacji firmowej przycisk **Zmień numer podatkowy**; na
+organizacji osobistej go nie ma, bo nie ma ona NIP (zamień ją najpierw na firmową). Ten sam
+formularz jest dostępny z palety poleceń (⌘K / Ctrl+K, *Zmień numer podatkowy organizacji*), pod
+adresem `/organizations/change-tax-id`: najpierw wybierasz organizację firmową, potem poprawiasz
+NIP.
+
+**Formularz** zaczyna od zapisanego NIP. Spacje i myślniki są usuwane po wyjściu z pola i, jak przy
+tworzeniu, wymagane jest od 8 do 32 znaków. Pole *Zweryfikuj nowy numer podatkowy po zmianie* jest
+oferowane (domyślnie zaznaczone) operatorowi, który ma też uprawnienie `customers:manage`, czyli
+uprawnienie samej walidacji VAT.
+
+**Co się zmienia** — w jednej transakcji zapisywanej w dzienniku audytu
+(`organization.tax_id.change`):
+
+- NIP jest normalizowany i sprawdzany według **obowiązującego zakresu unikalności NIP**, dokładnie
+  tak jak przy tworzeniu: w zakresie *Globalny* nie może go mieć żadna inna organizacja, łącznie z
+  usuniętymi (soft delete); w zakresie *Jedno drzewo na numer* nie może go mieć żadna organizacja z
+  innego drzewa (z tego samego drzewa — może).
+- Weryfikacja VAT organizacji zaczyna się od nowa jako **niezweryfikowana** — data, dostawca i wynik
+  ostatniej walidacji są czyszczone, bo dotyczyły starego NIP. Status VAT (*Czynny podatnik VAT*,
+  *Zwolniony z VAT*, *Odwrotne obciążenie*) zostaje bez zmian.
+- **Wystawione już dokumenty nie są przepisywane.** Zamówienie zachowuje NIP nabywcy, z którym je
+  złożono; faktury, dokumenty ofert i wcześniejsze wpisy audytu zachowują to, co zawierają.
+  Dokumenty wystawione później mają nowy NIP.
+- Wpisanie NIP, który jest już zapisany (po normalizacji), niczego nie zmienia, nie zapisuje wpisu
+  audytu i nie wysyła zdarzenia; odpowiedź zawiera `changed: false`.
+- Wpis audytu zapisuje `changedFields: ['taxId']`, informację o wyzerowaniu weryfikacji VAT
+  (`vatStatusReset: true`) i zakres unikalności NIP — nigdy starego ani nowego NIP.
+- Po zatwierdzeniu transakcji raz wysyłane jest zdarzenie `organization.tax_id_changed.v1`.
+
+**Weryfikacja nowego NIP.** Gdy pole jest zaznaczone, walidacja VAT uruchamia się **po**
+zatwierdzeniu zmiany, tą samą ścieżką co *Zweryfikuj teraz*. Jej wynik jest pokazany w
+potwierdzeniu; awaria rejestru ani negatywny wynik nigdy nie cofają zmiany — ponów weryfikację w
+panelu walidacji VAT.
+
+**Odmowy.** Gdy korekta zostaje odrzucona, nic się nie zmienia:
+
+| Odpowiedź | Kiedy |
+| --- | --- |
+| `409 ORGANIZATION_TAX_ID_EXISTS` | NIP należy już do organizacji tam, gdzie zakres unikalności NIP zabrania go współdzielić — także do usuniętej |
+| `409 ORGANIZATION_TAX_ID_CHANGE_REFUSED` `not_company` | Organizacja jest osobista (tylko kod serwerowy; panel tego nie oferuje) |
+| `409 ORGANIZATION_TAX_ID_CHANGE_REFUSED` `deleted` | Organizacja jest usunięta (tylko kod serwerowy; trasa panelu odpowiada `404`) |
+| `409 ORGANIZATION_WRITE_CONTENDED` | Równoległa zmiana organizacji (na przykład zmiana zakresu unikalności NIP) trzymała blokadę; spróbuj ponownie |
+| `404 NOT_FOUND` | Nieznana, usunięta albo poza zasięgiem przedstawiciela handlowego |
+
+Gdy dwóch operatorów w tej samej chwili poprawia dwie organizacje na ten sam NIP, rozstrzyga baza
+danych: jedna zmiana się udaje, druga dostaje `409 ORGANIZATION_TAX_ID_EXISTS`, nigdy 500.
+
+**Dla kodu serwerowego.** `OrganizationCommandPort.changeTaxId(organizationId, { taxId })` we wpisie
+kontenera `organizationCommandPort` uruchamia to samo polecenie z bieżącym aktorem. Tak jak
+`convertToCompany`, **nie sprawdza żadnego uprawnienia i nie uruchamia walidacji VAT**: nigdy nie
+pobieraj go w trasie dostępnej dla klienta.
+
+### Zakres unikalności NIP
+
+Niektóre firmy rejestrują każdy oddział jako osobną organizację pod centralą, a oddziały prawnie
+mają NIP centrali. **Zakres unikalności NIP** rozstrzyga, gdzie ten sam NIP może wystąpić więcej
+niż raz:
+
+| Zakres | Na ekranie | Reguła | Egzekwuje |
+| --- | --- | --- | --- |
+| `global` (domyślny) | *Globalny* — każdy numer podatkowy należy do jednej organizacji | NIP ma co najwyżej jedna organizacja, łącznie z usuniętymi (soft delete) | ograniczenie unikalności `organizations_tax_id_unique` |
+| `per-tree-root` | *Jedno drzewo na numer* — centrala i jej oddziały mogą mieć ten sam numer podatkowy; niepowiązane organizacje nie mogą | Organizacje mogą mieć ten sam NIP tylko wtedy, gdy mają ten sam korzeń (centralę na szczycie drzewa, zob. *Hierarchia organizacji*) | odroczone ograniczenie wykluczające `organizations_tax_id_one_tree` na zapisanej kolumnie `organizations.root_id` |
+
+Każda nowa i zaktualizowana instalacja zaczyna w zakresie `global`, czyli z regułą, którą platforma
+miała zawsze. Zakres **nie jest ustawieniem**: jest zapisany w wierszu `organization_tax_id_policy`
+i zmienia go wyłącznie polecenie `organization.tax_id_scope.set`, zapisywane w dzienniku audytu,
+które zmienia wiersz i ograniczenie bazy danych razem, w jednej transakcji. Każdy zapis odczytuje
+zakres z bazy danych we własnej transakcji, więc żaden serwer nie działa według nieaktualnego
+zakresu.
+
+**Zmiana zakresu.** *Organizacje → Zakres unikalności NIP* (`/organizations/tax-id-scope`; także
+*Zakres unikalności NIP* w palecie poleceń, ⌘K / Ctrl+K, i w menu w nagłówku listy organizacji)
+pokazuje obowiązujący zakres, czas ostatniej zmiany, znaczenie każdego zakresu i liczbę obecnie
+współdzielonych numerów. Wybierz drugi zakres, kliknij **Zastosuj** i potwierdź.
+
+- **Kto.** Uprawnienie `organizations:manage-tax-id-scope` (*Zarządzanie zakresem unikalności
+  NIP*), u administratora, którego zasięg obejmuje całą platformę. Przedstawiciel handlowy dostaje
+  `403` nawet z tym uprawnieniem, bo zakres dotyczy wszystkich organizacji.
+- **Zmiana wstrzymuje zapisy organizacji na kilka sekund.** Na czas budowania nowego ograniczenia
+  bierze wyłączną blokadę tabeli `organizations`, czekając na nią najwyżej 5 sekund. Zmiana
+  organizacji, która trafi na tę operację — albo inny zapis, który przegra z nią blokadę —
+  dostaje odpowiedź `409 ORGANIZATION_WRITE_CONTENDED` (*„W tym samym czasie trwała inna zmiana
+  organizacji. Spróbuj ponownie za chwilę.”*); ponowienie się udaje.
+- **Na *Jedno drzewo na numer*** można przejść zawsze. Gdy choć jeden NIP jest współdzielony,
+  powrót jest możliwy dopiero wtedy, gdy żaden numer nie jest już współdzielony: NIP aktywnej
+  organizacji można poprawić przyciskiem **Zmień numer podatkowy**, ale usunięta organizacja
+  zachowuje swój, więc NIP współdzielonego z usuniętą organizacją nie da się zwolnić z poziomu
+  panelu. Okno potwierdzenia mówi o tym, zanim ją potwierdzisz.
+- **Powrót do *Globalny*** jest odrzucany `409 ORGANIZATION_TAX_ID_SCOPE_DUPLICATES`, dopóki
+  jakiś NIP ma więcej niż jedna organizacja (`details: { code: 'shared_tax_ids',
+  sharedTaxIdCount, examples }`, najwyżej 20 przykładów, każdy z NIP i identyfikatorami
+  organizacji). Ekran podaje, ile numerów jest współdzielonych, linkuje organizacje i niczego nie
+  zmienia. Organizacja, która ma współdzielony NIP **przez pomyłkę** — w rzeczywistości jest
+  osobnym podatnikiem — dostaje własny przyciskiem **Zmień numer podatkowy** (zob. *Korekta NIP*);
+  gdy żaden NIP nie jest już współdzielony, powrót się udaje. **Organizacje usunięte (soft delete)
+  też się liczą**, więc oddział, który **słusznie** ma NIP centrali, także usunięty, utrzymuje
+  instalację w zakresie *Jedno drzewo na numer*.
+- **Zastosowanie zakresu, który już obowiązuje,** niczego nie zmienia i nie zapisuje wpisu audytu;
+  odtwarza ograniczenie zakresu, jeśli usunięto je ręcznie. Ekran proponuje **Zastosuj ponownie**,
+  gdy wykryje, że baza danych nie egzekwuje obowiązującego zakresu, a serwer przy starcie zapisuje
+  w logu jeden błąd z nazwą zakresu i znalezionych ograniczeń.
+- Wpis audytu zapisuje dwa kody zakresu, przed zmianą i po niej.
+
+**Na co wpływa zakres.**
+
+- **Tworzenie.** Rejestracja i tworzenie w panelu są odrzucane `409 ORGANIZATION_TAX_ID_EXISTS`,
+  gdy NIP istnieje tam, gdzie zakres tego zabrania. W `per-tree-root` oznacza to, że nowa
+  organizacja **główna** — każda samodzielna rejestracja i utworzenie w panelu bez organizacji
+  nadrzędnej — nie może mieć NIP, który ma jakiekolwiek drzewo, a organizacja tworzona w panelu
+  **pod** centralą (albo pod którymkolwiek z jej potomków) może mieć NIP tego drzewa. Rejestracja z
+  NIP, który ma oddział, też jest odrzucana; dołączenie do istniejącej firmy przy rejestracji nie
+  jest oferowane.
+- **Przenoszenie.** W `per-tree-root` przypisanie, przeniesienie albo odłączenie organizacji, po
+  którym jeden NIP znalazłby się w dwóch drzewach, jest odrzucane (zob. *Hierarchia organizacji*).
+- **Równoległe zapisy**, które razem złamałyby regułę, rozstrzyga baza danych: jeden się udaje, a
+  drugi dostaje ten sam kod 409, który dałoby sprawdzenie — nigdy 500.
+
+### Wyszukiwanie po NIP
+
+Pole wyszukiwania na liście organizacji w panelu (`q`) i wyszukiwanie globalne (⌘K) dopasowują NIP
+tak samo jak nazwę. Zapytanie jest normalizowane tak jak zapisana wartość, więc `pl 526-025`
+znajduje `PL526025…`. Organizacja osobista nie ma NIP i nigdy nie zostanie po nim znaleziona — ani
+po swoim dawnym zastępczym numerze.
+
+### Wyszukiwanie organizacji po NIP (kod serwerowy)
+
+`organizationDetailsPort` (`OrganizationDetailsPort` w `@endora-commerce/contracts`) poprawnie
+odpowiada na pytanie „która organizacja ma ten NIP?” w obu zakresach. Obie funkcje najpierw
+normalizują wejście.
+
+- `findByTaxId(taxId, { includeDeleted? })` — każda organizacja z tym NIP, **najpierw korzeń
+  drzewa**, potem według głębokości, czasu utworzenia i identyfikatora. Organizacje usunięte tylko z
+  `includeDeleted: true`. Brak dopasowania to `[]`.
+- `resolveByTaxId(taxId)` — `{ kind: 'none' }` albo `{ kind: 'one', organization }` wskazujące
+  korzeń (a gdy korzeń jest usunięty — najstarsze żywe dopasowanie), albo
+  `{ kind: 'ambiguous', organizations }`, na które nie pozwala ograniczenie żadnego z zakresów i
+  które istnieje z myślą o przyszłych zakresach.
+
+Rejestracja, tworzenie w panelu oraz seed i reset danych demonstracyjnych korzystają z tych dwóch
+funkcji zamiast odpytywać kolumnę — integracje powinny robić tak samo.
+
+## Role
+
+Każda organizacja ma role, a każdy członek ma dokładnie jedną z nich. Rola to
+zestaw **uprawnień organizacji** — działań kupującego, takich jak *tworzenie
+koszyków* czy *akceptowanie koszyków* — z których każde deklaruje moduł, którego
+działanie ono chroni, w swoim manifeście (`organizationPermissions`). Uprawnienia
+organizacji to inny słownik niż uprawnienia operatora z `/admin-roles`
+(`<moduł>.<działanie>` wobec `<obszar>:<działanie>`) i te dwa słowniki nigdy się
+nie mieszają.
+
+- **Administrator** — rola predefiniowana. Ma wszystkie uprawnienia wszystkich
+  włączonych modułów, także uprawnienia dodane później, i jako jedyna może
+  zarządzać członkami, zaproszeniami i rolami. Nie można jej edytować ani usunąć.
+- **Członek** — rola predefiniowana. Domyślna rola nowego członka. Jej
+  uprawnienia można zmieniać, ale nie można jej przemianować ani usunąć.
+  Uprawnienie, które moduł deklaruje jako *domyślne dla członka*, rola Członek
+  ma od chwili, gdy ten moduł zostanie po raz pierwszy zaoferowany organizacji;
+  gdy administrator zapisze rolę Członek bez niego, nie zostanie ono nadane
+  ponownie.
+- **Role własne** — do 50 w organizacji, każda z nazwą niepowtarzalną w obrębie
+  organizacji (porównywaną bez względu na wielkość liter i nigdy równą nazwie
+  roli predefiniowanej w żadnym z dostarczanych języków) i opcjonalnym opisem.
+
+Obie role predefiniowane powstają razem z organizacją, niezależnie od tego,
+która ścieżka ją tworzy (wyzwalacz w bazie danych). Organizacja osobista (B2C)
+także ma obie role, ale nie ma zarządzania rolami: jej jedyny członek jest jej
+Administratorem.
+
+Uprawnienia modułu, który jest wyłączony, nie ma nikt i nie pokazuje go edytor;
+rola, która je nadawała, zachowuje to nadanie, więc ponowne włączenie modułu je
+przywraca. Zmiany ról obowiązują od następnego żądania: każdy proces przechowuje
+role organizacji w pamięci najwyżej 30 sekund i usuwa wpis, gdy tylko którykolwiek
+proces ogłosi zmianę.
+
+Każda zmiana roli to Komenda — `organization_role.create`,
+`organization_role.update`, `organization_role.delete` — audytowana na
+organizacji, ze wskazaniem członka lub operatora, który jej dokonał, oraz z
+identyfikatorem, rodzajem i posortowaną listą uprawnień roli przed zmianą i po
+niej, a przy edycji — z nazwami tego, co się zmieniło (`changedFields`: `name`,
+`description`, `permissions`). Nazwa i opis roli niestandardowej nigdy nie są
+zapisywane. Zapisanie roli bez zmian niczego nie rejestruje.
+
+| Metoda + ścieżka | Kto | Cel |
+| --- | --- | --- |
+| `GET /api/v1/organizations/mine/roles` | administrator organizacji | Wszystkie role z liczbą członków i oczekujących zaproszeń (oczekujące: nieprzyjęte, nieanulowane i niewygasłe) |
+| `GET /api/v1/organizations/mine/roles/:id` | administrator organizacji | Jedna rola |
+| `POST /api/v1/organizations/mine/roles` | administrator organizacji | Utworzenie roli własnej (`{ name, description?, permissions }`) |
+| `PATCH /api/v1/organizations/mine/roles/:id` | administrator organizacji | Edycja roli (`{ expectedVersion, name?, description?, permissions? }`) |
+| `DELETE /api/v1/organizations/mine/roles/:id` | administrator organizacji | Usunięcie roli własnej (`{ expectedVersion, replacementRoleId? }`) |
+| `GET /api/v1/organizations/mine/permission-catalogue` | administrator organizacji | Dostępne uprawnienia pogrupowane według modułów, w języku żądania |
+| `GET /api/v1/organizations/mine/role` | klient | Własna rola członka i to, na co pozwala |
+| `GET /api/v1/admin/organizations/:id/roles` | admin (`organizations:read-roles` lub `organizations:manage-roles`) | Jak lista w sklepie |
+| `GET /api/v1/admin/organizations/:id/permission-catalogue` | admin (`organizations:read-roles` lub `organizations:manage-roles`) | Jak katalog w sklepie |
+| `POST /api/v1/admin/organizations/:id/roles` | admin (`organizations:manage-roles`) | Utworzenie roli własnej |
+| `PATCH /api/v1/admin/organizations/:id/roles/:roleId` | admin (`organizations:manage-roles`) | Edycja roli |
+| `DELETE /api/v1/admin/organizations/:id/roles/:roleId` | admin (`organizations:manage-roles`) | Usunięcie roli własnej |
+
+Każde ciało żądania jest ścisłe: ciało, które wciąż wysyła dawne pole `role`, jest
+odrzucane z `400 VALIDATION_FAILED`. Rola innej organizacji oraz każda ścieżka ról
+organizacji osobistej odpowiada `404`. Odmowy to
+`409 ORGANIZATION_ROLE_NAME_TAKEN`, `409 ORGANIZATION_ROLE_STALE` (rola zmieniła
+się od chwili odczytu), `422 ORGANIZATION_ROLE_LIMIT_REACHED`,
+`409 ORGANIZATION_ROLE_PROTECTED`, `422 ORGANIZATION_ROLE_REPLACEMENT_REQUIRED`
+i `422 ORGANIZATION_PERMISSION_UNKNOWN`. Działanie kupującego odrzucone z powodu
+braku uprawnienia odpowiada `403 ORGANIZATION_PERMISSION_REQUIRED`, z kodem
+uprawnienia i jego etykietą w `details`.
+
+Inne moduły pytają, czy członek może coś zrobić, przez
+`organizationPermissionPort` (`can`, `assert`, `isAdministrator`, `effective`,
+`rolesHolding`) i chronią swoje ścieżki funkcją `organizationPermissionPreHandler`
+z `@endora-commerce/contracts`. `organizationRoleReadPort.predefinedRoleId` podaje
+identyfikator roli Administrator lub Członek organizacji.
+
+### Role w storefroncie
+
+Administratorzy organizacji zarządzają rolami w obszarze konta. To, co widzi każdy członek, zależy
+od jego roli i od rodzaju organizacji:
+
+- **Nawigacja konta.** *Członkowie* i *Role* są widoczne dla członków z rolą *Administrator*;
+  *Koszyki do akceptacji* — dla członków, których rola ma uprawnienie *Akceptowanie i odrzucanie
+  koszyków współpracowników* (`carts.approve`), z liczbą oczekujących koszyków. Członek
+  organizacji osobistej (B2C) nie widzi żadnej z tych trzech pozycji, choć ma rolę
+  *Administrator*, a te strony odsyłają go do `/account`. Organizacja osobista nie jest firmą,
+  więc taki członek nie widzi też pozycji *Organizacja* ani *Adresy organizacji*: `/organization`
+  odsyła go do `/account`, a `/organization/addresses` do jego własnej książki adresowej,
+  `/addresses`, na której adresy organizacji nadal są widoczne obok jego własnych. Profil nie ma
+  dla niego wiersza *Organizacja*, a pole NIP w danych firmy do rozliczenia przy składaniu
+  zamówienia jest puste, bo organizacja osobista nie ma NIP. Każdy inny, kto otworzy taką stronę,
+  dowiaduje się, kto może z niej korzystać — na przykład *„Rolami mogą zarządzać tylko
+  administratorzy organizacji.”*
+- **Role** (`/organization/roles`) to lista wszystkich ról z rodzajem (*Wbudowana* albo
+  *Własna*), liczbą członków, oczekujących zaproszeń i uprawnieniami, oraz przycisk **Nowa
+  rola**. Każda rola otwiera się na własnej stronie (`/organization/roles/<id>`): *Administrator*
+  jest pokazany jako rola ze wszystkimi uprawnieniami i nie można go zmienić; *Członek* zachowuje
+  nazwę i przyjmuje tylko zmiany uprawnień; rolę własną można przemianować, opisać, edytować i
+  usunąć. Usunięcie roli, którą mają członkowie lub oczekujące zaproszenia, wymaga wskazania
+  roli, do której zostaną przeniesieni; usunięcia nie można cofnąć.
+- **Nowa rola zaczyna bez żadnych uprawnień.** Strona tworzenia (`/organization/roles/new`)
+  otwiera się z odznaczonymi wszystkimi uprawnieniami i nie proponuje „skopiuj z innej roli”;
+  rola utworzona bez zaznaczeń na nic nie pozwala. Uprawnienia są pogrupowane według modułów, z
+  etykietą i opisem w języku strony, a przy *Zakupie jednym kliknięciem* widnieje uwaga, że działa
+  on tylko razem z uprawnieniem *Składanie zamówień bez akceptacji*.
+- **Dwóch administratorów edytuje tę samą rolę.** Drugi zapis jest odrzucany; strona zachowuje
+  wpisane dane i proponuje wczytanie aktualnego stanu roli.
+- **Członkowie** (`/organization/members`) pokazuje rolę każdego członka jako listę wyboru ról
+  organizacji, a formularz zaproszenia wskazuje rolę nowego członka, z domyślnie wybraną rolą
+  *Członek*.
+- **Strona konta** pokazuje członkowi jego rolę w podsumowaniu profilu. Obok niej odnośnik *Na
+  co pozwala Twoja rola* otwiera okno dialogowe ze zrozumiałą listą tego, na co rola pozwala,
+  przetłumaczoną przez API; rola, która na nic nie pozwala, mówi o tym wprost. Członek
+  organizacji osobistej nie widzi ani roli, ani listy.
+
+### Role w panelu administracyjnym
+
+Ekran szczegółów organizacji ma sekcję **Role**, na zakładce **Członkowie i role**. Widzi ją operator z uprawnieniem
+`organizations:read-roles` lub `organizations:manage-roles`, i nigdy dla organizacji osobistej.
+Z uprawnieniem do odczytu sekcja jest tylko do odczytu; z `organizations:manage-roles` operator
+tworzy, edytuje i usuwa role według tych samych reguł co w storefroncie — formularz tworzenia
+również otwiera się z odznaczonymi wszystkimi uprawnieniami, a rolę, którą ktoś ma, można usunąć
+tylko ze wskazaniem roli zastępczej. Sekcja *Członkowie* na tym samym ekranie wymienia każdego
+członka z jego rolą. Operatorowi z `customers:manage` oferuje **Dodaj członka** — okno, w którym
+wybiera się wysłanie zaproszenia albo utworzenie konta od razu, i tylko ta druga droga pyta o imię,
+nazwisko, hasło tymczasowe i pola niestandardowe członka — a przy każdym członku **Edytuj**, okno
+z profilem i rolą zapisywanymi razem, oraz **Usuń**, które przed wykonaniem prosi o potwierdzenie.
+Ostatniego administratora nie można tam ani usunąć, ani pozbawić roli, a organizacja osobista nie
+oferuje *Dodaj członka*. Zakładka prowadzi do historii organizacji w dzienniku audytu, gdzie
+zapisana jest każda zmiana roli.
+
+### Członkowie, zaproszenia i sesja
+
+Rola członka jest wskazywana przez swój identyfikator wszędzie, gdzie żądanie ją
+podaje, i pokazywana jako `organizationRole: { id, name, kind }` wszędzie, gdzie
+odpowiedź ją pokazuje — w odpowiedzi logowania, `GET /api/v1/me`,
+`GET /api/v1/me/customer`, przyjęciu zaproszenia, listach członków i zaproszeń,
+liście członków w panelu operatora i odpowiedzi rozpoczęcia impersonacji. `name`
+roli predefiniowanej jest tłumaczone na język odpowiedzi; rola własna ma swoją
+nazwę. Widoki sesji (logowanie, `GET /api/v1/me`, `GET /api/v1/me/customer`,
+przyjęcie zaproszenia) zawierają też `permissions` — kody uprawnień, które członek
+faktycznie ma — aby sklep mógł ukryć to, czego członek nie może zrobić. Żadne
+żądanie ani odpowiedź nie zawiera już dawnego pola `role`
+(`organization_admin` / `regular_user`).
+
+- **Zastrzeżone dla Administratora.** Zarządzanie członkami (lista, zmiana ról,
+  usuwanie), zaproszeniami i rolami oraz ustawianie zasad uwierzytelniania
+  dwuskładnikowego organizacji są zastrzeżone dla roli Administrator. Rola
+  własna mająca wszystkie uprawnienia wciąż otrzymuje odmowę.
+- **Ostatni administrator.** Przeniesienie ostatniego aktywnego Administratora do
+  innej roli jest odrzucane z `409 CANNOT_DEMOTE_LAST_ADMIN`, jego usunięcie
+  z `409 CANNOT_REMOVE_LAST_ADMIN`, a unieważnienie jedynego oczekującego
+  zaproszenia z rolą Administrator w organizacji bez aktywnego Administratora
+  z `409 CANNOT_REVOKE_LAST_ADMIN_INVITE`; wygasłe zaproszenie nie jest
+  oczekujące. Zablokowani administratorzy się nie
+  liczą.
+- **Zaproszenia.** Zaproszenie wskazuje rolę organizacji — rolę Członek, gdy
+  żądanie nie wskazuje żadnej; rola innej organizacji daje `404`. E-mail
+  z zaproszeniem pokazuje etykietę roli w języku e-maila (rola własna — swoją
+  nazwę). Lista oczekujących pomija zaproszenia przyjęte, unieważnione
+  i wygasłe.
+- **Adresy.** Tworzenie, edycja i usuwanie wspólnych adresów organizacji wymaga
+  uprawnienia `addresses.manage` (deklarowanego przez `addresses`, domyślnie
+  w roli Członek); ich odczyt — nie.
+- **Organizacje osobiste.** Jedyny członek organizacji osobistej ma jej rolę
+  Administrator. Trasy członków i zaproszeń odpowiadają mu jak każdemu
+  administratorowi (lista członków zawiera tylko jego, lista zaproszeń jest
+  pusta); zaproszenie jest odrzucane z `422 ORGANIZATION_PERSONAL` (token
+  `invite`, `details.organizationId`), bo organizacja jest osobista, zanim rola
+  zostanie sprawdzona. Sklep ukrywa tam ekrany
+  organizacji na podstawie `organization.isPersonal`, nigdy roli.
+- **Logowanie i koszyk gościa.** Gdy loguje się członek, którego rola nie ma
+  uprawnienia *Tworzenie i edycja koszyków*, jego koszyk gościa nie jest łączony:
+  logowanie odpowiada `cartMerge.outcome = 'noop'` i zachowuje ciasteczko
+  `b2b_cart_anon`, więc koszyk gościa wciąż istnieje.
+
+Przypisanie roli, usunięcie członka i awaryjne nadanie roli Administrator
+uruchamiają polecenia `customer_account.change_role` /
+`customer_account.remove_member` modułu `customer_accounts`; utworzenie
+i unieważnienie zaproszenia — `organization_invitation.create` /
+`organization_invitation.revoke`. Każde jest audytowane względem organizacji,
+z członkiem lub operatorem, który działał.
+
+## Ekran organizacji
+
+Ekran organizacji (`/organizations/:id`) to jedna karta z zakładkami. Pasek adresu zapamiętuje
+otwartą zakładkę (`?tab=members`, `commerce`, `tax`, `sales`), więc link może otworzyć ją od razu.
+
+| Zakładka | Co zawiera |
+| --- | --- |
+| **Przegląd** | Moderację (status i dozwolone dla niego działania), adres rejestrowy, hierarchię, pola własne |
+| **Członkowie i role** | Członków, **Dodaj członka** i role |
+| **Handel** | Kanały sprzedaży, e-maile z potwierdzeniem zamówienia, ograniczenia, strategię realizacji, obowiązujące cenniki oraz panele dodawane przez inne moduły (tryb wyświetlania cen, domyślne ustawienia zamówień, płatników, negocjację cen) |
+| **Podatki** | Numer podatkowy i status VAT z **Zmień numer podatkowy**, **Zmień status VAT…** albo, dla organizacji osobistej, **Zamień na firmę**; dalej weryfikację VAT |
+| **Sprzedaż** | Opiekunów handlowych (z `organizations:assign-sales-rep`), a po nich panele dodawane przez inne moduły o sprzedaży tej organizacji (szanse sprzedaży CRM, projekty). Widoczna tylko wtedy, gdy jest w niej któraś z tych części |
+
+Dla autorów modułów: panele zakładki Handel to strefa panelu administracyjnego
+`organization.detail.after`, a zakładki Sprzedaż — `organization.detail.sales`, która przekazuje
+wkładowi `{ organizationId }` i żadnej sesji zapisu — zakładka Sprzedaż nie należy do jednego
+przycisku Zapisz tego ekranu. Wkłady do `organization.detail.after` działają bez zmian.
+
+Przełączenie zakładki zachowuje każdą niezapisaną zmianę. Zakładka z niezapisanymi zmianami ma
+kropkę, a czytnik ekranu słyszy przy jej nazwie „niezapisane zmiany”.
+
+**Moderacja** oferuje tylko działania dozwolone dla statusu: **Zatwierdź** i **Odrzuć** dla
+organizacji oczekującej na weryfikację, **Zablokuj** dla aktywnej, **Odblokuj** dla zablokowanej i
+żadnego dla odrzuconej. Oczekująca organizacja, której dane w rejestrze różnią się od podanych,
+pokazuje komunikat; **Otwórz weryfikację VAT** otwiera zakładkę Podatki przy weryfikacji VAT.
+
+## Jeden przycisk Zapisz na ekranie organizacji
+
+Ekran organizacji (`/organizations/:id`) ma **jeden przycisk Zapisz**, w nagłówku strony. Obejmuje
+każde ustawienie na ekranie, które się edytuje, a nie wykonuje:
+
+- własne ustawienia organizacji — adresy e-mail potwierdzeń zamówień (w sekcji **Kontakt
+  i powiadomienia**), strategię realizacji, ograniczenia (dozwolone metody płatności, metody dostawy
+  i magazyny) oraz pola niestandardowe. Nie zapisują się już przy zmianie, przy opuszczeniu pola ani
+  własnym przyciskiem;
+- panele dodawane przez inne moduły, każdy, gdy jego moduł jest włączony: **domyślne ustawienia
+  zamówień** (Szybkie zamówienia), **tryb prezentacji ceny** (Cenniki) i **negocjację cen** w
+  zapytaniach ofertowych (Zapytania ofertowe).
+
+Zapisz pokazuje „Zapisz”, gdy nie ma nic do zapisania, i „Zapisz 3 zmiany”, gdy jest, licząc razem
+własne zmiany organizacji i zmiany paneli.
+
+- **Najpierw wszystko jest sprawdzane.** Jeśli którakolwiek część zostanie odrzucona, nic nie jest
+  zapisywane, a wszystkie zmiany zostają; podsumowanie nad sekcjami wymienia każdą część z jej
+  problemami, z przyciskiem **Pokaż**, który do niej przechodzi.
+- **Najpierw zapisywana jest organizacja**, jedną zmianą zawierającą tylko to, co zmieniono — a zaraz
+  po niej ograniczenia, jeśli się zmieniły. Potem panele, jeden po drugim.
+- **Jeśli ktoś inny zmienił organizację od chwili otwarcia ekranu**, nic nie jest zapisywane: ekran
+  wczytuje aktualne wartości, odrzuca wszystkie niezapisane zmiany na stronie i o tym informuje.
+  Żaden panel nie jest zapisywany.
+- **Jeśli organizacja zostanie zapisana, a panel nie**, podsumowanie mówi, co zapisano, a czego nie
+  („Zapisano: Organizacja. Nie zapisano: Domyślne ustawienia zamówień — *powód*”). Panel, którego nie
+  zapisano, zachowuje zmiany, a kolejne Zapisz zapisuje tylko to, co nadal czeka.
+- **Moduł wyłączony**, gdy jego panel ma niezapisane zmiany: panel znika, jego zmiany są odrzucane, a
+  ekran o tym informuje.
+- **Opuszczenie strony** — link w inne miejsce panelu albo zamknięcie lub odświeżenie karty
+  przeglądarki — z niezapisanymi zmianami wymaga potwierdzenia.
+
+Bez `customers:manage` własne ustawienia organizacji są tylko do odczytu, a ekran pokazuje Zapisz
+tylko wtedy, gdy któryś z paneli możesz zmienić.
+
+**Co działa od razu.** Działania na organizacji nie są częścią zapisu. Są zapisywane w chwili użycia
+i nie ruszają niezapisanych zmian. Każda taka sekcja ma etykietę **Działa od razu**: zapraszanie i
+bezpośrednie dodawanie członków, lista członków, hierarchia, moderacja (zatwierdzenie, odrzucenie,
+blokada, odblokowanie), walidacja VAT, kanały sprzedaży, role i opiekunowie handlowi.
+
+**Status i status VAT.** Każdy z nich zmienia się w jednym miejscu i żaden nie jest częścią zapisu:
+
+- **Status** organizacji (oczekuje na weryfikację, aktywna, zablokowana, odrzucona) jest pokazywany
+  i zmieniany wyłącznie w sekcji **Moderacja**, przez zatwierdzenie, odrzucenie, blokadę lub
+  odblokowanie. Te działania sprawdzają, jaka zmiana jest dozwolona z bieżącego statusu, zapisują
+  daty i powód oraz powiadamiają klienta. Są dostępne tylko z `customers:manage`; bez niego sekcja
+  pokazuje jedynie status i powód.
+- **Status VAT** (czynny podatnik VAT, zwolniony z VAT, odwrotne obciążenie) jest pokazywany w nagłówku
+  strony, po numerze podatkowym. Aby go zmienić, użyj **Zmień status VAT…** na zakładce **Podatki**, obok
+  **Zmień numer podatkowy**. Wymaga `customers:manage`, działa od razu i jest zapisywany w dzienniku
+  audytu. Status VAT decyduje o podatku w każdym zamówieniu, które organizacja złoży od tej chwili;
+  wystawione już zamówienia, faktury i dokumenty ofert zachowują swój. Weryfikacja numeru
+  podatkowego nie zmienia statusu VAT.
+
+## Wpisy audytu
+
+Dziennik audytu platformy to jedna tabela, którą czyta każdy operator z
+uprawnieniem `audit_log:read`, niezależnie od tego, do których organizacji ma
+dostęp, dlatego każdy wpis tego modułu zapisuje **nazwy i strukturę, nigdy
+wartości**: identyfikatory, statusy i inne
+kody, wartości logiczne, liczności, daty oraz posortowane nazwy zmienionych pól
+(`changedFields`, `changedCustomFields`). Nigdy nazwy organizacji, nazwy
+prawnej, numeru identyfikacji podatkowej, adresu, adresów e-mail do
+potwierdzeń zamówień, powodu zablokowania lub odrzucenia ani wartości pól
+niestandardowych; nigdy adresu e-mail ani imienia i nazwiska członka czy
+zaproszonej osoby; nigdy nazwy ani opisu roli niestandardowej.
+
+- **`organization.create`** — status i status VAT, kanały sprzedaży
+  i organizacja nadrzędna jako identyfikatory oraz nazwy pól, z którymi
+  organizację utworzono (`changedFields`, np. `name`, `taxId`,
+  `registeredAddress`), i zapisanych pól niestandardowych.
+- **`organization.register`** — jeden wpis dla całej samodzielnej rejestracji:
+  status, nazwy pól, z którymi Organizację utworzono (`changedFields`), klucze
+  pól niestandardowych wypełnionych przez kupującego dla Organizacji i dla jej
+  pierwszego użytkownika (`changedCustomFields`, jako `organization.<klucz>`
+  i `firstUser.<klucz>`) oraz kody dostawcy i wyniku sprawdzenia w rejestrze,
+  jeśli z niego skorzystano. Konto pierwszego użytkownika ma własny wpis
+  `customer_account.create` (zobacz moduł `customer_accounts`). Oba są
+  zapisywane w transakcji rejestracji i mają ten sam identyfikator żądania.
+- **`organization.admin_patch`**, **`organization.set_custom_field_values`**,
+  **`organization.convert_to_company`** — kody przed zmianą i po niej oraz
+  nazwy tego, co się zmieniło.
+- **`organization.update`** (`organizationCommandPort.update`) — status VAT przed
+  zmianą i po niej oraz nazwy pól, które się zmieniły.
+- **`organization.delete`** — status, status VAT, informacja, czy to
+  organizacja osobista, organizacja nadrzędna jako identyfikator i wersja.
+- **`organization.approved`**, **`.rejected`**, **`.blocked`**,
+  **`.unblocked`** — status, daty moderacji, identyfikator zatwierdzającego
+  operatora, wersja oraz informacja, czy podano powód zablokowania lub
+  odrzucenia (`hasBlockedReason`, `hasRejectedReason`); sam powód widać na
+  stronie organizacji.
+- **`organization.allow_lists_replace`**, **`organization.allow_list_patch`** — identyfikatory
+  dozwolonych metod płatności, metod dostawy i magazynów (przy zmianie częściowej: jej rodzaj oraz
+  dodane i usunięte identyfikatory), zapisywane w transakcji zmiany.
+- **`organization.sales_channels.set`** — identyfikatory kanałów sprzedaży przed zmianą i po niej,
+  zapisywane w transakcji zmiany obok jednego wpisu `sales_channel.membership.changed` na każdy
+  dodany lub usunięty kanał. Zapisanie zestawu, który organizacja już ma, niczego nie zapisuje.
+- **`organization.sales_rep_assign`**, **`.sales_rep_unassign`** — identyfikator przedstawiciela.
+  Przypisanie przedstawiciela, który jest już przypisany, albo usunięcie takiego, który nie jest,
+  niczego nie zmienia i niczego nie zapisuje.
+- **`customer_account.admin_create`**, **`.admin_profile_update`**,
+  **`.admin_remove`** — identyfikator roli członka, jego flagi zbiorczego
+  widoku, potwierdzenia adresu e-mail i weryfikacji dwuetapowej, a po zmianie —
+  nazwy tego, co się zmieniło (`email`, `firstName`, `lastName`, …).
+- **`customer_account.set_subtree_rollup`** — flaga zbiorczego widoku członka
+  przed zmianą i po niej.
+- **`organization_invitation.create`**, **`.revoke`** — identyfikator
+  zaproszenia oraz identyfikator i rodzaj jego roli.
+  **`organization.invite_accept`** — nowe konto i jego rola jako
+  identyfikatory.
+- **`organization_role.create`**, **`.update`**, **`.delete`** — jak opisano
+  przy rolach powyżej.
+
+Wpisy zapisane, zanim instancję zaktualizowano do wydania, które wprowadziło tę
+zmianę, pozostają takie, jakie zostały zapisane.
 
 ## Wyszukiwanie globalne
 
@@ -295,4 +1594,4 @@ Wyszukiwanie globalne w panelu administracyjnym (paleta poleceń, ⌘K / Ctrl+K)
 | NIP | tak |
 | Nazwa prawna | nie |
 
-Nazwy są dopasowywane bez względu na polskie znaki diakrytyczne, więc `lodz` znajduje *Łódź*. Wynikami są organizacje, które administratorowi pokazuje lista organizacji — organizacje firmowe, które nie zostały usunięte — dla roli z uprawnieniem `customers:read` lub `customers:manage`. Przedstawicielowi handlowemu przypisane mu organizacje są pokazywane jako pierwsze, a pozostałe po nich.
+Nazwy są dopasowywane bez względu na polskie znaki diakrytyczne, więc `lodz` znajduje *Łódź*; NIP jest dopasowywany w postaci znormalizowanej (bez spacji i myślników, wielkimi literami), więc `pl 526-025` znajduje `PL526025…`. Wynikami są organizacje, które administratorowi pokazuje lista organizacji — organizacje firmowe, które nie zostały usunięte — dla roli z uprawnieniem `customers:read` lub `customers:manage`. Przedstawicielowi handlowemu są to organizacje z jego zasięgu; przypisane mu organizacje są pokazywane jako pierwsze, a pozostałe po nich.

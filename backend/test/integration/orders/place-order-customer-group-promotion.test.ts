@@ -1,3 +1,4 @@
+import { decimalSum, percentOfHalfUp } from '@endora-commerce/contracts';
 import { Cart, CartItem } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -67,14 +68,14 @@ describe('placeOrder — customer-group targeted promotion (issue #177)', () => 
       code: 'i177-wholesale',
       name: 'Wholesale (issue 177)',
     });
-    await em.persistAndFlush([vip, wholesale]);
+    await em.persist([vip, wholesale]).flush();
     vipGroupId = vip.id;
 
     const member = await em.findOne(CustomerAccount, { id: TEST_CUSTOMER_ID });
     member!.customerGroupId = vip.id;
     const outsider = await em.findOne(CustomerAccount, { id: TEST_CUSTOMER_RFQ_ID });
     outsider!.customerGroupId = wholesale.id;
-    await em.persistAndFlush([member!, outsider!]);
+    await em.persist([member!, outsider!]).flush();
 
     // Issue #251 — the promotion engine's channel gate is live in every
     // composition now (`salesChannelMembership` used to be optional and this
@@ -92,7 +93,7 @@ describe('placeOrder — customer-group targeted promotion (issue #177)', () => 
       status: 'active',
     });
     memberCart!.salesChannelId = defaultChannelId;
-    await em.persistAndFlush(memberCart!);
+    await em.persist(memberCart!).flush();
 
     const outsiderCart = em.create(Cart, {
       customerAccountId: TEST_CUSTOMER_RFQ_ID,
@@ -100,8 +101,8 @@ describe('placeOrder — customer-group targeted promotion (issue #177)', () => 
       status: 'active',
       salesChannelId: defaultChannelId,
     });
-    await em.persistAndFlush(outsiderCart);
-    await em.persistAndFlush(
+    await em.persist(outsiderCart).flush();
+    await em.persist(
       em.create(CartItem, {
         cartId: outsiderCart.id,
         productId: SEED_PRODUCT_101_ID,
@@ -109,7 +110,7 @@ describe('placeOrder — customer-group targeted promotion (issue #177)', () => 
         unitPrice: '19.99',
         currency: 'PLN',
       }),
-    );
+    ).flush();
 
     const promotion = await promotionServiceFor(h).upsert({
       name: 'VIP 10% off',
@@ -158,7 +159,12 @@ describe('placeOrder — customer-group targeted promotion (issue #177)', () => 
       request,
     );
     const memberSubtotal = Number(memberOrder.subtotal);
-    const expectedDiscount = Math.round(memberSubtotal * 0.1 * 100) / 100;
+    // Issue #1350 — 10 % of what the buyer pays for the goods: the gross,
+    // net plus the VAT per rate on the nets, not 10 % of the net.
+    expect(Number(memberOrder.taxTotal)).toBeGreaterThan(0);
+    const expectedDiscount = Number(
+      percentOfHalfUp(decimalSum(memberOrder.subtotal, memberOrder.taxTotal), 10),
+    );
     expect(expectedDiscount).toBeGreaterThan(0);
     expect(Number(memberOrder.discountTotal)).toBeCloseTo(expectedDiscount, 2);
     expect(Number(memberOrder.total)).toBeCloseTo(

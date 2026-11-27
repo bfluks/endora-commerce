@@ -5,20 +5,35 @@ import type {
   AdminAuthenticationThrottlePort,
   CustomerAuthenticationThrottlePort,
   AdminPasswordVerificationPort,
+  AdminRolePort,
   AdminUserReadPort,
   AuthSessionPort,
   CustomerAccountReadPort,
   CustomerPasswordStatePort,
   CustomerPasswordVerificationPort,
+  CustomerAccountPreferencePort,
+  CustomerSignInCompletionPort,
+  MfaAdminEnforcementPort,
   MfaDeactivationGuardPort,
   MfaEnrolmentCountPort,
   MfaEnrolmentStatePort,
   MfaLoginPort,
+  OrganizationPermissionPort,
+  PermissionReadPort,
+  SettingNoticeRegistryPort,
+  SettingsValueChangedPayload,
+  SettingWriteValidatorRegistryPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { MFA_SETTING_CODES } from '@endora-commerce/contracts';
+import { z } from 'zod';
+import type {
+  AuditPort,
+  SalesChannelAccessPort,
+  SalesChannelResolutionPort,
+} from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { configuredAdminBaseUrl, effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { SettingsReader } from './services/mfa-policy-resolver.js';
 import {
@@ -35,7 +50,25 @@ import {
 import { MfaEnrolmentCountService } from './services/mfa-enrolment-count.service.js';
 import { MfaDeactivationGuardService } from './services/mfa-deactivation-guard.service.js';
 import { MfaEnrolmentStateService } from './services/mfa-enrolment-state.service.js';
+import { MfaAdminEnforcementService } from './services/mfa-admin-enforcement.service.js';
+import { warnOfUnenforceableRoleRequirements } from './services/role-requirement-boot-warning.js';
 import type { SocialIdentityDeps } from './services/social-identity-service.js';
+import { createCustomerChannelAccess } from './services/customer-channel-access.js';
+import {
+  createAdminEnforcementSettingNotice,
+  createAdminEnforcementSettingValidator,
+  reportUnenforceableAdminSetting,
+} from './services/admin-enforcement-without-key.js';
+import {
+  createAdminEnforcementSettingConfirmation,
+  createEndSessionsOnAdminEnforcement,
+} from './services/admin-enforcement-setting-sessions.js';
+import { reportUnusableEnrolments } from './services/unusable-enrolments-boot-report.js';
+import {
+  createStorefrontEnforcementSettingNotice,
+  createStorefrontEnforcementSettingValidator,
+  reportUnenforceableCustomerRequirements,
+} from './services/customer-enforcement-without-key.js';
 import { mfaModule, type MfaModuleHandle } from './plugin.js';
 import { MfaEnrolment } from './entities/mfa-enrolment.entity.js';
 import { MfaOrganizationPolicy } from './entities/mfa-organization-policy.entity.js';
@@ -112,6 +145,21 @@ export interface MfaBaseUrls {
   readonly admin: string | undefined;
 }
 
+/**
+ * The environment's answer to {@link MfaBaseUrls}, which `mfaBaseUrls`
+ * defaults to. The admin's address is the platform's input since issue #185
+ * and is read through the platform's accessor. A malformed value never gets
+ * here (the platform refuses the boot); an unset one is `undefined`, and the
+ * plugin's `adminRedirectBase` decides what the redirect is built on.
+ */
+export function mfaBaseUrlsFromEnvironment(): MfaBaseUrls {
+  return {
+    backend: process.env['BACKEND_PUBLIC_URL'],
+    storefront: process.env['STOREFRONT_BASE_URL'],
+    admin: configuredAdminBaseUrl() ?? undefined,
+  };
+}
+
 export interface MfaCradle {
   readonly emFactory: () => EntityManager;
   readonly redis: Redis;
@@ -175,13 +223,7 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(() => async (): Promise<string | null> => null)
       .singleton(),
     mfaBaseUrls: ctx
-      .asFunction(
-        (): MfaBaseUrls => ({
-          backend: process.env['BACKEND_PUBLIC_URL'],
-          storefront: process.env['STOREFRONT_BASE_URL'],
-          admin: process.env['ADMIN_BASE_URL'],
-        }),
-      )
+      .asFunction((): MfaBaseUrls => mfaBaseUrlsFromEnvironment())
       .singleton(),
 
     mfa: ctx
@@ -209,7 +251,19 @@ export function registerModule(ctx: ModuleContext): void {
             'customerAccountReadPort',
           );
           const adminUsers = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
-          const resolveOrganizationAdmin = createOrganizationAdminResolver(customerAccounts);
+          // `specs/170-organization-roles/` WP-03 (FR-011) — the policy is the
+          // administrator's by role kind, asked of `organizations`' port.
+          const resolveOrganizationAdmin = createOrganizationAdminResolver(
+            customerAccounts,
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+          );
+          // Feature 154 — kernel-provided and ungated, like the membership
+          // port; a proxy so the singleton holds no captured value.
+          const customerChannelAccess = createCustomerChannelAccess(
+            customerAccounts,
+            lazyPort<SalesChannelAccessPort>(ctx, 'salesChannelAccessPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          );
           return mfaModule({
             emFactory,
             redis,
@@ -239,6 +293,12 @@ export function registerModule(ctx: ModuleContext): void {
             // `Session` entity stays behind the boundary, where its `tokenHash`
             // belongs.
             sessionService: lazyPort<AuthSessionPort>(ctx, 'authSessionPort'),
+            // Issue #349 — the administrator's role, for its two-factor flag.
+            // `admin_roles`' published `permissionService`, a proxy like every
+            // port here; `admin_roles` is `nonDeactivatable` and in this
+            // module's `dependencies`, so no operator loses a control to it.
+            readAdminRole: (adminUserId) =>
+              lazyPort<PermissionReadPort>(ctx, 'permissionService').resolveRole(adminUserId),
             resolveDefaultChannelId: () => ctx.cradle<MfaCradle>().mfaDefaultChannelIdResolver(),
             ...(secretEncryptionKey === undefined ? {} : { secretEncryptionKey }),
             ...(backendBaseUrl === undefined ? {} : { backendBaseUrl }),
@@ -287,6 +347,33 @@ export function registerModule(ctx: ModuleContext): void {
             // Spread rather than assigned: `exactOptionalPropertyTypes` makes
             // "absent" and "present as undefined" different types, and these
             // two are genuinely absent on a deployment without social sign-in.
+            customerChannelAccess,
+            // Issue #368 — `organizations`' post-sign-in step, a proxy like
+            // every port here; `organizations` is in this module's
+            // `dependencies` and `nonDeactivatable`.
+            customerSignInCompletion: lazyPort<CustomerSignInCompletionPort>(
+              ctx,
+              'customerSignInCompletionPort',
+            ),
+            // Issue #652 (D-292) — `customer_accounts`' preference port, a proxy
+            // like the rest; that module is in this one's `dependencies` and
+            // `nonDeactivatable`.
+            customerLanguageCapture: lazyPort<CustomerAccountPreferencePort>(
+              ctx,
+              'customerAccountPreferencePort',
+            ),
+            // Issue #1279 — the storefront a customer's federated sign-in
+            // returns to. Read at call time like every input here; the resolver
+            // treats an absent `sales_channels` as "no URL configured".
+            readChannelStorefrontUrl: (salesChannelId) =>
+              ctx
+                .cradle<MfaCradle>()
+                .settingsReadPort.get('sales_channels.storefront_url', salesChannelId, z.string()),
+            // Feature 167 — the started-on channel, else the system default.
+            channelUrlFactsFor: async (salesChannelId) => {
+              const resolution = lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort');
+              return salesChannelId ? resolution.getById(salesChannelId) : resolution.getSystemDefault();
+            },
             ...(oauthProvider === undefined ? {} : { oauthProvider }),
             ...(socialAccountResolvers === undefined ? {} : { socialAccountResolvers }),
           });
@@ -319,9 +406,10 @@ export function registerModule(ctx: ModuleContext): void {
 
   /**
    * Whether switching this module off would withdraw a second factor the
-   * platform requires of administrators. `/platform/modules` asks before an
-   * operator switches `mfa` off and refuses while it is `true`, so the
-   * requirement is turned off as its own change first. Read while the module
+   * platform requires of administrators — by the setting or by a role's flag.
+   * `/platform/modules` asks before an operator switches `mfa` off and refuses
+   * while it is `true`, so the requirement is turned off as its own change
+   * first. Read while the module
    * is still on, through an open gate, like the count above.
    */
   ctx.di.providePort<MfaDeactivationGuardPort>(
@@ -330,10 +418,15 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         () =>
           // Deferred for the reason the module's own settings reader above is.
-          new MfaDeactivationGuardService({
-            get: (code, salesChannelId, schema) =>
-              ctx.cradle<MfaCradle>().settingsReadPort.get(code, salesChannelId, schema),
-          }),
+          new MfaDeactivationGuardService(
+            {
+              get: (code, salesChannelId, schema) =>
+                ctx.cradle<MfaCradle>().settingsReadPort.get(code, salesChannelId, schema),
+            },
+            // Issue #349 — a role's `requiresTwoFactor` is the requirement's
+            // second source.
+            lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
+          ),
       )
       .singleton(),
   );
@@ -357,10 +450,203 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
   );
 
+  /**
+   * Issue #349 — what `admin_users` calls when a role's two-factor requirement
+   * starts binding administrators: end the sessions they opened without a
+   * factor, preview how many that is, and say whether a requirement set now
+   * can be met at all (this composition holds its encryption key).
+   *
+   * Gated like every other port. `admin_users` decides `mfa`'s presence before
+   * it resolves this and declares the edge `degrades-without`: with `mfa`
+   * absent the flag cannot be turned on, so there is nothing to end.
+   */
+  ctx.di.providePort<MfaAdminEnforcementPort>(
+    'mfaAdminEnforcementPort',
+    ctx
+      .asFunction(({ emFactory, auditLogService, mfa }: MfaCradle) => {
+        const enrolmentState = new MfaEnrolmentStateService(emFactory);
+        return new MfaAdminEnforcementService({
+          activeAdminIds: (ids) => enrolmentState.activeSubjectIds('admin', ids),
+          sessions: lazyPort<AuthSessionPort>(ctx, 'authSessionPort'),
+          invalidatePending: (adminUserId) => mfa.handle().challengeStore.invalidateSubject('admin', adminUserId),
+          auditLog: auditLogService,
+          canEnforce: mfa.handle().enrolmentService !== null,
+        });
+      })
+      .singleton(),
+  );
+
+  /**
+   * Issue #349, M5 — with no encryption key nothing can be enrolled, so a role
+   * that requires a second factor is not applied (issue #948, owner ruling
+   * Q6). Said at every boot, at error level, until it is gone.
+   */
+  ctx.onBoot(async () => {
+    // Off means no second factor is asked for (D-96), so there is nothing to
+    // warn about — and a hook must not read through closed gates.
+    if (!effectiveState.isPresent('mfa')) return;
+    const { emFactory, mfa } = ctx.cradle<MfaCradle>();
+    const enrolmentState = new MfaEnrolmentStateService(emFactory);
+    const adminUsers = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
+    await warnOfUnenforceableRoleRequirements({
+      hasEncryptionKey: mfa.handle().enrolmentService !== null,
+      listRoles: () => lazyPort<AdminRolePort>(ctx, 'adminRolePort').list(),
+      holdersOf: async (roleId) =>
+        (await adminUsers.listByRoleId(roleId)).filter((admin) => admin.deletedAt === null).map((admin) => admin.id),
+      activeAdminIds: (ids) => enrolmentState.activeSubjectIds('admin', ids),
+      error: (fields, message) => ctx.log.error(fields, message),
+    });
+  });
+
+  /**
+   * Issue #930 — `mfa.admin.totp_enforced` cannot be turned on where no second
+   * factor can be enrolled, and its read says it is not in force while it is
+   * on there; issue #947 — nor can `mfa.storefront.totp_enforced`. **Contribution** hooks and unprobed, in the `cms` / `seo` shape:
+   * both registries skip a contributor that is absent, and the platform refuses
+   * an absent module's setting writes first.
+   */
+  ctx.onBoot(() => {
+    const canEnrolSecondFactor = () =>
+      ctx.cradle<MfaCradle>().mfa.handle().enrolmentService !== null;
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createAdminEnforcementSettingValidator({
+        canEnrolSecondFactor,
+        readEnforced: () =>
+          ctx
+            .cradle<MfaCradle>()
+            .settingsReadPort.get(MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED, null, z.boolean()),
+      }),
+    );
+    // Issue #947 — `mfa.storefront.totp_enforced` on the same terms, read at
+    // each scope the write targets (it is set per sales channel too).
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createStorefrontEnforcementSettingValidator({
+        canEnrolSecondFactor,
+        readEnforcedAt: storefrontEnforcedAt(ctx),
+      }),
+    );
+    const notices = lazyPort<SettingNoticeRegistryPort>(ctx, 'settingNoticeRegistry');
+    notices.register(createAdminEnforcementSettingNotice(canEnrolSecondFactor));
+    notices.register(
+      createStorefrontEnforcementSettingNotice({
+        canEnrolSecondFactor,
+        readEnforcedAt: storefrontEnforcedAt(ctx),
+        listChannels: () =>
+          lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort').listAll(),
+      }),
+    );
+    // Issue #349, E-349-1 — what the Settings screen asks before switching it on.
+    notices.register(
+      createAdminEnforcementSettingConfirmation({
+        canEnrolSecondFactor,
+        liveAdminIds: liveAdminIds(ctx),
+        countUnprotected: unprotectedAdminCount(ctx),
+      }),
+    );
+  });
+
+  /**
+   * Issue #349, E-349-1 (owner ruling 2026-11-08) — switching
+   * `mfa.admin.totp_enforced` on ends the sessions every administrator without
+   * a second factor opened without one, as ticking a role's box does. Heard
+   * after `settings`' commit; `ctx.subscribe` stops it while this module is
+   * off, and without a key the enforcement port ends nothing.
+   */
+  ctx.subscribe('settings.value_changed', async (payload) => {
+    const { settingsReadPort } = ctx.cradle<MfaCradle>();
+    await createEndSessionsOnAdminEnforcement({
+      readEnforced: () =>
+        settingsReadPort.get(MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED, null, z.boolean()),
+      liveAdminIds: liveAdminIds(ctx),
+      enforcement: lazyPort<MfaAdminEnforcementPort>(ctx, 'mfaAdminEnforcementPort'),
+    })(payload as SettingsValueChangedPayload);
+  });
+
+  /**
+   * Issue #930 — an instance whose `mfa.admin.totp_enforced` is on with no
+   * encryption key is told at every boot, at error level, that the
+   * requirement is not applied; issue #947 — likewise for the storefront
+   * setting and the organizations' policies.
+   * Work, so asked for presence first: off means no second factor at all
+   * (D-96), so there is nothing to warn about.
+   */
+  ctx.onBoot(async () => {
+    if (!effectiveState.isPresent('mfa')) return;
+    const { mfa, settingsReadPort } = ctx.cradle<MfaCradle>();
+    await reportUnenforceableAdminSetting({
+      hasEncryptionKey: mfa.handle().enrolmentService !== null,
+      readEnforced: () =>
+        settingsReadPort.get(MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED, null, z.boolean()),
+      error: (fields, message) => ctx.log.error(fields, message),
+    });
+    // Issue #947 — the customer requirements: the storefront setting and the
+    // organizations' policies.
+    await reportUnenforceableCustomerRequirements({
+      hasEncryptionKey: mfa.handle().enrolmentService !== null,
+      listChannels: () => lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort').listAll(),
+      readEnforcedAt: storefrontEnforcedAt(ctx),
+      countEnforcingOrganizations: () =>
+        ctx.cradle<MfaCradle>().emFactory().count(MfaOrganizationPolicy, { enforceTotp: true }),
+      error: (fields, message) => ctx.log.error(fields, message),
+    });
+    // Issue #948 — enrolments made with a key that is gone are not checked.
+    await reportUnusableEnrolments({
+      hasEncryptionKey: mfa.handle().enrolmentService !== null,
+      countActiveEnrolments: async () => {
+        const counts = await new MfaEnrolmentCountService(ctx.cradle<MfaCradle>().emFactory).countActiveEnrolments();
+        return { admin: counts.admins, customer: counts.customers };
+      },
+      error: (fields, message) => ctx.log.error(fields, message),
+    });
+  });
+
   ctx.routes(async (app) => {
     const plugin = ctx.cradle<MfaCradle>().mfa.plugin as (a: typeof app) => Promise<void>;
     await plugin(app);
   });
+}
+
+/**
+ * How many of these administrators have no active enrolment, read from this
+ * module's own table when the Settings screen asks — never at boot, and not
+ * through `mfaAdminEnforcementPort`, which a contribution hook must not
+ * resolve. The same count the port's `countUnprotected` answers with a key.
+ */
+function unprotectedAdminCount(ctx: ModuleContext): (ids: readonly string[]) => Promise<number> {
+  return async (ids) => {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return 0;
+    const enrolled = new Set(
+      await new MfaEnrolmentStateService(ctx.cradle<MfaCradle>().emFactory).activeSubjectIds(
+        'admin',
+        unique,
+      ),
+    );
+    return unique.filter((id) => !enrolled.has(id)).length;
+  };
+}
+
+/**
+ * `mfa.storefront.totp_enforced` in force at a sales channel (its own row,
+ * else platform-wide), or platform-wide for `null` — `settings`' resolution,
+ * read when asked.
+ */
+function storefrontEnforcedAt(ctx: ModuleContext): (salesChannelId: string | null) => Promise<boolean> {
+  return (salesChannelId) =>
+    ctx
+      .cradle<MfaCradle>()
+      .settingsReadPort.get(MFA_SETTING_CODES.STOREFRONT_TOTP_ENFORCED, salesChannelId, z.boolean());
+}
+
+/**
+ * Every administrator account that is not deleted — the people
+ * `mfa.admin.totp_enforced` binds. Read through `admin_users`' published port.
+ */
+function liveAdminIds(ctx: ModuleContext): () => Promise<string[]> {
+  return async () =>
+    (await lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort').listAll({ activeOnly: true })).map(
+      (admin) => admin.id,
+    );
 }
 
 /**

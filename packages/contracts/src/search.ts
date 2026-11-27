@@ -95,6 +95,10 @@ export const searchSuggestItemSchema = productSummarySchema.extend({
   /** Resolved price-visibility mode. `none` ⇒ the storefront must hide the
    *  price and offer a quote affordance instead. */
   priceDisplayMode: displayModeSchema.optional(),
+  /** Feature 161 (G19) — the catalogue price beside a lower buyer price
+   *  ("list price / your price"), as on the catalogue cards (G14): present only
+   *  while `pricing.show_list_price` is on and it is above the price charged. */
+  listPrice: searchSuggestMoneySchema.optional(),
 });
 export type SearchSuggestItem = z.infer<typeof searchSuggestItemSchema>;
 
@@ -203,9 +207,15 @@ export type SearchReindexResponse = z.infer<typeof SearchReindexResponseSchema>;
 export interface ResolvedSearchChannel {
   id: string;
   code: string;
-  isPublic: boolean;
   defaultCurrency: string;
   defaultLanguage: string;
+  /**
+   * Feature 163 — the channel's content languages, from the resolved channel
+   * record. The scope language a query filters on is the request's
+   * `Accept-Language` pick resolved against them. Absent: the default
+   * language alone.
+   */
+  languages?: readonly string[] | undefined;
 }
 
 export interface SearchQueryContext {
@@ -291,7 +301,38 @@ export interface SearchQueryPort {
     params: SearchListProductsParams,
     ctx: SearchQueryContext,
   ): Promise<SearchListOutcome>;
+  /**
+   * Issue #1326 — the ids of the products a text query matches, in relevance
+   * order, at most {@link SEARCH_MATCHING_IDS_MAX}: the result set
+   * `listProducts` pages through for the same `q`, without the page. `catalog`
+   * counts its filter panel over them, so a search's facet counts are its own
+   * result set's. Ids only, never a count: the index does not carry who may
+   * see a product, so the caller intersects them with what this caller may
+   * reach before counting anything.
+   */
+  matchingProductIds(
+    params: SearchMatchingIdsParams,
+    ctx: SearchQueryContext,
+  ): Promise<SearchMatchingIdsOutcome>;
 }
+
+/**
+ * The most ids {@link SearchQueryPort.matchingProductIds} answers — the
+ * engine's own default ceiling on the hits one query can reach
+ * (`pagination.maxTotalHits`), so a listing cannot page further than this
+ * either.
+ */
+export const SEARCH_MATCHING_IDS_MAX = 1000;
+
+export interface SearchMatchingIdsParams {
+  q: string;
+}
+
+/** The {@link SearchListOutcome} shape, for a result set's ids. */
+export type SearchMatchingIdsOutcome =
+  | { status: 'ok'; ids: string[] }
+  /** Meilisearch refused or timed out. `reason` is for the caller's log line. */
+  | { status: 'index-unavailable'; reason: string };
 
 /**
  * Container name: `searchReindexPort`. Owner: `search`.

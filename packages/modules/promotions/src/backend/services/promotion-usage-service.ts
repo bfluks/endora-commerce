@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, roundHalfUp } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Promotion } from '../entities/promotion.entity.js';
 import { PromotionCoupon } from '../entities/promotion-coupon.entity.js';
@@ -191,10 +191,16 @@ export class PromotionUsageService {
         );
         const affected = bumped.affectedRows;
         if (affected === 0) {
+          // A buyer reads this (issue #628): the sentence names the coupon they
+          // applied, when there is one, and never the promotion's id. The
+          // promotion's name is the operator's, not shown on the storefront.
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
-            `promotion_unavailable: usage limit reached for ${a.promotionId}`,
+            ERROR_CODES.PROMOTION_USAGE_LIMIT_REACHED,
+            'A promotion in your cart has reached its usage limit, so the order was not placed.',
+            coupon
+              ? { code: 'with_coupon', promotionId: a.promotionId, couponCode: coupon.code }
+              : { promotionId: a.promotionId },
           );
         }
       }
@@ -214,7 +220,7 @@ export class PromotionUsageService {
           input.ctx.organizationId ?? null,
           input.ctx.customerGroupId ?? null,
           input.ctx.salesChannelId,
-          a.amount.toFixed(2),
+          roundHalfUp(a.amount),
           input.currency,
           new Date(),
         ],

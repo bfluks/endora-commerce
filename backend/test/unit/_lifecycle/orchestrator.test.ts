@@ -69,19 +69,33 @@ class FakeEm {
   async flush(): Promise<void> {
     this.ops.push({ kind: 'flush', payload: null });
   }
-  async persistAndFlush(payload: FakeRow): Promise<void> {
-    this.rows.push(payload);
-    this.ops.push({ kind: 'persistAndFlush', payload });
+  persist(payload: FakeRow) {
+    return {
+      flush: async (): Promise<void> => {
+        this.rows.push(payload);
+        this.ops.push({ kind: 'persist', payload });
+      },
+    };
   }
-  remove(payload: FakeRow): void {
+  remove(payload: FakeRow) {
     this.rows = this.rows.filter((r) => r !== payload);
-  }
-  async removeAndFlush(payload: FakeRow): Promise<void> {
-    this.remove(payload);
-    this.ops.push({ kind: 'removeAndFlush', payload });
+    return {
+      flush: async (): Promise<void> => {
+        this.ops.push({ kind: 'remove', payload });
+      },
+    };
   }
   create(_entity: unknown, payload: FakeRow): FakeRow {
     return payload;
+  }
+  /**
+   * Raw statements the orchestrator issues on the operation's manager — the
+   * `command_outbox` purge of a hard uninstall (176 P3) is the one there is.
+   */
+  executed: Array<{ sql: string; params: unknown[] }> = [];
+  async execute(sql: string, params: unknown[] = []): Promise<unknown[]> {
+    this.executed.push({ sql, params });
+    return [];
   }
 }
 
@@ -90,7 +104,7 @@ class FakeMigrator {
   applied: string[] = [];
   reverted: string[] = [];
   shouldFailOnDown = false;
-  async getPendingMigrations(): Promise<Array<{ name: string }>> {
+  async getPending(): Promise<Array<{ name: string }>> {
     return this.pending;
   }
   async up(): Promise<Array<{ name: string }>> {
@@ -295,7 +309,7 @@ describe('ModuleLifecycleOrchestrator (unit)', () => {
    *
    * The marker is what makes the two cases distinguishable, and every step of
    * the normal body is already safe on a converged database:
-   * `getPendingMigrations()` returns none so the rollback set is empty, the
+   * `getPending()` returns none so the rollback set is empty, the
    * settings reconcile is idempotent, the participants upsert-and-prune, and the
    * hook is idempotent by contract (`module-composition.md` item 9). That is
    * what makes `module:install --all` the command that **repairs** a boot-first
@@ -597,6 +611,23 @@ describe('ModuleLifecycleOrchestrator (unit)', () => {
       await orchestrator.uninstall('demo', { hard: true });
 
       expect(seen).toEqual([false, true]);
+    });
+
+    it('deletes the module’s command_outbox rows on a hard uninstall, and keeps them on a soft one (176 T045)', async () => {
+      const reg = buildRegistry([{ id: 'demo' }]);
+      const { orchestrator, em } = buildOrchestrator({
+        registry: reg,
+        em: new FakeEm([installedRow('demo')]),
+      });
+
+      await orchestrator.uninstall('demo', { hard: false });
+      expect(em.executed.filter((statement) => statement.sql.includes('command_outbox'))).toEqual([]);
+
+      em.rows = [installedRow('demo')];
+      await orchestrator.uninstall('demo', { hard: true });
+      expect(em.executed.filter((statement) => statement.sql.includes('command_outbox'))).toEqual([
+        { sql: 'delete from "command_outbox" where "hook_module" = ?', params: ['demo'] },
+      ]);
     });
 
     /**
@@ -1259,14 +1290,13 @@ describe('ModuleLifecycleOrchestrator (unit)', () => {
         fork.remove = (payload) => {
           const stored = managed.get(payload);
           store.rows = store.rows.filter((r) => r !== stored);
+          return { flush: () => fork.flush() };
         };
-        fork.removeAndFlush = async (payload) => {
-          fork.remove(payload);
-          await fork.flush();
-        };
-        fork.persistAndFlush = async (payload) => {
-          store.rows.push({ ...payload });
-        };
+        fork.persist = (payload) => ({
+          flush: async () => {
+            store.rows.push({ ...payload });
+          },
+        });
         return fork;
       }
     }

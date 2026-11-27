@@ -1,17 +1,16 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { mfaOrgPolicyRequestSchema } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { MfaOrgPolicyService } from './services/mfa-org-policy-service.js';
 
 /**
- * Storefront org-admin 2FA enforcement (feature 042, US3, FR-014). An
- * Organization Administrator (customer role `organization_admin`) can require
- * 2FA for their own organization's members. The guard + organization id are
+ * Storefront org-admin 2FA enforcement (feature 042, US3, FR-014). A member
+ * holding the Organization's *Administrator* role (`specs/170-organization-roles/`
+ * FR-011 — a reserved capability, not a permission code) can require 2FA for
+ * their own organization's members. The guard + organization id are
  * resolved by an injected port so the module stays decoupled.
  */
 export interface MfaOrgRoutesDeps {
   orgPolicyService: MfaOrgPolicyService;
-  auditLogService: AuditPort;
   requireCustomer: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   /** Resolves the caller's org and asserts they are an org admin (throws 403). */
   resolveOrgAdmin: (req: FastifyRequest) => Promise<{ organizationId: string; actor: string }>;
@@ -28,13 +27,6 @@ export async function registerMfaOrgRoutes(
       const body = mfaOrgPolicyRequestSchema.parse(request.body);
       const { organizationId, actor } = await deps.resolveOrgAdmin(request);
       const res = await deps.orgPolicyService.setEnforcement(organizationId, body.enforceTotp, actor);
-      await deps.auditLogService.record({
-        action: 'mfa.org_enforced',
-        objectType: 'organization',
-        objectId: organizationId,
-        stateAfter: { enforceTotp: body.enforceTotp },
-        ...(request.ip ? { ipAddress: request.ip } : {}),
-      });
       return { data: res };
     },
   );

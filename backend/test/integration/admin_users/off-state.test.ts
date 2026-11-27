@@ -82,6 +82,10 @@ describe('admin_users off-state, from a package (Constitution XVII)', () => {
         // the sidebar entry and the palette action for it, and asserts those.
         { url: '/api/v1/admin/admin-users', cookies: admin },
         { url: '/api/v1/admin/admin-roles', cookies: admin },
+        // Feature 164 — the admin's own Admin UI preferences. Session-gated
+        // with no permission code, so it is the platform axis alone that must
+        // withdraw it, exactly as it withdraws the module's other routes.
+        { url: '/api/v1/admin/me/preferences', cookies: admin },
       ],
       adminPresence: { cookies: admin },
       // No `settingWrite`: this module owns no setting. Its one permission code

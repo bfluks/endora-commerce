@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type { DictionaryValidator,
+  CatalogProductAvailabilityPort,
   DictionaryReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -33,7 +34,6 @@ import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { inventoryModule, type InventoryModuleOptions } from './plugin.js';
@@ -176,12 +176,13 @@ export function registerModule(ctx: ModuleContext): void {
             'catalogCategoryWritePort',
           ),
           customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
-          // Issue #259 — the channel assortment gate on the notify-me seam. A
-          // kernel registration, not a module's, so there is no edge to declare
-          // in the manifest.
-          salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
+          // Issue #259 / feature 163 — the availability gate on the notify-me
+          // seam and the stock figure: `catalog`'s answer at the request's
+          // (channel, language), membership included. `catalog` is a declared
+          // dependency.
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
             ctx,
-            'salesChannelMembershipPort',
+            'catalogProductAvailabilityPort',
           ),
           mailer: lazyPort<EmailMailerPort>(ctx, 'emailMailer'),
           requireAdmin: (permission) => async (req, reply) =>
@@ -555,8 +556,8 @@ export const entities = [
  * would evaluate `warehouse.entity.ts` a second time and the reconciler would
  * `em.create` a `WarehouseChannelAssignment` class the ORM has never heard of
  * (D-160.6.1). D-168 bars an entity class from leaving by this door; a service
- * and a constant are not entities, and `price_lists`' `DefaultPriceListMigrator`
- * / `DEFAULT_PRICE_LIST_ID` pair is the precedent for exactly this shape.
+ * and a constant are not entities, and `price_lists`' `seedDemoPriceBooks` /
+ * `DEMO_PRICE_BOOKS` pair is a second instance of exactly this shape.
  */
 export { WarehouseChannelReconciler } from './services/warehouse-channel-reconciler.js';
 export { DEFAULT_WAREHOUSE_ID } from './entities/warehouse.entity.js';

@@ -9,7 +9,10 @@ import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18
 // not the permission gate, and `adminSession` documents `['*']` as the value
 // for exactly that. The gate itself is
 // `admin/test/modules/catalog/ProductsList.create-affordance-gating.test.tsx`.
-import { adminSession, withSession } from '../../helpers/render-with-session';
+import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+
+// Issue #1455 (CAT-02) — the list asks whether `import_export` is on before it offers Import / export.
+const PRESENCE = modulePresence({ present: ['catalog', 'import_export'] });
 import { BULK_EDIT_HARD_MAX } from '../../../../packages/modules/catalog/src/admin/lib/resolve-product-selection';
 
 const getSpy = vi.fn();
@@ -61,19 +64,14 @@ function answerList(response: unknown): void {
 
 const BUNDLE = passthroughBundle('catalog', [
   'productsList.title',
-  'productsList.subtitle',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.archived',
   'productsList.search.placeholder',
-  'productsList.chip.type',
-  'productsList.chip.stock',
-  'productsList.chip.category',
-  'productsList.chip.channel',
+  'productsList.filter.type',
+  'productsList.filter.typeAll',
   'productsList.loading',
   'productsList.bulk.edit',
-  'productsList.bulk.editPrice',
   'productsList.bulk.delete',
   'productsList.selection.selected',
   'productsList.selection.scopePage',
@@ -90,7 +88,7 @@ const row = (id: string, name: string): unknown => ({
   slug: name.toLowerCase().replace(/\s/g, '-'),
   type: 'simple',
   status: 'active',
-  name: { 'en-US': name },
+  name,
   visibility: 'public',
   attributeValues: {},
   updatedAt: '2026-05-15T10:00:00.000Z',
@@ -110,7 +108,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
     answerList({
       data: [row('00000000-0000-4000-8000-000000000001', 'Alpha'), row('00000000-0000-4000-8000-000000000002', 'Beta')],
       pagination: { page: 0, pageSize: 2, total: 5 },
-      counts: { all: 5, active: 5, draft: 0, archived: 0 },
+      counts: { all: 5, active: 5, inactive: 0, archived: 0 },
     });
     postSpy.mockResolvedValue({
       data: {
@@ -130,7 +128,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
         <MemoryRouter>
           <ProductsList />
         </MemoryRouter>,
-        { session: adminSession({ permissions: ['*'] }) },
+        { presence: PRESENCE, session: adminSession({ permissions: ['*'] }) },
       ),
       BUNDLE,
     );
@@ -157,7 +155,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
     answerList({
       data: [row('00000000-0000-4000-8000-00000000000a', 'Solo')],
       pagination: { page: 0, pageSize: 2, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, archived: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -165,7 +163,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
         <MemoryRouter>
           <ProductsList />
         </MemoryRouter>,
-        { session: adminSession({ permissions: ['*'] }) },
+        { presence: PRESENCE, session: adminSession({ permissions: ['*'] }) },
       ),
       BUNDLE,
     );
@@ -195,7 +193,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
         row('00000000-0000-4000-8000-000000000002', 'Two'),
       ],
       pagination: { page: 0, pageSize: 2, total: overLimit },
-      counts: { all: overLimit, active: overLimit, draft: 0, archived: 0 },
+      counts: { all: overLimit, active: overLimit, inactive: 0, archived: 0 },
     });
     postSpy.mockResolvedValue({ data: { productIds: manyIds, total: overLimit } });
 
@@ -204,7 +202,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
         <MemoryRouter>
           <ProductsList />
         </MemoryRouter>,
-        { session: adminSession({ permissions: ['*'] }) },
+        { presence: PRESENCE, session: adminSession({ permissions: ['*'] }) },
       ),
       BUNDLE,
     );

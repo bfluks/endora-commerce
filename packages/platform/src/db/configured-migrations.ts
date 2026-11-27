@@ -1,9 +1,15 @@
 import type { MigrationObject } from '@mikro-orm/core';
 import {
   discoverPackageSchema,
+  type EntityClassLike,
   type PackageSchemaContribution,
 } from '../packages/package-runtime.js';
-import { BASELINE_MIGRATIONS } from '../migrations/index.js';
+import {
+  discoverOverlaySchema,
+  type OverlaySchemaContribution,
+} from '../overlay/overlay-schema.js';
+import type { ColumnExtension } from '../kernel/schema-extensions/types.js';
+import { BASELINE_MIGRATIONS, FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS } from '../migrations/index.js';
 import type { DiscoveredManifestEntry } from '../lifecycle/manifest-registry.js';
 import {
   orderMigrations,
@@ -13,9 +19,30 @@ import {
 } from './migration-order.js';
 import {
   CORE_MODULE_ID,
+  PLATFORM_ENTITIES,
   PLATFORM_MIGRATION_ENTRIES,
   mergeByIdentity,
 } from './platform-schema.js';
+import {
+  declaredColumnsByHost,
+  guardExternalMigration,
+  type ForeignSchemaGuardContext,
+  type ForeignWriteExemption,
+  type MigrationClass as GuardedMigrationClass,
+} from './foreign-schema-guard.js';
+import { resolvedColumnExtension } from '../kernel/schema-extensions/define.js';
+import { requiredModulesOf, reverseEdgeClause } from './reverse-edge.js';
+import { schemaExtensionEntries } from './schema-extension-migration.js';
+import {
+  rolledOutExtensibleHosts,
+  type ExtensibleHostSet,
+} from '../kernel/schema-extensions/extensible-hosts.js';
+import { SchemaExtensionInvalidError } from '../kernel/schema-extensions/errors.js';
+import {
+  resolveEntityExtensions,
+  type EntityExtensionManifest,
+  type ResolvedEntityExtension,
+} from '../kernel/entity-extensions/declarations.js';
 
 /**
  * The migration order this platform runs, as a value — with no database in it.
@@ -92,7 +119,81 @@ export interface ConfiguredMigrations {
   readonly ownership: MigrationOwnership;
   /** The installed packages this order was merged from. Empty for bare core. */
   readonly packages: readonly PackageSchemaContribution[];
+  /**
+   * The active deployment's overlay modules this order was merged from
+   * (`specs/190-overlay-full-modules/` FR-033). Empty with no deployment root or
+   * `DEPLOYMENT` unset.
+   */
+  readonly overlays: readonly OverlaySchemaContribution[];
+  /**
+   * The side tables every composed module declares, resolved over the composed
+   * dependency graph (`specs/187-side-table-extensions/` E1 – E5) — what the ORM
+   * configuration verifies by default. Absent on an order built by hand, which
+   * declares none.
+   */
+  readonly entityExtensions?: readonly ResolvedEntityExtension[];
 }
+
+/**
+ * One producer outside the committed registry — an installed package or an overlay
+ * module — as the merge reads it. The two are merged by one code path and differ in
+ * the label a diagnostic prints and in the exemption list the guard is handed.
+ */
+interface SchemaProducer {
+  readonly id: string;
+  /** The package's npm name, or the overlay's `overlay apps/<deployment>/modules/<id>`. */
+  readonly label: string;
+  readonly version: string;
+  readonly migrations: readonly MigrationRegistryEntry[];
+  readonly entities: readonly EntityClassLike[];
+  readonly dependencies: readonly string[];
+  readonly nonDeactivatable: boolean;
+  readonly schemaExtensions: readonly ColumnExtension[];
+  /** Whether R2's first-party ledger may exempt a write of this producer's — never an overlay's (OR-4). */
+  readonly exemptible: boolean;
+  /** The manifest's `extends`, unvalidated (`specs/187-side-table-extensions/`). */
+  readonly entityExtensions: readonly unknown[];
+  readonly origin: 'package' | 'overlay';
+}
+
+function producersOf(
+  packages: readonly PackageSchemaContribution[],
+  overlays: readonly OverlaySchemaContribution[],
+): SchemaProducer[] {
+  return [
+    // `?? []`: a contribution built by hand before the field existed — a test
+    // harness, an older host's shim — declares nothing, and must keep merging.
+    ...packages.map((contribution) => ({
+      id: contribution.id,
+      label: contribution.packageName,
+      version: contribution.version,
+      migrations: contribution.migrations,
+      entities: contribution.entities,
+      dependencies: contribution.dependencies,
+      nonDeactivatable: contribution.nonDeactivatable === true,
+      schemaExtensions: contribution.schemaExtensions ?? [],
+      exemptible: true,
+      entityExtensions: contribution.entityExtensions ?? [],
+      origin: 'package' as const,
+    })),
+    ...overlays.map((contribution) => ({
+      id: contribution.id,
+      label: contribution.source,
+      version: contribution.version,
+      migrations: contribution.migrations,
+      entities: contribution.entities,
+      dependencies: contribution.dependencies,
+      nonDeactivatable: contribution.nonDeactivatable,
+      schemaExtensions: contribution.schemaExtensions,
+      exemptible: false,
+      entityExtensions: contribution.entityExtensions ?? [],
+      origin: 'overlay' as const,
+    })),
+  ];
+}
+
+/** The origins the foreign-schema guard wraps: every one that is neither `core` nor `generated` (R-7). */
+const GUARDED_ORIGINS: ReadonlySet<MigrationOrigin> = new Set(['external', 'overlay']);
 
 /**
  * The cross-cutting pseudo-module owning the platform's own migrations.
@@ -193,6 +294,12 @@ export function configuredMigrationsFrom(inputs: {
   readonly coreModuleDependencies: ReadonlyMap<string, readonly string[]>;
   readonly packages: readonly PackageSchemaContribution[];
   /**
+   * The active deployment's overlay modules (`specs/190-overlay-full-modules/`
+   * FR-033 – FR-036). Merged as the packages are, after them, with origin
+   * `overlay` and **no** exemption (OR-4). Absent is none.
+   */
+  readonly overlays?: readonly OverlaySchemaContribution[];
+  /**
    * The frozen historical prefix, by identity. Defaults to the list
    * `@endora-commerce/platform` publishes, which is what every real composition
    * uses.
@@ -205,11 +312,129 @@ export function configuredMigrationsFrom(inputs: {
    * instead of becoming a sentence in a doc block.
    */
   readonly baseline?: readonly string[];
+  /**
+   * The extensible hosts in force for the generated schema-extension steps.
+   * Defaults to the rolled-out list (`specs/178-extensible-columns/` FR-011); a
+   * test passes a throwaway host here.
+   */
+  readonly extensibleHosts?: ExtensibleHostSet;
+  /**
+   * The first-party writes the foreign-schema guard lets through
+   * (`specs/178-extensible-columns/` FR-071). Defaults to the list
+   * `composer:generate` renders from R2's ledger; a test passes its own.
+   */
+  readonly foreignWriteExemptions?: readonly ForeignWriteExemption[];
+  /**
+   * The required set (`activation.nonDeactivatable`) of the committed manifests,
+   * for D-291 R-A7's clause (c); the packages' own flags are added to it.
+   */
+  readonly requiredModules?: ReadonlySet<string>;
+  /**
+   * The committed modules' side-table declarations
+   * (`specs/187-side-table-extensions/` FR-005: a core module declares on the
+   * terms a package does). The packages' and overlays' come with them.
+   */
+  readonly coreEntityExtensions?: readonly EntityExtensionManifest[];
 }): ConfiguredMigrations {
-  const entries: MigrationRegistryEntry[] = [
-    ...inputs.coreEntries,
-    ...inputs.packages.flatMap((contribution) => contribution.migrations),
-  ];
+  // `specs/178-extensible-columns/` FR-020 — one generated step per installed
+  // module that declares extension columns, at the head of that module's block.
+  // V2 is asked here, before any DDL can be generated for a host that is not
+  // rolled out; the ORM configuration asks it again of the same packages.
+  const hosts = inputs.extensibleHosts ?? rolledOutExtensibleHosts();
+  const overlays = inputs.overlays ?? [];
+  const producers = producersOf(inputs.packages, overlays);
+  for (const contribution of producers) {
+    for (const declaration of contribution.schemaExtensions) {
+      if (!hosts.has(declaration.host)) {
+        throw new SchemaExtensionInvalidError(
+          'host-not-extensible',
+          declaration.module,
+          null,
+          `"${declaration.host}" is not extensible on this platform; extensible hosts: ` +
+            `${[...hosts.keys()].sort().join(', ') || '(none)'} (declared in ${contribution.label})`,
+        );
+      }
+    }
+  }
+  // Review finding 4 — `x_<module>_<snake(key)>` can resolve to one name for
+  // two modules; refuse before any DDL rather than meet a raw unique violation
+  // (or a silent adoption) in the reconcile. Index names are schema-wide.
+  const columnOwners = new Map<string, string>();
+  const indexOwners = new Map<string, string>();
+  for (const contribution of producers) {
+    for (const declaration of contribution.schemaExtensions) {
+      const resolved = resolvedColumnExtension(declaration);
+      for (const column of resolved.columns) {
+        const claims: Array<[Map<string, string>, string, string]> = [
+          [columnOwners, `${resolved.host}.${column.physicalName}`, `column "${resolved.host}"."${column.physicalName}"`],
+        ];
+        if (column.indexName !== null) claims.push([indexOwners, column.indexName, `index "${column.indexName}"`]);
+        for (const [owners, name, what] of claims) {
+          const other = owners.get(name);
+          if (other !== undefined && other !== resolved.module) {
+            throw new SchemaExtensionInvalidError(
+              'physical-name-collision',
+              resolved.module,
+              column.key,
+              `${what} is declared by both "${other}" and "${resolved.module}" (declared in ` +
+                `${contribution.label}). Physical names are x_<module>_<snake_case(key)>, which two ` +
+                `module ids can share; rename the key in one of the declarations.`,
+            );
+          }
+          owners.set(name, resolved.module);
+        }
+      }
+    }
+  }
+  const generated = schemaExtensionEntries(
+    producers.map((contribution) => ({
+      moduleId: contribution.id,
+      version: contribution.version,
+      declarations: contribution.schemaExtensions,
+    })),
+  );
+  // `specs/178-extensible-columns/` FR-070 (OR-5) — every installed package's
+  // migration runs through the foreign-schema guard: a statement writing a table
+  // the package's module does not own is refused and the run rolls back. The
+  // wrapper keeps the class name, so ordering and history see the package's own.
+  // An overlay module's migrations take the same guard with **no** exemption
+  // (`specs/190-overlay-full-modules/` OR-4): R2's ledger is first-party, and being
+  // the deployment's own buys nothing.
+  const exemptions = inputs.foreignWriteExemptions ?? FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS;
+  // D-291 R-A7 — who owns which table at run time (each package's entities) and
+  // the merged dependency graph and required set the clause reads. Evaluated
+  // lazily, at migrate, so the graph below is complete by then.
+  const entitiesByModule = new Map(producers.map((contribution) => [contribution.id, contribution.entities] as const));
+  const required = new Set<string>([
+    ...(inputs.requiredModules ?? []),
+    ...producers.filter((contribution) => contribution.nonDeactivatable).map((c) => c.id),
+  ]);
+  const guarded = producers.flatMap((contribution) => {
+    const context: ForeignSchemaGuardContext = {
+      moduleId: contribution.id,
+      packageName: contribution.label,
+      entities: contribution.entities,
+      platformEntities: PLATFORM_ENTITIES,
+      declaredHosts: declaredColumnsByHost(contribution.schemaExtensions),
+      exemptions: contribution.exemptible
+        ? exemptions.filter((exemption) => exemption.moduleId === contribution.id)
+        : [],
+      moduleMigrations: () => contribution.migrations.map((entry) => entry.cls as unknown as GuardedMigrationClass),
+      reverseEdges: {
+        entitiesByModule,
+        clause: (owner) =>
+          reverseEdgeClause({ writer: contribution.id, owner, dependencies: moduleDependencies, required }),
+      },
+    };
+    // Only a real class can be subclassed; a stand-in a test registers to drive
+    // the ordering alone is not a migration anything runs.
+    return contribution.migrations.map((entry) =>
+      GUARDED_ORIGINS.has(entry.origin ?? 'core') && typeof entry.cls === 'function'
+        ? { ...entry, cls: guardExternalMigration(entry.cls as unknown as GuardedMigrationClass, context) as never }
+        : entry,
+    );
+  });
+  const entries: MigrationRegistryEntry[] = [...inputs.coreEntries, ...guarded, ...generated];
   const moduleDependencies = new Map(inputs.coreModuleDependencies);
   // A package's own module is a node in the graph like any other, so its chain
   // lands at its topological position. Its `dependencies` are read from the
@@ -221,7 +446,7 @@ export function configuredMigrationsFrom(inputs: {
   // repository because the committed index carries every module package. An
   // instance has no index, so every module was a graph root and feature 081's
   // per-module order became whichever order the tie-break produced.
-  for (const contribution of inputs.packages) {
+  for (const contribution of producers) {
     if (!moduleDependencies.has(contribution.id)) {
       moduleDependencies.set(contribution.id, contribution.dependencies);
     }
@@ -232,6 +457,22 @@ export function configuredMigrationsFrom(inputs: {
     moduleDependencies,
     baseline: inputs.baseline ?? BASELINE_MIGRATIONS,
   });
+
+  // `specs/187-side-table-extensions/` E1 – E5 over the composed graph — the one
+  // every origin is ordered by, so a host owner reached through a module of
+  // another origin is in the closure. Refused here, before any migration runs.
+  const entityExtensions = resolveEntityExtensions(
+    [
+      ...(inputs.coreEntityExtensions ?? []),
+      ...producers.map((contribution) => ({
+        moduleId: contribution.id,
+        origin: contribution.origin,
+        dependencies: contribution.dependencies,
+        extends: contribution.entityExtensions,
+      })),
+    ],
+    { dependencies: moduleDependencies },
+  );
 
   const registryByName = new Map(entries.map((entry) => [entry.cls.name, entry] as const));
   const registered: RegisteredMigration[] = ordered.migrations.map((migration) => {
@@ -254,9 +495,11 @@ export function configuredMigrationsFrom(inputs: {
     diagnostics: ordered.diagnostics,
     ownership: migrationOwnershipOf(entries, [
       ...inputs.coreModuleDependencies.keys(),
-      ...inputs.packages.map((contribution) => contribution.id),
+      ...producers.map((contribution) => contribution.id),
     ]),
     packages: inputs.packages,
+    overlays,
+    entityExtensions,
   };
 }
 
@@ -299,9 +542,13 @@ export function committedModuleDependencies(
 
 /**
  * This platform's migration order: the committed core registry the host
- * supplies, merged with every installed package's `./migrations` export.
+ * supplies, merged with every installed package's `./migrations` export and,
+ * given `deploymentRoot` — the directory holding `apps/` — the active
+ * deployment's overlay modules (`specs/190-overlay-full-modules/` FR-035).
  *
- * `env` selects the `node_modules` roots (`ENDORA_INSTANCE_ROOT`). Memoisation
+ * `env` selects the `node_modules` roots (`ENDORA_INSTANCE_ROOT`) and the
+ * deployment (`DEPLOYMENT`); with no root or no deployment the order is exactly
+ * what it was before an overlay could ship a migration. Memoisation
  * is the binding's, not this file's: how many times one process may ask is a
  * fact about that process, and a memo here would answer a second host's
  * registry with the first one's order.
@@ -309,7 +556,20 @@ export function committedModuleDependencies(
 export async function discoverConfiguredMigrations(
   sources: CoreMigrationSources,
   env: NodeJS.ProcessEnv = process.env,
+  deploymentRoot?: string,
 ): Promise<ConfiguredMigrations> {
+  const coreModuleDependencies = committedModuleDependencies(sources.manifests);
+  const packages = await discoverPackageSchema(env);
+  // V10 for an overlay's `schemaExtensions` walks the composed graph
+  // (`specs/190-overlay-full-modules/` FR-065): core's edges and the packages'
+  // beside the overlays', so a host owner reached through a module outside the
+  // overlay root is in the closure, as it is in the order computed below.
+  const composedDependencies = new Map<string, readonly string[]>(coreModuleDependencies);
+  for (const contribution of packages) {
+    if (!composedDependencies.has(contribution.id)) {
+      composedDependencies.set(contribution.id, contribution.dependencies);
+    }
+  }
   return configuredMigrationsFrom({
     // The platform's own migrations are merged in here rather than asked of the
     // host (`specs/110-instance-repository/` T141). They are this package's
@@ -326,7 +586,15 @@ export async function discoverConfiguredMigrations(
       PLATFORM_MIGRATION_ENTRIES,
       (entry) => entry.cls,
     ),
-    coreModuleDependencies: committedModuleDependencies(sources.manifests),
-    packages: await discoverPackageSchema(env),
+    coreModuleDependencies,
+    packages,
+    overlays: await discoverOverlaySchema(deploymentRoot, env, { composedDependencies }),
+    requiredModules: requiredModulesOf(sources.manifests),
+    coreEntityExtensions: sources.manifests.map((entry) => ({
+      moduleId: entry.id,
+      origin: 'core' as const,
+      dependencies: entry.manifest.dependencies ?? [],
+      extends: entry.manifest.extends,
+    })),
   });
 }

@@ -1,9 +1,9 @@
 ---
-title: promotions
+title: Promocje
 description: Rabaty na poziomie koszyka — procentowe, kwotowe i darmowa dostawa — z warunkami, które muszą być spełnione
 ---
 
-# `promotions`
+# Promocje (`promotions`)
 
 Moduł promocji to konfigurowalny silnik rabatów oparty na regułach, zbudowany na pierwotnym
 mechanizmie rabatów w koszyku. **Promocja** łączy **regułę**, która określa, kiedy promocja
@@ -48,27 +48,138 @@ kolejności priorytetu i pokazuje wynik w koszyku oraz w złożonym zamówieniu.
    `order_applied_promotions` i `orders.discount_total` oraz **zapisuje wykorzystanie** w transakcji
    składania zamówienia.
 
+## Od czego liczony jest rabat
+
+Rabat to kwota, której kupujący nie płaci, odejmowana od sumy brutto.
+
+- **Akcje procentowe** — `percentage_off_cart`, `buy_x_units_percent_off`,
+  `spend_x_percent_off`, `every_nth_product_percent_off` i dawny rodzaj
+  `percentage_off` — liczą procent od kwoty **brutto**, którą kupujący płaci za
+  towary: 10 % rabatu to 10 % tej kwoty brutto.
+- **Akcje z gratisem** — `buy_x_get_y_free` i `buy_x_units_y_free` — odejmują
+  kwotę brutto gratisowych sztuk, więc gratis jest darmowy razem z VAT.
+  Najtańsza albo najdroższa sztuka to ta o najniższej albo najwyższej cenie
+  brutto.
+- **Kwoty stałe** — `amount_off_cart`, `buy_x_units_amount_off`,
+  `spend_x_amount_off` i dawny rodzaj `amount_off` — odejmują skonfigurowaną
+  kwotę, najwyżej do sumy **brutto**: kwota stała może sprawić, że towary są
+  darmowe razem z VAT.
+- **Progi** — kroki „wydaj X”, `minCartSubtotal`, sprawdzenie minimalnej
+  wartości zamówienia przy kuponie i wartość koszyka w kreatorze reguł —
+  porównują kwotę **brutto**, którą kupujący płaci za towary, przed rabatem.
+  Kupon odrzucony poniżej minimalnej wartości podaje brakującą kwotę brutto.
+
+Kwota brutto to VAT liczony dla każdej stawki od sumy netto pozycji, ta sama,
+którą naliczają koszyk i zamówienie. Każda pozycja `CartSnapshot` niesie swoją
+stawkę VAT jako `taxRate`, ułamek (`0.23`). Pozycja bez stawki nie ma VAT.
+Koszyk, szczegóły koszyka w panelu, podgląd w kasie i składanie zamówienia
+przekazują stawki, które naliczają, więc wszystkie cztery pokazują ten sam
+rabat. Wywołanie `POST /api/v1/admin/promotions/preview` musi podać `taxRate` w
+każdej pozycji, żeby otrzymać rabat, jaki naliczy zamówienie. Do zmiany z
+issue #1350 akcje procentowe i z gratisem liczyły rabat od cen netto; do zmiany
+z issue #1396 progi porównywały sumę netto, a kwoty stałe były do niej
+ograniczone.
+
 ## Zapisywanie wykorzystania (odporne na wyścigi)
 
 `finalizeUsage` działa w transakcji składania zamówienia. Każdy licznik w danym zakresie jest
 zwiększany przez `UPDATE promotion_usage_counters SET count = count + 1 WHERE (scope_type, scope_key) = … AND count < :limit`.
 Brak zmienionych wierszy oznacza, że limit został osiągnięty, więc rzucany jest
-`409 promotion_unavailable` i całe składanie zamówienia jest wycofywane. Dwa koszyki rywalizujące o
-ostatnie użycie nigdy nie wygrają obydwa.
+`409 PROMOTION_USAGE_LIMIT_REACHED` i całe składanie zamówienia jest wycofywane. Dwa koszyki
+rywalizujące o ostatnie użycie nigdy nie wygrają obydwa. Kupujący czyta zdanie, które wymienia
+zastosowany przez niego kupon (`details.code` `with_coupon`, `couponCode`), albo mówi o promocji bez
+jej nazwy, gdy kuponu nie było — nigdy identyfikator promocji, który trafia tylko do
+`details.promotionId`.
 
 ## API publiczne (panel administracyjny, chronione przez `promotions:read|write|delete`)
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
 | `GET/POST/PUT/DELETE /api/v1/admin/promotions[/:id]` | Zarządzanie promocjami |
+| `GET /api/v1/admin/promotions?page=&pageSize=` | Jedna strona promocji według nazwy, z `meta: { page, pageSize, total }`; bez `pageSize` cała lista (issue #1664) |
 | `GET /api/v1/admin/promotions/action-types` | Katalog akcji dla edytora |
 | `GET /api/v1/admin/promotions/rule-targets/attributes` | Atrybuty, których można używać w promocjach |
+| `GET /api/v1/admin/promotions/rule-targets/{categories,customer-groups,delivery-methods,organizations,payment-methods,sales-channels}` | Pozostałe listy wyboru edytora reguł |
 | `POST /api/v1/admin/promotions/preview` | Podgląd zastosowania dla `CartSnapshot` |
 | `GET/POST /api/v1/admin/promotions/:id/coupons` | Zarządzanie pojedynczymi kuponami |
+| `POST /api/v1/admin/promotions/:id/coupons/bulk-active` | Aktywowanie lub dezaktywowanie wielu kuponów naraz |
 | `POST /api/v1/admin/promotions/:id/coupon-batches` | Generowanie kuponów hurtowo |
 | `GET .../coupon-batches/:batchId/export` | Eksport wygenerowanych kodów do CSV |
 | `GET /api/v1/admin/promotions/:id/stats` | Statystyki wykorzystania |
+| `GET /api/v1/admin/promotions/coupons/:couponId/stats` | Statystyki wykorzystania jednego kuponu |
 | `GET/POST/PUT/DELETE /api/v1/admin/promotion-rules[/:id]` | Biblioteka nazwanych reguł |
+
+## Akcje dostępne dla hooków
+
+Inny moduł — moduł nakładki wdrożenia albo zainstalowany pakiet — może brać udział w opisanych niżej
+zapisach promocji i kuponów przez hook poleceń. Rejestruje hook wobec referencji z
+`PROMOTION_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`) i musi wymienić `promotions` w
+`dependencies` swojego manifestu. Hook `beforeCommit` widzi zapis w niezatwierdzonej transakcji. Może
+zapisywać własne tabele albo uruchomić polecenie przez `ctx.run` i może odrzucić zapis własnym kodem
+błędu, co wycofuje cały zapis. Jak hooki są uruchamiane, porządkowane i odrzucane, opisuje strona
+architektury *Command Bus*.
+
+| Akcja | Referencja | Zapisywana przez | Dane hooka |
+| --- | --- | --- | --- |
+| `promotion.create` | `PROMOTION_HOOKABLE_ACTIONS.create` | `POST /api/v1/admin/promotions` | podsumowanie promocji |
+| `promotion.update` | `PROMOTION_HOOKABLE_ACTIONS.update` | `PUT /api/v1/admin/promotions/:id` oraz `POST /api/v1/admin/promotions` z kodem, który już istnieje | podsumowanie promocji, `changedFields`, `activationChange` |
+| `coupon.create_single` | `PROMOTION_HOOKABLE_ACTIONS.createCoupon` | `POST /api/v1/admin/promotions/:id/coupons` | `promotionId`, `couponId`, `code`, `limitScope` |
+| `coupon.generate_batch` | `PROMOTION_HOOKABLE_ACTIONS.generateCouponBatch` | `POST /api/v1/admin/promotions/:id/coupon-batches` | `promotionId`, `batchId`, `generated`, `limitScope`, `codes` |
+
+Podsumowanie promocji to jej identyfikatory, kody i typ — nigdy nazwa, opis, kwoty ani ustawienia
+akcji. Zawiera `promotionId`, `code`, `kind`, `actionType`, `isActive`, `ruleId`, identyfikatory
+kierowania (`organizationId`, `customerGroupId`, `categoryId`, `productId`), `currency`, `validFrom` i
+`validUntil`. Zawiera też `usageLimitScopes`, czyli nazwy limitów, które promocja ustawia (`global`,
+`per_organization`, `per_customer`), bez ich wartości. Nie ma osobnego zapisu aktywacji: włączenie lub
+wyłączenie promocji jest aktualizacją, a `activationChange` ma wartość `activated`, `deactivated` albo
+`null`. Nowa promocja jest przypisywana do domyślnego kanału sprzedaży dopiero po zatwierdzeniu jej
+zapisu, więc hook tego przypisania nie widzi.
+
+Promocję utworzoną od razu jako aktywną zgłasza wyłącznie `promotion.create`, z
+`isActive: true`; ten zapis nie ma `activationChange`. Hook, który reaguje na aktywację promocji, musi
+więc obsłużyć obie akcje: `promotion.create` z `isActive: true` oraz `promotion.update` z
+`activationChange: 'activated'`.
+
+Wszystkie cztery akcje oferują obie fazy. Odbiorca `afterCommit` jest obsługiwany przez kolejkę
+dostarczeń platformy po zatwierdzeniu zapisu, co najmniej raz. Jego `data` zawiera tylko
+identyfikatory i kody z zamkniętego zbioru:
+
+- dla promocji `promotionId`, `kind`, `actionType`, `isActive`, `ruleId` i `usageLimitScopes`, a przy
+  aktualizacji także `changedFields` i `activationChange`;
+- dla kuponu `promotionId`, `couponId` i `limitScope`;
+- dla partii `promotionId`, `batchId`, `generated` i `limitScope`.
+
+Kod promocji lub kuponu to dowolny tekst, więc nigdy nie trafia do kolejki dostarczeń. Zmiany
+zgłoszone przez hook trafiają do jedynego wpisu audytu zapisu jako nazwy, w
+`extensions.<moduleId>.changedFields`. Oba zapisy kuponów są rejestrowane wobec swojej promocji
+(`objectType: 'promotion'`), tak jak przed przejściem na polecenia. Żadne ciało żądania HTTP nie
+przenosi jeszcze danych rozszerzeń (`extensions`).
+
+Niedostępne dla hooków:
+
+- `promotion.delete`, `coupon.set_active_bulk` i zapisy nazwanych reguł (`promotion_rule.*`), które
+  nie są jeszcze poleceniami (zgłoszenie #1886);
+- realizacja kuponu, którą złożenie zamówienia zapisuje we własnej transakcji. Można na nią reagować
+  przez zdarzenie wewnątrzprocesowe `promotion.used.v1` emitowane przy składaniu zamówienia
+  (zgłoszenie #1887).
+
+## Odmowy
+
+Każda odmowa ma własny kod i zdanie po angielsku i po polsku, które wymienia wartości z `details`.
+Do zgłoszenia #628 były to odpowiedzi `VALIDATION_FAILED` z tokenem maszynowym na początku
+komunikatu; status się nie zmienił.
+
+| Kod | Status | Kiedy | `details` |
+| --- | --- | --- | --- |
+| `PROMOTION_USAGE_LIMIT_REACHED` | `409` | `POST /api/v1/orders` — limit użyć promocji wyczerpał się między koszykiem a złożeniem zamówienia | `promotionId`; z kuponem także `code: 'with_coupon'` i `couponCode` |
+| `PROMOTION_COUPON_CODE_TAKEN` | `409` | `POST …/coupons` — inny kupon ma już ten kod | `couponCode` |
+| `PROMOTION_COUPON_SPACE_EXHAUSTED` | `400` | `POST …/coupon-batches` — długość i format mieszczą mniej unikalnych kodów, niż zamówiono | `requested`, `generated` |
+| `PROMOTION_RULE_NAME_TAKEN` | `409` | `POST`, `PUT /api/v1/admin/promotion-rules[/:id]` — inna reguła ma już tę nazwę | `name` |
+| `PROMOTION_RULE_IN_USE` | `409` | `DELETE /api/v1/admin/promotion-rules/:id` — z reguły korzystają promocje | `ruleId`, `promotionCount` |
+| `PROMOTION_ATTRIBUTE_NOT_ELIGIBLE` | `400` | `POST`, `PUT /api/v1/admin/promotions[/:id]` — kryterium wskazuje atrybut, którego nie można używać w regułach promocyjnych | `attributeKey` |
+
+Partia większa niż limit generatora, nieznany typ akcji, reguła lub atrybut, operator niedozwolony
+dla typu atrybutu i opcja, której atrybut nie ma, nadal dają `VALIDATION_FAILED`.
 
 Kupony w storefroncie realizuje się przez istniejące endpointy kuponu w koszyku
 (`POST /api/v1/cart/coupon`), które odnajdują kod w tabeli kuponów albo w dawnej kolumnie.

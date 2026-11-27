@@ -20,6 +20,7 @@ A module is not imported by application code. The platform discovers the extensi
 | `@endora-commerce/mod-cms/backend` | the composition root the platform calls, with the entities, services, routes and workers it registers |
 | `@endora-commerce/mod-cms/migrations` | the module’s own schema migrations, in the order the platform runs them |
 | `@endora-commerce/mod-cms/tailwind.css` | the Tailwind source declaration for the admin code above |
+| `@endora-commerce/mod-cms/test-support` | development-only — the test doubles, fixtures and volatile tables this module’s own tests need |
 
 ## Depends on
 
@@ -37,9 +38,11 @@ Everything below is a **peer** dependency, so the application resolves exactly o
 
 **Third-party**
 
-- `@mikro-orm/core` ^6
-- `@mikro-orm/migrations` ^6
-- `@mikro-orm/postgresql` ^6
+- `@fastify/rate-limit` ^10
+- `@mikro-orm/core` ^7.2.11
+- `@mikro-orm/decorators` ^7.2.11
+- `@mikro-orm/migrations` ^7.2.11
+- `@mikro-orm/postgresql` ^7.2.11
 - `@puckeditor/core` ^0 — *optional*
 - `fastify` ^5.11.0
 - `ioredis` ^5

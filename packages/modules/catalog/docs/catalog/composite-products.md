@@ -1,8 +1,8 @@
 ---
-title: Composite Products
+title: Composite products
 ---
 
-# Composite Products: grouped, bundle, virtual
+# Composite products: grouped, bundle, virtual
 
 The Catalog supports three product types beyond `simple` /
 `configurable`. Each carries a type-discriminated payload on the PDP
@@ -75,7 +75,9 @@ not a bundle, 404 `PRODUCT_NOT_FOUND`) still apply.
 
 | Code | Status | When |
 | --- | --- | --- |
-| `PRODUCT_TYPE_MISMATCH` | 400 | Calling grouped/bundle endpoints against the wrong parent type |
+| `PRODUCT_TYPE_MISMATCH` | 400 | Calling grouped/bundle endpoints against the wrong parent type; adding a variant to a product that is not configurable (token `variants_need_configurable`, `details.productId`, `productType`) |
+| `SELF_LINK_NOT_ALLOWED` | 400 | A grouped product names itself as a child (token `grouped`, `details.productId`) |
+| `GROUPED_ITEM_ALREADY_EXISTS` | 409 | The child is already in the group (`details.parentProductId`, `childProductId`, `childSku`) |
 | `NESTED_COMPOSITE_NOT_ALLOWED` | 400 | Child / option product is itself grouped or bundle |
 | `INVALID_QUANTITY_RANGE` | 400 | Slot `minQuantity > maxQuantity` |
 | `OPTION_ALREADY_EXISTS` | 409 | Same option product reused in a slot |

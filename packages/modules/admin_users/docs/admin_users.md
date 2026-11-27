@@ -1,9 +1,9 @@
 ---
-title: admin_users
+title: Admin users
 description: Platform Administrator accounts + impersonation
 ---
 
-# `admin_users`
+# Admin users (`admin_users`)
 
 Platform Administrator accounts (separate from Customer Accounts), plus
 the impersonation flow.
@@ -14,18 +14,24 @@ User + role CRUD is gated by the `admin_users:manage` permission.
 
 | Verb + Path | Purpose |
 | --- | --- |
-| `POST /api/v1/auth/admin/login` | Admin login (2FA challenge if Role requires it). Repeated wrong passwords are throttled: 429 `ADMIN_AUTHENTICATION_THROTTLED` with `Retry-After` — see below |
+| `POST /api/v1/auth/admin/login` | Admin login (two-step verification challenge if Role requires it). Repeated wrong passwords are throttled: 429 `ADMIN_AUTHENTICATION_THROTTLED` with `Retry-After` — see below |
 | `POST /api/v1/auth/admin/logout` | Destroy admin session |
+| `GET /api/v1/admin/me` | The signed-in administrator, with their role, permissions and Admin UI preferences; any admin session, no permission code |
 | `PATCH /api/v1/admin/me` | The signed-in administrator edits their own first and last name and changes their own password; no permission code is needed. A new `password` must come with `currentPassword`: without it the request is refused with 400 `VALIDATION_FAILED`, with a wrong one with 403 `CURRENT_PASSWORD_INVALID`, with a new password equal to the current one with 400 `NEW_PASSWORD_UNCHANGED`, and a refused request changes nothing — not the name either. An accepted password change signs out every other session of the account (see *Sessions and password changes*). Repeated wrong current passwords are throttled like wrong passwords at sign-in (429 `ADMIN_AUTHENTICATION_THROTTLED`) |
 | `GET /api/v1/admin/admin-users` | List admin users (deleted rows filtered) |
 | `POST /api/v1/admin/admin-users` | Create admin user. `adminRoleId` is required: an account with no role is refused with 400 `ADMIN_USER_ROLE_REQUIRED`. Rejects dup email with `EMAIL_ALREADY_REGISTERED` |
 | `PATCH /api/v1/admin/admin-users/:id` | Update name / role assignment / status; it sets no password — a `password` field is refused with 400 `VALIDATION_FAILED`. A role can be changed for another, never cleared: `adminRoleId: null` is refused with 400 `ADMIN_USER_ROLE_REQUIRED`. Setting `status: 'inactive'` signs the account out of every session |
+| `POST /api/v1/admin/admin-users/:id/password` | Set another administrator's password; signs the account out of every session (see *Sessions and password changes*) |
 | `DELETE /api/v1/admin/admin-users/:id` | Soft delete (sets `deletedAt` + `status='inactive'`) and signs the account out of every session |
 | `GET /api/v1/admin/admin-roles` | List roles with their permission arrays |
-| `PUT /api/v1/admin/admin-roles/:code` | Upsert role by code; unknown permissions return 400 `VALIDATION_FAILED` |
+| `PUT /api/v1/admin/admin-roles/:code` | Upsert role by code; unknown permissions return 400 `VALIDATION_FAILED`. Turning `requiresTwoFactor` on is refused with 409 `MFA_REQUIRED_FOR_ROLE_TWO_FACTOR` while MFA is off or has no encryption key; the answer carries `signedOutAdministrators` (see *Roles that require two-step verification*) |
+| `GET /api/v1/admin/admin-roles/:code/two-factor-impact` | How many holders of the role have no second factor and would be signed out by turning its requirement on (`unprotectedAdministrators`; `null` while MFA is off) |
 | `DELETE /api/v1/admin/admin-roles/:id` | Delete; refuses with 409 `ADMIN_ROLE_IN_USE` if any user is still assigned — **including a soft-deleted one**, whose assignment comes back when the account is restored. The refusal names which population holds the role (`details.code` is `assigned` or `assigned_to_deleted`) and how many there are |
 | `GET /api/v1/admin/permissions` | Canonical permission catalogue (module / code / label) used by the matrix UI |
-| `POST /api/v1/admin/organizations/:id/impersonate` | Begin impersonation; writes `impersonation.start` audit row before issuing the cookie |
+| `GET /api/v1/admin/me/preferences` | The signed-in administrator's own Admin UI preferences; no permission code is needed (see *Admin UI preferences*) |
+| `PATCH /api/v1/admin/me/preferences` | Change one or more of them; an invalid body is refused with 400 `VALIDATION_FAILED` and nothing is written |
+| `POST /api/v1/admin/me/preferences/legacy-import` | The one-time carry-over of the browser's page sizes; never overwrites a stored value |
+| `POST /api/v1/admin/organizations/:id/impersonate` | Begin impersonation (`customers:impersonate`); writes `impersonation.start` audit row before issuing the cookie |
 | `POST /api/v1/admin/impersonation/end` | Restore the original admin session |
 
 ## What `admin_users:manage` reaches
@@ -39,7 +45,7 @@ administrator's own permissions, unless their role holds the wildcard `*`:
   `ADMIN_ROLE_GRANT_EXCEEDED`, with the missing codes in `details.permissions`.
 - A role the platform or a module seeds (`platform_admin`, `blog_manager`,
   `content_manager`) is changed — renamed, given other permissions or another
-  two-factor flag — only by a holder of `*`: 409 `ADMIN_ROLE_PROTECTED` with
+  two-step verification flag — only by a holder of `*`: 409 `ADMIN_ROLE_PROTECTED` with
   `details.code: 'modify'`.
 - A role is assigned to an account, when it is created or edited, only if the
   actor holds every permission the role grants: 403 `ADMIN_ROLE_GRANT_EXCEEDED`.
@@ -77,6 +83,67 @@ The command updates the existing account, sets the password it is given and
 assigns `platform_admin` unless `--role` names another role. Accounts are not
 given a role automatically on upgrade: that would grant access nobody chose.
 
+## Roles that require two-step verification
+
+A role's **Requires two-step verification on assigned users** checkbox
+(`requiresTwoFactor`) makes every holder of the role sign in with a second
+factor, as the setting `mfa.admin.totp_enforced` does for every administrator.
+The two add up: an administrator must use a second factor when either applies.
+
+At sign-in — with a password, or with Google or Microsoft — a holder who has
+set up two-step verification is asked for a code. A holder who has not is
+taken to set it up, and gets a session only once setup is finished. The
+holder's own two-step verification screen reports the requirement
+(`totpEnforcedForScope`).
+
+**Who is signed out.** An administrator session lasts thirty days, so the
+requirement does not wait for the next sign-in:
+
+- when a role starts requiring two-step verification, every holder who has
+  not set it up is signed out at once;
+- when an administrator who has not set it up is given such a role, they are
+  signed out at once.
+
+Holders who already use two-step verification stay signed in. The
+administrator who makes the change keeps the session they made it from and is
+asked to set two-step verification up at their next sign-in. The Roles screen
+says how many holders will be signed out before it saves, and how many were
+signed out after. A refused save signs nobody out. Each sign-out is recorded in
+the audit log as `mfa.admin_sessions_ended_for_requirement`, with the role and
+the number of administrators.
+
+Switching `mfa.admin.totp_enforced` on in **Settings** does the same for every
+administrator: each one who has not set up two-step verification is signed out
+at once, except for the session the change was made from. The Settings screen
+asks first, with the number of administrators who will be signed out. The audit
+row names the setting instead of a role (`objectType: 'setting'`,
+`trigger: 'setting_enabled'`).
+
+**When the requirement cannot be turned on.** The checkbox is enforced by the
+MFA module, so:
+
+- while MFA is switched off, the checkbox is disabled and a role cannot start
+  requiring two-step verification (409 `MFA_REQUIRED_FOR_ROLE_TWO_FACTOR`,
+  `details.reason: 'mfa_off'`). A role that already requires it keeps the
+  flag, which applies again when MFA is switched back on. Turning the flag off
+  is always allowed;
+- MFA cannot be switched off while any role requires two-step verification:
+  the module screen refuses with 409 `MFA_DEACTIVATION_BLOCKED` and names the
+  roles (`details.roleCodes`). Untick the checkbox on those roles first;
+- without `MFA_SECRET_ENCRYPTION_KEY` no second factor can be set up or
+  checked, so a role cannot start requiring one either (`details.reason:
+  'encryption_key_missing'`). A role that already requires it is **not
+  applied**: its holders sign in with their password alone, and nobody is
+  signed out for being given the role. The Roles screen shows *Not in force: no
+  encryption key* under the checkbox (the role read carries
+  `twoFactorNotice.code: 'encryption_key_missing'`), and the instance logs an
+  error at every start naming the roles and how many of their holders have no
+  second factor. Set the key and restart to apply the requirement again, or
+  untick the checkbox on those roles.
+
+When a deployment removes the MFA module altogether, sign-in asks for no second
+factor, whatever the roles say.
+
 ## Sessions and password changes
 
 A session is a credential, so it is withdrawn when the thing it stood for is:
@@ -87,11 +154,12 @@ A session is a credential, so it is withdrawn when the thing it stood for is:
 | A peer resets the password (`POST /api/v1/admin/admin-users/:id/password`) | Every session of the account |
 | The account is deactivated (`status: 'inactive'`) or deleted | Every session of the account |
 | `admin_users create` (`admin:create`) is run again for an account that already exists | Every session of the account. The write is audited as `admin_user.change_password` with `via: 'cli'` and no acting administrator |
-| The administrator disables their own two-factor authentication (`POST /api/v1/admin/account/mfa/disable`) | Every session of the account **except the one the request was made from** |
+| The administrator disables their own two-step verification (`POST /api/v1/admin/account/mfa/disable`) | Every session of the account **except the one the request was made from** |
+| A role the account holds starts requiring two-step verification, or the account is given such a role, and the account has not set it up | Every session of the account, **except the one the change was made from when the account made it** (see *Roles that require two-step verification*) |
 
 "Every session" means the sign-ins on other browsers and devices and the impersonation sessions
 the administrator started. The same writes withdraw every sign-in the account had begun and not
-finished — a pending second-factor challenge or two-factor setup ticket — so a login started with
+finished — a pending second-factor challenge or two-step verification setup ticket — so a login started with
 the old password cannot be completed afterwards. The new state is written first and the sessions
 are revoked after it, so nothing can be obtained with the old password once revocation has run. After a self-service change the administrator stays signed in where
 they made it — no new cookie is issued and the profile screen stays open — and has to sign in
@@ -146,9 +214,9 @@ What this means in practice:
   way**, so the answer does not reveal which addresses have accounts.
 - **Passwords and second-factor codes are counted separately.** A password is
   counted wherever it is asked for — at sign-in, as the current password when
-  an administrator changes their own, and when it confirms switching two-factor
-  authentication off — and so is a code: at the second sign-in step,
-  when it confirms switching two-factor authentication off, and when recovery
+  an administrator changes their own, and when it confirms switching two-step
+  verification off — and so is a code: at the second sign-in step,
+  when it confirms switching two-step verification off, and when recovery
   codes are regenerated.
 - **At most five attempts from one address are checked at the same time** (20
   for one account). An attempt beyond that is answered 429 with
@@ -190,7 +258,7 @@ by the budget of twenty that the account has for everybody else. So:
   every device then has to complete a sign-in
   again to become known. It is not honoured while the account is deactivated or
   deleted, but **reactivating the account with the same password revives the
-  cookies its devices already hold**. Resetting two-factor authentication,
+  cookies its devices already hold**. Resetting two-step verification,
   enrolling in it or switching it off does not revoke them. To make every
   device of an account unknown, change its password.
 - **Only a sign-in that verified a password or a second factor sets the
@@ -312,6 +380,89 @@ through the `adminAuthenticationThrottlePort` port
 comparison in one `verify(attempt, check)` call. The attempt carries the client
 address and the verified value of the known-device cookie.
 
+## Author profile
+
+Feature 171. Every administrator can keep a public **author profile** on their own profile
+page — an **avatar** (an image from the library, the same in every language) and an
+**about me** text per content language, up to 2000 characters each. The blog shows them
+beside the posts that name the administrator as their author: the name, the avatar and the
+text in the reader's language (else the channel's default language).
+
+- `PATCH /api/v1/admin/me` and `PATCH /api/v1/admin/admin-users/:id` (the latter with
+  `admin_users:manage`) take `avatarAssetId` (`null` clears it) and `bio`
+  (`{ "<language>": "<text>" }`, `null` clears it). An avatar that names no live library
+  asset is refused with `422 ADMIN_USER_AVATAR_NOT_FOUND`; while the asset library is
+  switched off an avatar cannot be set (`MODULE_DISABLED`), and the rest of the profile
+  still saves. The change is part of the `admin_user.update` audit entry.
+- The library counts an avatar as a use of the image (*Administrator "…"*), so it cannot
+  be deleted while an administrator shows it. A deleted administrator holds none.
+- Nothing else about the administrator — e-mail, role, status — reaches the storefront.
+
+## Admin UI preferences
+
+Every administrator's layout of the Admin UI is kept on the server, with their account: the
+entries they pinned to the sidebar, the sidebar groups they folded, whether the sidebar is
+collapsed to icons (rail mode), and how many rows each list shows. It follows them to any
+browser and to the installed app, and nobody else sees it.
+
+### For operators
+
+- **Pin an entry** — point at a sidebar entry, or move to it with the keyboard: a pin button
+  appears after it (with the keyboard it is the next Tab stop after the entry). Activate it and
+  the entry is added at the end of a **Pinned** section at the top of the sidebar; it also stays
+  where it was. On a phone or tablet the button is always shown.
+- **Pin from the command palette** (⌘K / Ctrl+K) — a result that opens a sidebar entry has a
+  pin button beside it, and **Alt+Enter** (⌥↵ on a Mac) pins or unpins the highlighted result.
+  **Enter** still opens it. The palette stays open on the same search.
+- **Unpin** — the same button, on the pinned row or on the entry's own row. In the collapsed
+  (rail) sidebar the Pinned section is the first icon; its fly-out lists your pins, each with
+  an unpin button.
+- **Reorder** — drag a pinned row; or focus its handle, press Space, move it with the arrow
+  keys and press Space again (Escape cancels); on a touch screen use its up and down buttons.
+  Every pin, unpin and move is announced to screen readers.
+- **Pins you cannot open are not shown.** If you lose the permission an entry needs, or its
+  module is switched off, its pin disappears everywhere — and comes back in the same place
+  when access returns. Nothing is deleted.
+- **If a change cannot be saved** (for example while offline) it stays in effect on this
+  screen and one notice says so below the top bar; it is saved again when the connection
+  returns or the page comes back to the foreground. Close the notice with **Dismiss**.
+- **After the upgrade that introduced this**, each list opens with the page size you had chosen
+  in this browser — it is carried over once, unless you had already set one on the server — and
+  the sidebar opens with every group unfolded and not collapsed, because the old browser
+  values were not tied to an administrator. Fold and collapse it again once; it is remembered
+  from then on, everywhere.
+
+### For engineers
+
+- **Storage.** Table `admin_user_preferences` (`AdminUserPreference`, a platform-global entity):
+  one row per administrator and preference, the value as `jsonb`, removed with the
+  administrator row and kept when the account is deactivated or soft-deleted.
+- **The closed set** is `ADMIN_PREFERENCE_KEYS` in `@endora-commerce/contracts`:
+  `sidebarPins` (destinations, at most 200, each a sidebar route), `sidebarCollapsedGroups`
+  (group keys, at most 32; the Pinned section folds as `pinned`), `sidebarRailMode` (boolean)
+  and `listPageSizes` (list id → one of 5, 10, 20, 50, 100, 500; at most 128 lists). The bounds
+  protect the server; they are not product limits, and the Admin UI never refuses a pin. Writes
+  are strict (`adminPreferencesPatchSchema`): an unknown key, a wrong shape, a duplicate or a
+  value beyond a bound is 400 `VALIDATION_FAILED` and nothing is written. Reads are tolerant: a
+  value a later release no longer understands is returned as stored and ignored by the Admin UI.
+- **Routes.** `GET` and `PATCH /api/v1/admin/me/preferences` and
+  `POST /api/v1/admin/me/preferences/legacy-import` need a session and no permission code, and
+  no route takes an administrator id — so nobody, the wildcard role included, can read or change
+  another administrator's preferences. A `PATCH` replaces each sidebar preference it names and
+  merges `listPageSizes` per list (`null` forgets a list); the import adds only lists the server
+  does not hold. Every answer is the whole document. `GET /api/v1/admin/me` also carries
+  `preferences`, so the Admin UI opens already pinned, folded and collapsed; when they cannot be
+  read the field is `null`, sign-in still succeeds, and the Admin UI saves nothing until a later
+  load succeeds.
+- **In a screen**, `usePageSizePreference(scope)` from `@endora-commerce/admin-kit/lib` gives a
+  list its remembered page size: pick a list id (`'catalog-products'`) and nothing else. Two
+  screens naming the same id share one value. The value is read when the list opens, so a change
+  made on another device applies the next time it opens. `useAdminPreference(key)` and
+  `useAdminPreferencesStatus()` read and write the sidebar preferences; `AuthProvider` provides
+  them, so there is nothing else to mount.
+- **No audit entry.** These are personal UI settings, not business records: the writes do not go
+  through the Command Bus and the audit log does not record them.
+
 ## Impersonation model
 
 `impersonation-service.ts` implements the switch-user pattern: starts a
@@ -320,14 +471,34 @@ writing `impersonation.end`. Every action taken during an impersonated
 session carries both `actorAdminUserId` and `impersonatedCustomerAccountId`
 through the audit log.
 
+The `impersonation.start` entry names the shape of the start, never its
+values (issue #470): `hasReason`, `reasonLength` when a reason was given,
+`organizationScoped` (whether the start named the account's Organization) and
+`valueChangeId`. The audit log is one platform-wide table, read by everybody
+holding `audit_log:read` whatever Organizations they may see, so the reason an
+administrator typed is kept in `admin_impersonation_reasons` instead, and
+`valueChangeId` is that row's id. The row and the entry are written in one
+transaction before the session is minted: a start that fails at either write
+leaves neither and signs nobody in. When the customer account is anonymised,
+its reasons are erased (`impersonation.reasons_erase`, recording how many). No
+screen shows a stored reason yet.
+
 ## Entities
 
-`AdminUser` (email, passwordHash, two-factor state, single `adminRoleId`,
+`AdminUser` (email, passwordHash, two-step verification state, single `adminRoleId`,
 `status`, soft-delete `deletedAt`).
 
+`AdminUserPreference` (administrator, preference key, `jsonb` value, `updatedAt`) — see
+*Admin UI preferences*.
+
+`ImpersonationReason` (customer account, its Organization, the administrator, the reason,
+`at`) — `@CustomerScoped`, one row per impersonation started with a reason; see
+*Impersonation model*.
+
 `AdminRole` (code, display name, JSONB `permissions[]`,
-`requiresTwoFactor`). The wildcard `*` is bootstrap-only and rejected by
-the upsert route.
+`requiresTwoFactor`). The wildcard `*` grants every permission; a list holding
+it is stored as exactly `['*']`, and only a holder of `*` may write it (see *What
+`admin_users:manage` reaches*).
 
 ## Extension points
 

@@ -11,6 +11,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * `specs/093-backend-delivered-prose/` § Out of scope — the seam-B carve-out,
@@ -55,19 +56,19 @@ describe('organizations — moderation e-mails are rendered from a template, in 
         country: 'PL',
       },
     });
-    await em.persistAndFlush(organization);
+    await em.persist(organization).flush();
     const email = `o93-${label}-${Date.now()}@example.test`;
-    await em.persistAndFlush(
+    await em.persist(
       em.create(CustomerAccount, {
         organizationId: organization.id,
         email,
         passwordHash: 'x'.repeat(60),
         firstName: 'Org',
         lastName: 'Admin',
-        role: 'organization_admin',
+        organizationRoleId: await predefinedRoleIdOf(em, organization.id, 'administrator'),
         emailVerifiedAt: new Date(),
       }),
-    );
+    ).flush();
     return { organization, email };
   };
 

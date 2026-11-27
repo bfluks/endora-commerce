@@ -10,6 +10,32 @@ import {
 } from '../../helpers/test-server.js';
 
 import { CmsPage } from '../../helpers/package-entities.js';
+import type { EntityManager } from '@mikro-orm/postgresql';
+import { registerCmsAssetReferences } from '../../../../packages/modules/cms/src/backend/services/asset-references.js';
+import { AssetReferenceRegistry } from '../../../../packages/modules/assets_library/src/backend/services/reference-registry.js';
+
+/** Counts the statements a descriptor issues on the EntityManagers it is handed. */
+function countingEmFactory(emFactory: () => EntityManager): { emFactory: () => EntityManager; statements: () => number } {
+  let statements = 0;
+  return {
+    emFactory: () =>
+      new Proxy(emFactory(), {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop, target);
+          if (typeof value !== 'function') return value;
+          const fn = value as (...args: unknown[]) => unknown;
+          if (prop === 'execute') {
+            return (...args: unknown[]) => {
+              statements += 1;
+              return fn.apply(target, args);
+            };
+          }
+          return fn.bind(target);
+        },
+      }),
+    statements: () => statements,
+  };
+}
 
 
 /**
@@ -48,7 +74,7 @@ describe('cms body scan (T093)', () => {
       storageBackend: 'legacy',
       visibility: 'public',
     });
-    await em.persistAndFlush(asset);
+    await em.persist(asset).flush();
 
     const slug = `t093-page-${randomUUID().slice(0, 8)}`;
     // Page Builder content envelope with an embedded LibraryImage node
@@ -79,7 +105,7 @@ describe('cms body scan (T093)', () => {
       content,
       languages: ['en-US'],
     });
-    await em.persistAndFlush(page);
+    await em.persist(page).flush();
 
     // Reference registry sees it → soft-delete blocked.
     const refs = await h.assetsLibrary.referenceRegistry.findReferences(asset.id);
@@ -114,7 +140,125 @@ describe('cms body scan (T093)', () => {
 
     // Cleanup.
     const fresh = h.em().fork({ clear: true });
-    await fresh.removeAndFlush(await fresh.findOneOrFail(CmsPage, { id: page.id }));
-    await fresh.removeAndFlush(await fresh.findOneOrFail(Asset, { id: asset.id }));
+    await fresh.remove(await fresh.findOneOrFail(CmsPage, { id: page.id })).flush();
+    await fresh.remove(await fresh.findOneOrFail(Asset, { id: asset.id })).flush();
+  });
+
+  // Issue #1359 — only a string under a key ending in `assetId` is a
+  // reference: the rule every renderer reads embeds by (`walkAssetIds`). An id
+  // under any other key is never rendered, so it protects nothing and makes
+  // nothing visible.
+  it('counts an id under a key ending in assetId, never one under another key (issue #1359)', async () => {
+    const em = h.em();
+    const underFoo = randomUUID();
+    const underIcon = randomUUID();
+    const underMainImage = randomUUID();
+    const tree = {
+      schema_version: 1,
+      languages: {
+        'en-US': {
+          root: { props: { foo: underFoo } },
+          content: [
+            { type: 'cms.Button', props: { label: underFoo, iconAssetId: underIcon } },
+            { type: 'cms.Card', props: { items: [{ mainImageAssetId: underMainImage, caption: underFoo }] } },
+          ],
+        },
+      },
+    };
+    const slug = `i1359-${randomUUID().slice(0, 8)}`;
+    const page = em.create(CmsPage, {
+      path: slug,
+      title: { 'en-US': slug },
+      body: {} as Record<string, string>,
+      name: slug,
+      slug,
+      status: 'published',
+      active: true,
+      content: tree,
+      languages: ['en-US'],
+    });
+    await em.persist(page).flush();
+    const conn = h.orm.em.getConnection();
+    const blockId = randomUUID();
+    const templateId = randomUUID();
+    await conn.execute(
+      `insert into cms_blocks (id, code, name, content, created_at, updated_at)
+       values (?, ?, ?, ?::jsonb, now(), now())`,
+      [blockId, `i1359-${blockId.slice(0, 8)}`, `i1359 block`, JSON.stringify(tree)],
+    );
+    await conn.execute(
+      `insert into cms_templates (id, code, name, content, created_at, updated_at)
+       values (?, ?, ?, ?::jsonb, now(), now())`,
+      [templateId, `i1359-${templateId.slice(0, 8)}`, `i1359 template`, JSON.stringify(tree)],
+    );
+
+    const registry = new AssetReferenceRegistry();
+    registerCmsAssetReferences(registry, () => h.em());
+    const out = await registry.findReferencesMany([underFoo, underIcon, underMainImage]);
+
+    expect(out.get(underFoo)).toEqual([]);
+    for (const id of [underIcon, underMainImage]) {
+      expect(out.get(id)!.map((hit) => hit.entityId).sort()).toEqual([page.id, blockId, templateId].sort());
+    }
+
+    await conn.execute(`delete from cms_blocks where id = ?`, [blockId]);
+    await conn.execute(`delete from cms_templates where id = ?`, [templateId]);
+    await conn.execute(`delete from cms_pages where id = ?`, [page.id]);
+  });
+
+  // Feature 166, research R-6 — a batch of assets is answered in one statement,
+  // each hit tagged with the asset it points at, so `findReferencesMany` can
+  // attribute it (the recursive folder delete and the visibility rescue ask
+  // about many assets at once).
+  it('attributes a two-asset batch to each asset, in one statement', async () => {
+    const em = h.em();
+    const embedded = randomUUID();
+    const shared = randomUUID();
+    const unused = randomUUID();
+    const pageIds: string[] = [];
+    for (const [suffix, content] of [
+      [
+        'embed',
+        {
+          schema_version: 1,
+          languages: {
+            'en-US': { root: { props: {} }, content: [{ type: 'LibraryImage', props: { assetId: embedded } }] },
+          },
+        },
+      ],
+      ['share', { schema_version: 1, languages: { 'en-US': { root: { props: {} }, content: [] } } }],
+    ] as const) {
+      const slug = `r6-${suffix}-${randomUUID().slice(0, 8)}`;
+      const page = em.create(CmsPage, {
+        path: slug,
+        title: { 'en-US': slug },
+        body: {} as Record<string, string>,
+        name: slug,
+        slug,
+        status: 'published',
+        active: true,
+        content,
+        languages: ['en-US'],
+      });
+      await em.persist(page).flush();
+      pageIds.push(page.id);
+    }
+    await h.orm.em
+      .getConnection()
+      .execute(`update cms_pages set share_image_asset_id = ? where id = ?`, [shared, pageIds[1]]);
+
+    const counted = countingEmFactory(() => h.em());
+    const registry = new AssetReferenceRegistry();
+    registerCmsAssetReferences(registry, counted.emFactory);
+
+    const out = await registry.findReferencesMany([embedded, shared, unused]);
+
+    expect(counted.statements(), 'one statement for the whole batch').toBe(1);
+    expect(out.get(embedded)).toEqual([expect.objectContaining({ kind: 'cms_body_embed', entityId: pageIds[0], assetId: embedded })]);
+    expect(out.get(shared)).toEqual([expect.objectContaining({ kind: 'cms_body_embed', entityId: pageIds[1], assetId: shared })]);
+    expect(out.get(unused)).toEqual([]);
+
+    const fresh = h.em().fork({ clear: true });
+    for (const id of pageIds) await fresh.remove(await fresh.findOneOrFail(CmsPage, { id })).flush();
   });
 });

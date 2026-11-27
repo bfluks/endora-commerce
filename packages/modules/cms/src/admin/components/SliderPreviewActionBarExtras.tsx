@@ -24,7 +24,7 @@ export function SliderPreviewActionBarExtras({
   type,
 }: {
   carouselId: string;
-  type: 'cms.ImageSlider' | 'catalog.ProductSlider' | 'cms.ContentSlider';
+  type: 'catalog.ProductSlider' | 'cms.ContentSlider';
 }): ReactElement | null {
   const getItemById = usePageBuilderPuck((s) => s.getItemById);
   const data = usePageBuilderPuck((s) => safeGetPuckData(() => s.appState?.data));
@@ -40,11 +40,7 @@ export function SliderPreviewActionBarExtras({
   const slideCount =
     type === 'cms.ContentSlider'
       ? getSlotZoneItemCount(data, contentSliderSlidesZone(carouselId))
-      : type === 'cms.ImageSlider'
-        ? Array.isArray(props.items)
-          ? props.items.length
-          : 0
-        : Math.max(0, Number(props.limit ?? 12));
+      : Math.max(0, Number(props.limit ?? 12));
 
   return (
     <CarouselPreviewNav

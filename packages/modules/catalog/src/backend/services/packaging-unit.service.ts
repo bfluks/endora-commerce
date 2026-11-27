@@ -15,14 +15,16 @@ import { UniqueConstraintViolationException } from '@mikro-orm/core';
 
 import {
   ERROR_CODES,
+  isValidOrderMinimum,
   type CreatePackagingUnitRequest,
   type PackagingUnitDto,
   type ReorderPackagingUnitsRequest,
   type UpdatePackagingUnitRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 
 import { HttpError } from '@endora-commerce/platform/http';
-import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { Product } from '../entities/product.entity.js';
 import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.js';
 
@@ -32,6 +34,8 @@ interface PackagingWrite<T> {
   result: T;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
+  /** Feature 163 — the write changed nothing: no audit row, no event. */
+  unchanged?: boolean;
 }
 
 export class PackagingUnitService {
@@ -41,27 +45,53 @@ export class PackagingUnitService {
     private readonly commandBus?: CommandBus,
   ) {}
 
-  /** Feature 054 — run a write through the Command Bus (co-transactional audit). */
+  /**
+   * Feature 054 — run a write through the Command Bus (co-transactional audit).
+   *
+   * Feature 163 (FR-080, FR-082) — with `announceFor` (the product id) a write that
+   * changed something also emits `product.updated.v1` `['packagingUnits']` after commit
+   * and its `after` carries `changedFields`; an `unchanged` write records no audit row.
+   */
   async #audited<T>(
     action: string,
     objectId: string,
     write: (em: EntityManager) => Promise<PackagingWrite<T>>,
+    announceFor?: string,
   ): Promise<T> {
-    if (this.commandBus) {
-      return this.commandBus.run({
-        action,
-        objectType: 'packaging_unit',
-        objectId,
-        run: async ({ em }) => {
-          const w = await write(em);
-          return { result: w.result, before: w.before, after: w.after };
-        },
-      });
-    }
+    const command: Command<{ value: T; changed: boolean }> = {
+      action,
+      objectType: 'packaging_unit',
+      objectId,
+      run: async ({ em }) => {
+        const w = await write(em);
+        if (w.unchanged) return { result: { value: w.result, changed: false }, skipAudit: true };
+        return {
+          result: { value: w.result, changed: true },
+          before: w.before,
+          after: announceFor && w.after ? { ...w.after, changedFields: ['packagingUnits'] } : w.after,
+        };
+      },
+      event: ({ changed }) =>
+        announceFor && changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId: announceFor,
+                changedFields: ['packagingUnits'],
+              },
+            }
+          : undefined,
+    };
+    if (this.commandBus) return (await this.commandBus.run(command)).value;
     const em = this.emFactory();
-    const w = await write(em);
+    const outcome = await command.run({
+      em,
+      actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' },
+    });
     await em.flush();
-    return w.result;
+    return outcome.result.value;
   }
 
   async list(productId: string): Promise<PackagingUnitDto[]> {
@@ -79,6 +109,7 @@ export class PackagingUnitService {
     productId: string,
     req: CreatePackagingUnitRequest,
   ): Promise<PackagingUnitDto> {
+    assertMinOrderUnits(req.minOrderUnits);
     const id = randomUUID();
     const unit = await this.#audited('packaging_unit.create', id, async (em) => {
       await this.#assertProductEligible(em, productId);
@@ -90,6 +121,8 @@ export class PackagingUnitService {
         baseQuantity: req.baseQuantity,
         position,
         isDefault: req.isDefault ?? false,
+        minOrderUnits: req.minOrderUnits ?? null,
+        // Feature 163 (FR-079) — the name per language.
       });
       try {
         await em.flush();
@@ -97,12 +130,8 @@ export class PackagingUnitService {
         throw this.#mapUniqueViolation(err, u.name);
       }
       if (u.isDefault) await this.#clearOtherDefaults(em, productId, u.id);
-      return {
-        result: u,
-        before: null,
-        after: { productId, name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault },
-      };
-    });
+      return { result: u, before: null, after: unitProjection(u) };
+    }, productId);
     return this.#dto(unit);
   }
 
@@ -111,25 +140,27 @@ export class PackagingUnitService {
     unitId: string,
     req: UpdatePackagingUnitRequest,
   ): Promise<PackagingUnitDto> {
+    assertMinOrderUnits(req.minOrderUnits);
     const unit = await this.#audited('packaging_unit.update', unitId, async (em) => {
       const u = await this.#findOwned(em, productId, unitId);
-      const before = { name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault };
-      if (req.name !== undefined) u.name = req.name.trim();
+      const before = unitProjection(u);
       if (req.baseQuantity !== undefined) u.baseQuantity = req.baseQuantity;
       if (req.position !== undefined) u.position = req.position;
       if (req.isDefault !== undefined) u.isDefault = req.isDefault;
+      if (req.minOrderUnits !== undefined) u.minOrderUnits = req.minOrderUnits;
+      const after = unitProjection(u);
+      // A request that changes nothing writes and announces nothing (FR-080).
+      if (JSON.stringify(before) === JSON.stringify(after) && req.position === undefined) {
+        return { result: u, before, after, unchanged: true };
+      }
       try {
         await em.flush();
       } catch (err) {
         throw this.#mapUniqueViolation(err, u.name);
       }
       if (req.isDefault === true) await this.#clearOtherDefaults(em, productId, u.id);
-      return {
-        result: u,
-        before,
-        after: { name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault },
-      };
-    });
+      return { result: u, before, after };
+    }, productId);
     return this.#dto(unit);
   }
 
@@ -170,6 +201,13 @@ export class PackagingUnitService {
   // -- INTERNALS ------------------------------------------------------------
 
   async #assertProductExists(em: EntityManager, productId: string): Promise<Product> {
+    if (!isUuidShape(productId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Product ${productId} not found.`,
+      );
+    }
     const product = await em.findOne(Product, { id: productId });
     if (!product) {
       throw new HttpError(
@@ -197,6 +235,13 @@ export class PackagingUnitService {
     productId: string,
     unitId: string,
   ): Promise<ProductPackagingUnit> {
+    if (!isUuidShape(unitId) || !isUuidShape(productId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PACKAGING_UNIT_NOT_FOUND,
+        `Packaging unit ${unitId} not found under Product ${productId}.`,
+      );
+    }
     const unit = await em.findOne(ProductPackagingUnit, { id: unitId, productId });
     if (!unit) {
       throw new HttpError(
@@ -258,8 +303,42 @@ export class PackagingUnitService {
       baseQuantity: u.baseQuantity,
       position: u.position,
       isDefault: u.isDefault,
+      minOrderUnits: u.minOrderUnits ?? null,
       createdAt: u.createdAt.toISOString(),
       updatedAt: u.updatedAt.toISOString(),
     };
+  }
+}
+
+/**
+ * The audit projection of one packaging-unit write (FR-080): the product and every field
+ * the PATCH accepts but `position` (the reorder's), so re-sending it (minus
+ * `productId`) restores the unit (FR-081).
+ */
+function unitProjection(u: ProductPackagingUnit): Record<string, unknown> {
+  return {
+    productId: u.productId,
+    name: u.name,
+    baseQuantity: u.baseQuantity,
+    isDefault: u.isDefault,
+    minOrderUnits: u.minOrderUnits ?? null,
+  };
+}
+
+/**
+ * Feature 155 (FR-002, threat F5) — `minOrderUnits` is an integer in
+ * 1…1 000 000 or `null` (clear). Checked here as well as in the route schema
+ * because `CatalogPackagingPort` callers such as `pim_pimcore` reach this
+ * service with no schema in front of it.
+ */
+function assertMinOrderUnits(value: number | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (!isValidOrderMinimum(value)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      'The minimum number of packaging units must be a whole number from 1 to 1000000.',
+      { field: 'minOrderUnits' },
+    );
   }
 }

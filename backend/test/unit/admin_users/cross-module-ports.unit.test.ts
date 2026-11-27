@@ -76,19 +76,24 @@ function ownTablesOnly(admin: AdminUser | null): {
       }
       return { id: 'a-new', ...data } as unknown as AdminUser;
     },
-    persistAndFlush: async () => {
-      flushes += 1;
-    },
+    persist: () => ({
+      flush: async () => {
+        flushes += 1;
+      },
+    }),
     flush: async () => {
       flushes += 1;
     },
+    // Issue #470 — `impersonation.start` commits its audit entry (and, with a
+    // reason, its own reason row) in one transaction on this module's em.
+    transactional: async <T>(fn: (tx: unknown) => Promise<T>) => fn(em),
   } as unknown as EntityManager;
   return { em: () => em, flushes: () => flushes };
 }
 
 async function makeAdmin(password: string): Promise<AdminUser> {
   return {
-    id: 'a-1',
+    id: '00000000-0000-4000-8000-781000000101',
     email: 'operator@example.test',
     firstName: 'Ada',
     lastName: 'Operator',
@@ -173,12 +178,12 @@ function sessionPort(record: { cookieValue: string; expiresAt: Date }): {
 }
 
 const TARGET: CustomerAccountRecord = {
-  id: 'c-1',
-  organizationId: 'org-1',
+  id: '00000000-0000-4000-8000-781000000102',
+  organizationId: '00000000-0000-4000-8000-781000000103',
   email: 'buyer@example.test',
   firstName: 'Bo',
   lastName: 'Buyer',
-  role: 'regular_user',
+  organizationRoleId: '00000000-0000-4000-8000-0000000170b2',
   emailVerifiedAt: null,
   twoFactorEnabled: false,
   lastLoginAt: null,
@@ -195,6 +200,7 @@ const TARGET: CustomerAccountRecord = {
   blockedByCustomerAccountId: null,
   deletionRequestedByAdminUserId: null,
   anonymizedAt: null,
+  preferredLanguage: null,
 };
 
 /** Only the methods this module calls, answered as `customer_accounts` would. */
@@ -245,6 +251,9 @@ function recordingAuditLog(): { log: AuditLogService; actions: () => string[] } 
   const actions: string[] = [];
   const log = {
     record: async (input: { action: string }) => {
+      actions.push(input.action);
+    },
+    recordWithin: (_em: unknown, input: { action: string }) => {
       actions.push(input.action);
     },
   } as unknown as AuditLogService;
@@ -359,13 +368,13 @@ describe('admin_users — sessions, roles and the impersonation target over port
     const { log, actions } = recordingAuditLog();
 
     const started = await new ImpersonationService(em, sessions, accounts, log).start({
-      adminUserId: 'a-1',
+      adminUserId: '00000000-0000-4000-8000-781000000101',
       adminSessionCookieValue: 'admin-cookie',
-      customerAccountId: 'c-1',
-      organizationId: 'org-1',
+      customerAccountId: '00000000-0000-4000-8000-781000000102',
+      organizationId: '00000000-0000-4000-8000-781000000103',
     });
 
-    expect(scopedLookups()).toEqual([{ id: 'c-1', organizationId: 'org-1' }]);
+    expect(scopedLookups()).toEqual([{ id: '00000000-0000-4000-8000-781000000102', organizationId: '00000000-0000-4000-8000-781000000103' }]);
     expect(started.impersonatedCustomerAccount.email).toBe('buyer@example.test');
     expect(started.adminShadowSessionCookieValue).toBe('admin-cookie');
     // Audit before the cookie is minted (T179) survives the cut.
@@ -384,12 +393,12 @@ describe('admin_users — sessions, roles and the impersonation target over port
 
     await expect(
       new ImpersonationService(em, sessions, accounts, log).start({
-        adminUserId: 'a-1',
+        adminUserId: '00000000-0000-4000-8000-781000000101',
         adminSessionCookieValue: 'admin-cookie',
-        customerAccountId: 'c-1',
+        customerAccountId: '00000000-0000-4000-8000-781000000102',
         organizationId: 'org-2',
       }),
-    ).rejects.toThrow('Target customer not found.');
+    ).rejects.toMatchObject({ statusCode: 404, code: 'CUSTOMER_NOT_FOUND' });
     expect(actions()).toEqual([]);
   });
 });

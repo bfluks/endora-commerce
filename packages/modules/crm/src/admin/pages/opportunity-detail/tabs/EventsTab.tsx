@@ -9,7 +9,7 @@ import { crmCalendarApi } from '../../../calendar-api.js';
 import { EventCalendar } from '../../../components/calendar/EventCalendar.js';
 import { useEntryWhen } from '../../../components/calendar/EventChip.js';
 import { EventDialog } from '../../../components/EventDialog.js';
-import { ModalDialog } from '@endora-commerce/admin-kit/components';
+import { ModalDialog, ReferenceText } from '@endora-commerce/admin-kit/components';
 import {
   dayKeyOf,
   entryDayKey,
@@ -21,6 +21,9 @@ import { dateTimeLabel } from '../../../lib/calendar/format.js';
 import { errorMessage } from '../../../lib/labels.js';
 import { useNarrowScreen } from '../../../lib/use-narrow-screen.js';
 import type { OpportunityTabProps } from '../tabs.js';
+
+/** An Event's description refers to nothing the server resolves: it is formatted text alone. */
+const NO_REFERENCES = [] as const;
 
 /** The query parameter that names the Event a link points at. */
 export const EVENT_PARAM = 'event';
@@ -201,9 +204,9 @@ export function EventsTab(props: OpportunityTabProps): ReactNode {
             </p>
             <h4 className="text-sm font-medium [overflow-wrap:anywhere]">{event.name}</h4>
             {event.description ? (
-              <p className="line-clamp-2 whitespace-pre-line text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                {event.description}
-              </p>
+              <div className="line-clamp-2 text-sm text-muted-foreground">
+                <ReferenceText text={event.description} references={NO_REFERENCES} />
+              </div>
             ) : null}
             {event.reminder ? (
               <p className="flex items-start gap-1.5 text-xs text-muted-foreground">

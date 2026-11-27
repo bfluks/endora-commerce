@@ -48,12 +48,11 @@ describe('membership invariant: at-least-one-channel (T022)', () => {
       defaultCurrency: 'EUR',
       languages: ['en'],
       currencies: ['EUR'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     return channel;
   }
 
@@ -63,14 +62,14 @@ describe('membership invariant: at-least-one-channel (T022)', () => {
       sku: `T022-${suffix}`,
       slug: `t022-${suffix.toLowerCase()}`,
       type: 'simple',
-      status: 'draft',
-      name: { en: `T022 ${suffix}` },
-      description: { en: 'fixture' },
+      status: 'inactive',
+      name: `T022 ${suffix}`,
+      description: 'fixture',
       visibility: 'public',
       attributeValues: {},
       allowedOrganizationIds: [],
     });
-    await em.persistAndFlush(product);
+    await em.persist(product).flush();
     return product;
   }
 
@@ -174,12 +173,11 @@ describe('membership invariant: at-least-one-channel (T022)', () => {
           defaultCurrency: 'EUR',
           languages: ['en'],
           currencies: ['EUR'],
-          isPublic: false,
           active: true,
           systemDefault: false,
           version: 1,
         });
-        await db.em().persistAndFlush(stranger);
+        await db.em().persist(stranger).flush();
         const r3 = await svc.removeFromChannel(stranger.id, 'product', product.id);
         expect(r3.changed).toBe(false);
       }

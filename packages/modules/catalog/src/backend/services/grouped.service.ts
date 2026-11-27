@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { Product } from '../entities/product.entity.js';
@@ -67,10 +67,18 @@ export class GroupedService {
     const em = this.emFactory();
     await this.assertGroupedParent(em, parentProductId);
     if (input.childProductId === parentProductId) {
+      // Issue #624 (#86) — the product links' self-reference code, the token
+      // choosing the grouped product's sentence.
+      throw new HttpError(400, ERROR_CODES.SELF_LINK_NOT_ALLOWED, 'A grouped product cannot include itself as a child.', {
+        code: 'grouped',
+        productId: parentProductId,
+      });
+    }
+    if (!isUuidShape(input.childProductId)) {
       throw new HttpError(
-        400,
-        ERROR_CODES.VALIDATION_FAILED,
-        'A grouped product cannot include itself as a child.',
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Child product "${input.childProductId}" not found.`,
       );
     }
     const child = await em.findOne(Product, { id: input.childProductId });
@@ -116,8 +124,9 @@ export class GroupedService {
         if (err instanceof Error && /uniq_grouped_items_parent_child/.test(err.message)) {
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
+            ERROR_CODES.GROUPED_ITEM_ALREADY_EXISTS,
             `Child product "${input.childProductId}" is already in this group.`,
+            { parentProductId, childProductId: input.childProductId, childSku: child.sku },
           );
         }
         throw err;
@@ -143,6 +152,13 @@ export class GroupedService {
   ): Promise<GroupedItemRow> {
     const row = await this.#audited('grouped_item.update', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
+      if (!isUuidShape(itemId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
+          `Grouped item "${itemId}" not found on parent ${parentProductId}.`,
+        );
+      }
       const r = await em.findOne(GroupedItem, { id: itemId, parentProductId });
       if (!r) {
         throw new HttpError(
@@ -167,6 +183,13 @@ export class GroupedService {
   async removeItem(parentProductId: string, itemId: string): Promise<void> {
     await this.#audited('grouped_item.delete', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
+      if (!isUuidShape(itemId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
+          `Grouped item "${itemId}" not found on parent ${parentProductId}.`,
+        );
+      }
       const row = await em.findOne(GroupedItem, { id: itemId, parentProductId });
       if (!row) {
         throw new HttpError(
@@ -185,6 +208,13 @@ export class GroupedService {
     em: EntityManager,
     parentProductId: string,
   ): Promise<Product> {
+    if (!isUuidShape(parentProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Product "${parentProductId}" not found.`,
+      );
+    }
     const parent = await em.findOne(Product, { id: parentProductId });
     if (!parent || parent.deletedAt) {
       throw new HttpError(

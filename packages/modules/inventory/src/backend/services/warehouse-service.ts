@@ -4,6 +4,7 @@ import {
   DictionaryReferenceError,
   dispatchValidatorMode,
   type DictionaryValidator,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
@@ -92,7 +93,7 @@ export class WarehouseService {
     if (options.activeOnly) where['active'] = true;
 
     const [rows, total] = await em.findAndCount(Warehouse, where, {
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'asc', id: 'asc' },
       offset: page * pageSize,
       limit: pageSize,
     });
@@ -112,6 +113,7 @@ export class WarehouseService {
 
   async getById(id: string, options: { withTotals?: boolean } = {}): Promise<WarehouseDTO | null> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) return null;
     const row = await em.findOne(Warehouse, { id });
     if (!row) return null;
     if (!options.withTotals) return this.toDTO(row);
@@ -139,7 +141,7 @@ export class WarehouseService {
       defaultLowStockThreshold: input.defaultLowStockThreshold ?? null,
     });
     try {
-      await em.persistAndFlush(row);
+      await em.persist(row).flush();
     } catch (err) {
       if (err instanceof UniqueConstraintViolationException) {
         throw new HttpError(409, 'WAREHOUSE_CODE_TAKEN', 'Warehouse code already in use');
@@ -156,6 +158,7 @@ export class WarehouseService {
     auditCtx?: InventoryAuditContext,
   ): Promise<WarehouseDTO> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
     const row = await em.findOne(Warehouse, { id });
     if (!row) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
 
@@ -179,7 +182,7 @@ export class WarehouseService {
     if (input.defaultLowStockThreshold !== undefined) {
       row.defaultLowStockThreshold = input.defaultLowStockThreshold;
     }
-    await em.persistAndFlush(row);
+    await em.persist(row).flush();
     // Feature 024 — emit deactivate / reactivate when the only meaningful
     // change was the active flip; otherwise emit a plain `warehouse.update`.
     const after = snapshotOf(row);
@@ -256,6 +259,7 @@ export class WarehouseService {
 
   async delete(id: string, auditCtx?: InventoryAuditContext): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
     const row = await em.findOne(Warehouse, { id });
     if (!row) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
 
@@ -294,7 +298,7 @@ export class WarehouseService {
       {},
       auditCtx,
     );
-    await em.removeAndFlush(row);
+    await em.remove(row).flush();
   }
 
   private async collectTotals(em: EntityManager, ids: string[]): Promise<Map<string, WarehouseTotals>> {

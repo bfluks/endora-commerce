@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { formatOpportunityReferenceToken } from '@endora-commerce/contracts';
-import { Migration20261007T180600CrmOpportunityReferenceAdminUser } from '@endora-commerce/mod-crm/migrations';
+import {
+  Migration20261007T180600CrmOpportunityReferenceAdminUser,
+  Migration20261027T020030CrmOpportunityReferenceDocuments,
+} from '@endora-commerce/mod-crm/migrations';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -20,10 +23,12 @@ import {
   CrmOpportunityStatusHistory,
   CrmOpportunityStatusTransition,
   CrmOpportunityTag,
+  CrmOpportunityValueChange,
   CrmOrderStatusMapping,
   CrmStatusPropagation,
   CrmTag,
   CrmValueCountingStatus,
+  CrmOpportunityListSavedView,
 } from '../../helpers/package-entities.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { createCrmOpportunity } from '../../helpers/seed-crm.js';
@@ -47,12 +52,14 @@ const TABLES = [
   'crm_opportunity_comments',
   'crm_opportunity_events',
   'crm_opportunity_links',
+  'crm_opportunity_list_saved_views',
   'crm_opportunity_message_reads',
   'crm_opportunity_references',
   'crm_opportunity_status_history',
   'crm_opportunity_status_transitions',
   'crm_opportunity_statuses',
   'crm_opportunity_tags',
+  'crm_opportunity_value_changes',
   'crm_order_status_mappings',
   'crm_status_propagations',
   'crm_tags',
@@ -83,7 +90,7 @@ describe('crm init migration', () => {
     return found.map((row) => row.indexdef.replace(/\s+/g, ' '));
   }
 
-  it('creates the sixteen tables of the data model and no seventeenth', async () => {
+  it('creates the eighteen tables of the data model and no nineteenth', async () => {
     const found = await rows<{ table_name: string }>(
       `select table_name from information_schema.tables
         where table_schema = current_schema() and table_name like 'crm\\_%' order by table_name`,
@@ -195,9 +202,35 @@ describe('crm init migration', () => {
         'crm_opportunity_references',
         'crm_opportunity_status_history',
         'crm_opportunity_tags',
+        'crm_opportunity_value_changes',
         'crm_status_propagations',
       ].map((child) => ({ child, on_delete: 'c' })),
     );
+  });
+
+  describe('crm_opportunity_value_changes (issue #470)', () => {
+    it('holds the values an audit entry names — both sides nullable jsonb, keyed by its Opportunity', async () => {
+      const columns = await rows<{ column_name: string; data_type: string; is_nullable: string }>(
+        `select column_name, data_type, is_nullable from information_schema.columns
+          where table_schema = current_schema() and table_name = 'crm_opportunity_value_changes'
+          order by ordinal_position`,
+      );
+      expect(columns).toEqual([
+        { column_name: 'id', data_type: 'uuid', is_nullable: 'NO' },
+        { column_name: 'opportunity_id', data_type: 'uuid', is_nullable: 'NO' },
+        { column_name: 'before', data_type: 'jsonb', is_nullable: 'YES' },
+        { column_name: 'after', data_type: 'jsonb', is_nullable: 'YES' },
+        { column_name: 'at', data_type: 'timestamp with time zone', is_nullable: 'NO' },
+      ]);
+      const definitions = await indexDefinitions('crm_opportunity_value_changes');
+      expect(definitions.some((definition) => /\(opportunity_id\)$/.test(definition))).toBe(true);
+      // No tenant column of its own and no other module's table: the one foreign key is to the Opportunity.
+      const keys = await rows<{ referenced: string }>(
+        `select c.confrelid::regclass::text as referenced from pg_constraint c
+          where c.contype = 'f' and c.conrelid = 'crm_opportunity_value_changes'::regclass`,
+      );
+      expect(keys).toEqual([{ referenced: 'crm_opportunities' }]);
+    });
   });
 
   describe('the unread-message tables', () => {
@@ -357,10 +390,12 @@ describe('crm init migration', () => {
       CrmOpportunityStatusHistory,
       CrmOpportunityStatusTransition,
       CrmOpportunityTag,
+      CrmOpportunityValueChange,
       CrmOrderStatusMapping,
       CrmStatusPropagation,
       CrmTag,
       CrmValueCountingStatus,
+      CrmOpportunityListSavedView,
     ];
     expect(classes).toHaveLength(TABLES.length);
     const em = h.em();
@@ -440,6 +475,12 @@ describe('crm init migration', () => {
  * runs. It is run here from the migration class's own statements, **inside a
  * transaction that is rolled back**, so the database every other file of the
  * run shares never holds the narrower constraint.
+ *
+ * The newer `20261027T020030_crm_opportunity_reference_documents` widens the
+ * same constraint and is applied on top of this one, so its `down` runs first
+ * here, in the same transaction, as a rollback of the whole tree would: a
+ * `quote_request` or `task` reference another file left in this worker's
+ * database would otherwise make this `down` fail on rows it does not own.
  */
 describe('crm migration — a person as a reference target, up and down', () => {
   let h: BackendServerHandle;
@@ -465,6 +506,12 @@ describe('crm migration — a person as a reference target, up and down', () => 
       em.getConnection().execute(sql, params, 'all', em.getTransactionContext()) as Promise<T[]>;
     const migrate = async (direction: 'up' | 'down'): Promise<void> => {
       const migration = new Migration20261007T180600CrmOpportunityReferenceAdminUser(em.getDriver(), em.config);
+      await migration[direction]();
+      for (const query of migration.getQueries()) await run(query as string);
+    };
+    /** The newer migration on the same constraint — undone before this one, redone after it. */
+    const migrateNewer = async (direction: 'up' | 'down'): Promise<void> => {
+      const migration = new Migration20261027T020030CrmOpportunityReferenceDocuments(em.getDriver(), em.config);
       await migration[direction]();
       for (const query of migration.getQueries()) await run(query as string);
     };
@@ -505,6 +552,7 @@ describe('crm migration — a person as a reference target, up and down', () => 
       expect(await constraint()).toContain(`'admin_user'`);
       expect(await acceptsAMention()).toBe(true);
 
+      await migrateNewer('down');
       await migrate('down');
       expect(await targets()).toEqual(['product']);
       expect(await constraint()).not.toContain('admin_user');
@@ -514,6 +562,9 @@ describe('crm migration — a person as a reference target, up and down', () => 
 
       await migrate('up');
       expect(await constraint()).toContain(`'admin_user'`);
+      expect(await acceptsAMention()).toBe(true);
+      await migrateNewer('up');
+      expect(await constraint()).toContain(`'quote_request'`);
       expect(await acceptsAMention()).toBe(true);
       // The text kept its token all along: the row is derived and comes back with the next save.
       expect(
@@ -531,5 +582,111 @@ describe('crm migration — a person as a reference target, up and down', () => 
         created.id,
       ])) as Array<{ target_type: string }>;
     expect(after.map((row) => row.target_type)).toEqual(['admin_user', 'product']);
+  });
+});
+
+/**
+ * `20261027T020030_crm_opportunity_reference_documents` — a Quote Request and
+ * a Task as reference targets (`specs/163-projects-and-tasks/` FR-044,
+ * research R-14), both ways, in a transaction that is rolled back as the case
+ * above is.
+ */
+describe('crm migration — a Quote Request and a Task as reference targets, up and down', () => {
+  let h: BackendServerHandle;
+
+  beforeAll(async () => {
+    h = await setupBackendServer();
+  });
+
+  afterAll(async () => {
+    await teardownBackendServer(h);
+  });
+
+  it('down removes the two new types and refuses them; the earlier three stay; up takes them again', async () => {
+    const quoteRequest = randomUUID();
+    const task = randomUUID();
+    const person = randomUUID();
+    // Saved with no text: its rows are written inside the transaction below.
+    const { id: opportunityId } = await createCrmOpportunity(h, { assignedAdminUserId: null });
+
+    const em = h.em().fork();
+    await em.begin();
+    const run = <T>(sql: string, params: unknown[] = []): Promise<T[]> =>
+      em.getConnection().execute(sql, params, 'all', em.getTransactionContext()) as Promise<T[]>;
+    const migrate = async (direction: 'up' | 'down'): Promise<void> => {
+      const migration = new Migration20261027T020030CrmOpportunityReferenceDocuments(em.getDriver(), em.config);
+      await migration[direction]();
+      for (const query of migration.getQueries()) await run(query as string);
+    };
+    const targets = async (): Promise<string[]> =>
+      (
+        await run<{ target_type: string }>(
+          `select "target_type" from "crm_opportunity_references" where "opportunity_id" = ? order by "target_type"`,
+          [opportunityId],
+        )
+      ).map((row) => row.target_type);
+    const constraint = async (): Promise<string> =>
+      (
+        await run<{ definition: string }>(
+          `select pg_get_constraintdef(oid) as definition from pg_constraint
+            where conname = 'crm_opportunity_references_target_type_check'`,
+        )
+      )[0]?.definition ?? '';
+    /** Whether a row of `type` is accepted — under a savepoint, so a refusal does not end the transaction. */
+    const accepts = async (type: string): Promise<boolean> => {
+      await run('savepoint "type_probe"');
+      try {
+        await run(
+          `insert into "crm_opportunity_references" ("id", "opportunity_id", "source_kind", "target_type", "target_id")
+           values (?, ?, 'description', ?, ?)`,
+          [randomUUID(), opportunityId, type, randomUUID()],
+        );
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await run('rollback to savepoint "type_probe"');
+      }
+    };
+
+    try {
+      // Written inside the transaction, so nothing of it is left for a later file.
+      for (const [type, id] of [
+        ['quote_request', quoteRequest],
+        ['task', task],
+        ['admin_user', person],
+        ['product', SEED_PRODUCT_101_ID],
+      ] as const) {
+        await run(
+          `insert into "crm_opportunity_references" ("id", "opportunity_id", "source_kind", "target_type", "target_id")
+           values (?, ?, 'description', ?, ?)`,
+          [randomUUID(), opportunityId, type, id],
+        );
+      }
+      const before = await targets();
+      expect(before).toEqual(expect.arrayContaining(['admin_user', 'product', 'quote_request', 'task']));
+      for (const type of ['product', 'order', 'admin_user', 'quote_request', 'task']) {
+        expect(await constraint()).toContain(`'${type}'`);
+        expect(await accepts(type)).toBe(true);
+      }
+
+      await migrate('down');
+      expect(await targets()).not.toContain('quote_request');
+      expect(await targets()).not.toContain('task');
+      expect(await targets()).toEqual(
+        before.filter((type) => type !== 'quote_request' && type !== 'task'),
+      );
+      expect(await constraint()).not.toContain('quote_request');
+      expect(await constraint()).not.toMatch(/'task'/);
+      for (const type of ['product', 'order', 'admin_user']) expect(await accepts(type)).toBe(true);
+      expect(await accepts('quote_request')).toBe(false);
+      expect(await accepts('task')).toBe(false);
+
+      await migrate('up');
+      expect(await accepts('quote_request')).toBe(true);
+      expect(await accepts('task')).toBe(true);
+    } finally {
+      await em.rollback();
+    }
   });
 });

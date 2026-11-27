@@ -44,6 +44,7 @@
 @import "@endora-commerce/mod-delivery-methods/tailwind.css";
 @import "@endora-commerce/mod-dictionaries/tailwind.css";
 @import "@endora-commerce/mod-document-templates/tailwind.css";
+@import "@endora-commerce/mod-forms/tailwind.css";
 @import "@endora-commerce/mod-google-analytics/tailwind.css";
 @import "@endora-commerce/mod-import-export/tailwind.css";
 @import "@endora-commerce/mod-inventory/tailwind.css";
@@ -60,16 +61,26 @@
 @import "@endora-commerce/mod-payments/tailwind.css";
 @import "@endora-commerce/mod-price-lists/tailwind.css";
 @import "@endora-commerce/mod-product-feeds/tailwind.css";
+@import "@endora-commerce/mod-projects/tailwind.css";
 @import "@endora-commerce/mod-promotions/tailwind.css";
 @import "@endora-commerce/mod-pwa/tailwind.css";
 @import "@endora-commerce/mod-quick-order/tailwind.css";
 @import "@endora-commerce/mod-quote-requests/tailwind.css";
+@import "@endora-commerce/mod-related-payers/tailwind.css";
 @import "@endora-commerce/mod-returns/tailwind.css";
 @import "@endora-commerce/mod-sales-channels/tailwind.css";
 @import "@endora-commerce/mod-seo/tailwind.css";
 @import "@endora-commerce/mod-settings/tailwind.css";
+@import "@endora-commerce/mod-tasks/tailwind.css";
 @import "@endora-commerce/mod-taxes/tailwind.css";
 @import "@endora-commerce/mod-transactional-emails/tailwind.css";
 @import "@endora-commerce/mod-webhooks/tailwind.css";
 @import "@endora-commerce/page-builder-admin/tailwind.css";
 @import "@endora-commerce/page-builder-core/tailwind.css";
+
+/*
+ * Overlay admin layers — one `@source` per overlay module, of every deployment
+ * on disk, that ships `admin/index.tsx` (`specs/190-overlay-full-modules/` FR-082).
+ * They are no package, so no `./tailwind.css` of theirs declares them.
+ */
+@source "../../backend/src/apps/example/modules/overlay_notes_fixture/admin";

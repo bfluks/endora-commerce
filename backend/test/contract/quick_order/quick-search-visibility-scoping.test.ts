@@ -95,13 +95,13 @@ describe('GET /api/v1/quick-order/search — visibility and organisation scoping
         slug: fixture.sku.toLowerCase(),
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Quick-order visibility probe ${fixture.sku}` },
-        description: { 'en-US': 'Bound to pl_retail.' },
+        name: `Quick-order visibility probe ${fixture.sku}`,
+        description: 'Bound to pl_retail.',
         visibility: fixture.visibility,
         allowedOrganizationIds: fixture.allowedOrganizationIds,
         attributeValues: { defaultPrice: 10 },
       });
-      await em.persistAndFlush(product);
+      await em.persist(product).flush();
 
       // Bound to the channel the buyer is shopping, so the channel filter
       // cannot be what excludes any of these rows.

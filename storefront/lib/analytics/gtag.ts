@@ -1,6 +1,8 @@
 'use client';
 
+import { isSecretBearingPath, redactSecretPath } from './secret-paths';
 import type { GaStorefrontConfig } from '@endora-commerce/contracts';
+import { channelHeaders } from '../channel/channel-header';
 
 /**
  * Client-side Google Analytics helper (feature 049). Wraps `gtag`/`dataLayer`,
@@ -25,8 +27,17 @@ declare global {
   }
 }
 
-export function configureGa(next: GaStorefrontConfig): void {
+/**
+ * The storefront's active sales channel, sent as `X-Sales-Channel` on the
+ * collect beacon. The provider passes the code the layout resolved; the
+ * build-time `NEXT_PUBLIC_SALES_CHANNEL_CODE` is the fallback for a caller
+ * that names none.
+ */
+let channelCode: string | undefined;
+
+export function configureGa(next: GaStorefrontConfig, salesChannelCode?: string): void {
   config = next;
+  if (salesChannelCode !== undefined) channelCode = salesChannelCode;
 }
 
 export function getGaConfig(): GaStorefrontConfig | null {
@@ -74,12 +85,27 @@ export function updateAnalyticsConsent(granted: boolean): void {
   });
 }
 
+/**
+ * The `page_location` of a page view: the browser's address, with a guest token redacted
+ * (`specs/181-guest-complaints/` design review F-2) — the tracking and verification pages'
+ * addresses are bearer credentials and never leave for a third party.
+ */
+export function pageLocationOf(href: string): string {
+  try {
+    const url = new URL(href);
+    const path = `${url.pathname}${url.search}`;
+    return isSecretBearingPath(path) ? `${url.origin}${redactSecretPath(path)}` : href;
+  } catch {
+    return isSecretBearingPath(href) ? redactSecretPath(href) : href;
+  }
+}
+
 /** Emit a GA4 `page_view` for a resolved route (client or server path). */
 export function sendPageView(path: string): void {
   if (!isGaActive()) return;
   const params: GaParams = {
-    page_path: path,
-    page_location: typeof window !== 'undefined' ? window.location.href : path,
+    page_path: isSecretBearingPath(path) ? redactSecretPath(path) : path,
+    page_location: typeof window !== 'undefined' ? pageLocationOf(window.location.href) : path,
     page_title: typeof document !== 'undefined' ? document.title : '',
   };
   dispatch('page_view', params);
@@ -167,13 +193,13 @@ function resolveSessionId(): string {
 
 async function postToCollect(name: string, params: GaParams): Promise<void> {
   const base = process.env['NEXT_PUBLIC_API_BASE_URL'] ?? '';
-  const channel = process.env['NEXT_PUBLIC_SALES_CHANNEL_CODE'] ?? '';
+  const channel = channelCode ?? process.env['NEXT_PUBLIC_SALES_CHANNEL_CODE'];
   try {
     await fetch(`${base}/api/v1/storefront/google-analytics/collect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(channel ? { 'X-Sales-Channel': channel } : {}),
+        ...channelHeaders(channel),
       },
       body: JSON.stringify({
         clientId: resolveClientId(),

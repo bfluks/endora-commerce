@@ -78,6 +78,14 @@ export {
   resolvePublicApiBaseUrl,
 } from './public-api-base-url.js';
 
+/**
+ * The Admin UI's base address (issue #185): `null` when unset or malformed, so
+ * a module that mails an administrator omits the link rather than breaking it.
+ * The boot-time refusal of a malformed value, `assertAdminBaseUrlWellFormed`,
+ * is the host's and is not published.
+ */
+export { configuredAdminBaseUrl } from './admin-base-url.js';
+
 export { effectiveState, toModulePresenceDto } from './lifecycle/effective-state.js';
 // Feature 132 — the derived capability families. A module reads them through
 // `effectiveState`; these are the shapes those reads answer in.
@@ -142,14 +150,41 @@ export { scopeRequestToActor } from './request-scope-hook.js';
  * freezing the writer class into the platform contract would owe third-party
  * packages a major version to change the shape the principle routes around.
  */
-export { type AuditPort, type RecordAuditInput, type AuditLogFilter } from './ports/audit.js';
+export {
+  type AuditPort,
+  type RecordAuditInput,
+  type AuditLogFilter,
+  type AuditLogFacets,
+  type AuditLogPosition,
+} from './ports/audit.js';
 export { AuditLogEntry } from './audit/audit-log-entry.entity.js';
+
+/**
+ * Erasing an anonymised subject's audit history in place (issue #844) — the
+ * one exception to the audit log being append-only. A separate port beside
+ * {@link AuditPort}, registered as the platform-owned `auditRedactionService`;
+ * `AuditRedactionService` is the host's implementation and, like the writer,
+ * is not published.
+ */
+export {
+  AUDIT_REDACTED_ACTION,
+  AUDIT_REDACTION_MAX_IDS_PER_TARGET,
+  type AuditRedactionPort,
+  type AuditRedactionInput,
+  type AuditRedactionResult,
+  type AuditRedactionTarget,
+} from './ports/audit-redaction.js';
 
 export {
   InProcessCacheRegistry,
   inProcessCaches,
   type InProcessCacheLayer,
 } from './cache/in-process-cache-registry.js';
+
+export {
+  subscribeWhenReady,
+  type HandshakeAwareSubscriber,
+} from './cache/subscribe-when-ready.js';
 
 export {
   hashPassword,
@@ -189,6 +224,12 @@ export {
   SALES_CHANNELS_CACHE_NAMESPACE,
   type SalesChannelsCacheInvalidation,
 } from './sales-channels/sales-channels-cache.js';
+/**
+ * Feature 154 — the invalidating half of the per-Organization permitted-channel
+ * cache, for the one module write that moves every Organization's set at once
+ * (a channel delete). The cache itself is the kernel's.
+ */
+export { type SalesChannelAccessCacheInvalidation } from './sales-channels/sales-channel-access-cache.js';
 // `SalesChannelResolverService` itself is **not** published (§1.4e): a consumer
 // resolves `salesChannelResolutionPort` and types on `SalesChannelResolutionPort`.
 // `parseHostMap` is the host-map parser a composition root calls, and
@@ -257,6 +298,55 @@ export { type RequireCustomerGuard } from './ports/require-customer.js';
 export { type SettingsReadPort, type SettingsReadResult } from './ports/settings.js';
 export {
   type ResolvedChannel,
+  type SalesChannelAccessPort,
   type SalesChannelMembershipPort,
   type SalesChannelResolutionPort,
 } from './ports/sales-channel.js';
+
+/**
+ * Declared extension columns on core tables (`specs/178-extensible-columns/`).
+ *
+ * An installed module package declares additive `x_<moduleId>_*` columns on an
+ * extensible host table with `defineColumnExtension`, exports the declaration
+ * from its `./backend` subpath as `schemaExtensions`, and reads and writes the
+ * columns only through `extensionColumns` — inside a Command or a command hook.
+ * The platform generates the DDL, records it in its ledger and verifies it.
+ */
+export { defineColumnExtension } from './schema-extensions/define.js';
+export { columnExtensionPatchSchema, columnExtensionSchema } from './schema-extensions/zod.js';
+export { extensionColumns, type ExtensionColumnsAccessor } from './schema-extensions/accessor.js';
+export type {
+  ExtensionAttributeMap,
+  ExtensionJsonValue,
+  SchemaExtensionReads,
+} from './schema-extensions/reads.js';
+export {
+  ExtensionHostRowNotFoundError,
+  ExtensionProjectionWriteError,
+  ExtensionValueCorruptError,
+  ExtensionWriteOutsideCommandError,
+  SchemaExtensionInvalidError,
+} from './schema-extensions/errors.js';
+/**
+ * Side-table extensions on host read ports (`specs/187-side-table-extensions/`
+ * B1). A module that declares a side table in its manifest `extends` registers
+ * one bulk loader per host with `ctx.entityExtensionLoaders`; the entry is the
+ * shape it writes.
+ */
+export type { EntityExtensionLoaderEntry } from './entity-extensions/loaders.js';
+/**
+ * …and the reads service a host module's read port hands its records to
+ * (`entityExtensionReads`), through `lazyEntityExtensionReads` so a read
+ * without `include` resolves nothing.
+ */
+export { lazyEntityExtensionReads, type EntityExtensionReads } from './entity-extensions/reads.js';
+export type {
+  ColumnExtension,
+  ColumnExtensionInput,
+  ColumnExtensionPatch,
+  ColumnExtensionValues,
+  ColumnIndex,
+  ColumnSpec,
+  ColumnType,
+  ExtensibleHostTable,
+} from './schema-extensions/types.js';

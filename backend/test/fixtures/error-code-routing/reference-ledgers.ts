@@ -90,6 +90,240 @@ import type {
  * author of one claim is two answers waiting to disagree.
  */
 export const MINTED_ERROR_CODES: MintedErrorCodes = {
+  BULK_OPERATION_RUNNING: {
+    to: 'catalog',
+    reason:
+      'Minted by issue #501 (architect ruling A, 2026-11-13) for an undo of a catalog bulk ' +
+      'operation that is still pending or running. It used to answer `VERSION_CONFLICT`, which ' +
+      'says nothing about why. The noun is the catalog bulk operation, which `catalog` owns and ' +
+      'whose undo route raises it.',
+  },
+  BULK_OPERATION_ALREADY_REVERTED: {
+    to: 'catalog',
+    reason:
+      'Minted by issue #501 (architect ruling A, 2026-11-13) for an undo of a catalog bulk ' +
+      'operation that has already been undone, formerly a `VERSION_CONFLICT`. The noun is the ' +
+      'catalog bulk operation; `catalog` raises it.',
+  },
+  BULK_OPERATION_NOT_REVERSIBLE: {
+    to: 'catalog',
+    reason:
+      'Minted by issue #501 (architect ruling A, 2026-11-13) for an undo of a completed catalog ' +
+      'bulk operation with nothing it can restore (a non-reversible edit), formerly a ' +
+      '`VERSION_CONFLICT`. The noun is the catalog bulk operation; `catalog` raises it.',
+  },
+  CUSTOMER_ADDRESS_BOOK_RETIRED: {
+    to: 'customers',
+    reason:
+      'Minted by `specs/173-b2c-address-book-merge/` release 1 (OD-8): every former ' +
+      'personal-address-book endpoint answers `410 Gone` with it, for every caller. The noun is ' +
+      'the personal address book, which `customers` owns and retires; release 2 removes the ' +
+      'code with the stub routes. It replaced `CUSTOMER_ADDRESS_NOT_FOUND`, which left the ' +
+      'enumeration — and so the frozen capture, whose key set is the enumeration\'s — when ' +
+      'nothing raised it any more.',
+  },
+  ADMIN_USER_AVATAR_NOT_FOUND: {
+    to: 'admin_users',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-050) for an administrator\'s ' +
+      'author avatar that names no live library asset. The noun is the administrator profile, ' +
+      'which `admin_users` owns and validates; the library only answers whether the asset exists.',
+  },
+  BLOG_AUTHOR_NOT_FOUND: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-060) for naming as a post\'s ' +
+      'author anyone but an active administrator. The noun is the post\'s author, which `blog` ' +
+      'owns; the administrator is read through `adminUserReadPort`.',
+  },
+  BLOG_URL_PREFIX_CONFLICT: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-041) for a blog URL prefix ' +
+      'that is a language prefix of a sales channel or the first slug segment of a CMS page in ' +
+      'the channel — an address another part of the storefront already serves. Not ' +
+      '`BLOG_URL_PREFIX_RESERVED`: that names a segment the storefront reserves by itself, and ' +
+      'the operator fixes the two differently. The noun is the blog prefix; `blog` raises it.',
+  },
+  BLOG_LANGUAGE_INCOMPLETE: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-022, OR-7) for publishing a ' +
+      'post, or saving a category, that is not written in every language assigned to it: a ' +
+      'post exists on the storefront in each of its languages, so each needs its name and — ' +
+      'once the post has content — its content. Not `VALIDATION_FAILED`: the details name the ' +
+      'missing field per language, and the editor shows them on its language tabs.',
+  },
+  BLOG_URL_KEY_TAKEN: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-031) for a URL key another post ' +
+      'or category already serves in the same sales channel and language — posts and categories ' +
+      'share one URL space. The noun is the blog URL key; `blog` raises it.',
+  },
+  BLOG_URL_KEY_REDIRECT_TAKEOVER_REQUIRED: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-033) for a URL key another blog ' +
+      'entry still answers as a redirect: the write succeeds only when the retry confirms the ' +
+      'takeover, the protocol `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` gives product keys. A code of ' +
+      'its own because the editor answers it with a confirmation, not a correction.',
+  },
+  BLOG_URL_REDIRECT_NOT_FOUND: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-033) for removing a redirect a ' +
+      'blog entry does not have. The noun is the blog URL redirect, which `blog` owns.',
+  },
+  BLOG_URL_PREFIX_NOT_FOUND: {
+    to: 'blog',
+    reason:
+      'Minted by feature 171 (`specs/171-blog-i18n-authors/`, FR-042) for forgetting a former ' +
+      'blog URL prefix that does not exist or is the current one. The noun is the blog prefix ' +
+      'history, which `blog` owns and raises it for.',
+  },
+  INVOICE_ORDER_REFUNDED: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #417 (owner ruling of 2026-10-24) for the refusal an operator meets when ' +
+      'they issue a VAT invoice for an order whose payments were refunded in full before it was ' +
+      'invoiced: there is no sale left to document. The noun is the invoice, which `invoices` ' +
+      'owns, and `invoices` raises it; the automatic issuance skips the order and logs the code.',
+  },
+  INVOICE_SELLER_DATA_MISSING: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #633 (#86) for invoice issuance before the seller\'s VAT number and ' +
+      'company data are configured. It was `VALIDATION_FAILED` with an English sentence the ' +
+      'envelope never replaces. The one raise site is `invoices`\' `SellerSettingsResolver`',
+  },
+  INVOICE_CORRECTION_CURRENCY_MISMATCH: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #633 (#86) for a correction asked for in another currency than the ' +
+      'invoice it corrects, formerly `VALIDATION_FAILED` with `details.code = ' +
+      '\'correction_currency_mismatch\'`. The noun is the corrective invoice; `invoices` raises it',
+  },
+  INVOICE_CORRECTION_TOTAL_EXCEEDS_LINES: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #633 (#86) for a correction total its lines and charges do not add up ' +
+      'to, formerly `400 VALIDATION_FAILED` with `details.code = ' +
+      '\'correction_total_exceeds_lines\'`; the token `below_charges` marks the total below the ' +
+      'charges alone. The noun is the corrective invoice; `invoices` raises it',
+  },
+  INVOICE_CORRECTION_EXCEEDS_RATE_REMAINING: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #633 (#86) for a correction crediting more goods at one VAT rate than ' +
+      'the invoice still charges there (#885), formerly `VALIDATION_FAILED` with `details.code ' +
+      '= \'correction_exceeds_rate_remaining\'`. The noun is the corrective invoice',
+  },
+  INVOICE_CORRECTION_EXCEEDS_CHARGE_REMAINING: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #633 (#86) for a correction crediting more of the delivery or the ' +
+      'payment surcharge than the invoice still charges for it (#876), formerly ' +
+      '`VALIDATION_FAILED` with `details.code = \'correction_exceeds_charge_remaining\'`; the ' +
+      'token is now the charge. The noun is the corrective invoice',
+  },
+  AMOUNT_PRECISION_EXCEEDED: {
+    to: '_i18n',
+    reason:
+      'Minted by issue #417 (owner ruling of 2026-10-24) for a typed money amount with more than ' +
+      'two decimal places, which is refused rather than rounded on every money field. One code ' +
+      'for every module, so it sits in the platform block; its raiser is the error envelope, from ' +
+      'the Zod issue `money-input.ts` tags. `VALIDATION_FAILED` is not reused: the envelope never ' +
+      'translates that code, and the sentence has to tell the reader what to change.',
+  },
+  UNIT_PRICE_PRECISION_EXCEEDED: {
+    to: '_i18n',
+    reason:
+      'Minted by the owner ruling of 2026-10-25 for a typed unit price with more than four decimal ' +
+      'places: a unit price is carried at four places from the price book to the invoice line, so ' +
+      'the two-place sentence of `AMOUNT_PRECISION_EXCEEDED` would be false for it. One code for ' +
+      'every module, raised by the error envelope from the Zod issue `money-input.ts` tags.',
+  },
+  LINE_QUANTITY_EXCEEDED: {
+    to: '_i18n',
+    reason:
+      'Minted by issue #351 (architect ruling R1 on PR #1009) for a line quantity past ' +
+      '`LINE_QUANTITY_MAX`, which used to pass validation and answer 500 at the database. One code ' +
+      'for every module carrying a line, so it sits in the platform block; its raisers are the error ' +
+      'envelope, from the Zod issue `line-bounds.ts` tags, and `carts`, for a line a merge or a ' +
+      'packaging unit would take past the bound. `VALIDATION_FAILED` is not reused: the envelope ' +
+      'never translates that code.',
+  },
+  // `specs/176-command-hooks-outbox/` P2 — the Command Bus's three answers to a
+  // misused command-hook seam. No module owns a Command's hook chain.
+  COMMAND_EXTENSION_UNCLAIMED: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 176 P2 (FR-019) for a Command whose `extensions` carry a key no present ' +
+      'hook module on that action claims — refused 422 before any write so a misspelt or ' +
+      'switched-off module never loses its input silently. The raiser is the Command Bus.',
+  },
+  COMMAND_HOOK_CYCLE: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 176 P2 (FR-022) for an action reappearing in its own hook chain, or ' +
+      'hook-induced nesting past eight Commands. A 500: the deployment composed hooks that recurse. ' +
+      'The raiser is the Command Bus.',
+  },
+  COMMAND_HOOK_DATA_MISSING: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 176 P2 (FR-023) for a Command declared hookable that supplies no hook data ' +
+      'while a hook would run. A 500: the owner broke its own published contract. The raiser is ' +
+      'the Command Bus.',
+  },
+  // `specs/189-command-middleware/` P1 — the Command Bus's answers when an
+  // admission rule cannot decide, or a middleware runs a Command.
+  COMMAND_ADMISSION_TIMEOUT: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 189 P1 (FR-013) for an `admit` command middleware that did not settle within ' +
+      'its budget: the Command is refused before it writes anything, failing closed. A 503. The ' +
+      'raiser is the Command Bus.',
+  },
+  COMMAND_ADMISSION_FAILED: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 189 P1 (FR-013) for an `admit` command middleware that threw something other ' +
+      'than a refusal: the Command is refused before it writes anything, failing closed. A 503. The ' +
+      'raiser is the Command Bus.',
+  },
+  COMMAND_MIDDLEWARE_REENTRY: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 189 P1 (FR-015) for a command middleware that called `CommandBus.run`: an ' +
+      'admission rule would loop and an observer would write outside its contract. A 500. The raiser ' +
+      'is the Command Bus.',
+  },
+  // `specs/187-side-table-extensions/` B1 — a host read port's answer to an
+  // `include` no composed loader claims.
+  ENTITY_EXTENSION_UNCLAIMED: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 187 B1 (FR-054) for a read whose `include` names `extensions.<moduleId>` that no ' +
+      'loader of the composition serves for the host — refused 422 before any loader runs, so a ' +
+      'misspelt module never reads as "no values". The raiser is the platform\'s `entityExtensionReads`.',
+  },
+  COMMAND_OUTBOX_NOT_DEAD: {
+    to: '_i18n',
+    reason:
+      'Minted by spec 176 P4 (FR-040) for an operator retry of a command outbox row that is not ' +
+      'dead: only a failed delivery can be retried. A 409. The raiser is the platform\'s ' +
+      '`command_outbox.retry` Command.',
+  },
+  ORDER_STALE: {
+    to: '_i18n',
+    reason:
+      'Minted by issue #1560 (architect ruling on the batch reorder) for a reorder of a ' +
+      'configuration list whose body is not the current list: a row left out or named twice. A ' +
+      '409; the client reloads. Raised by `crm` (`PUT /crm/statuses/order`) and `tasks` ' +
+      '(`PUT /tasks/statuses/order`, `PUT /tasks/priorities/order`), so it sits in the platform block.',
+  },
   ADMIN_AUTHENTICATION_THROTTLED: {
     to: 'admin_users',
     reason:
@@ -115,6 +349,47 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'organization. The noun is an admin role and the one place the refusal is built is ' +
       '`admin_roles`\' permission service, which `organizations` asks for it.',
   },
+  MFA_REQUIRED_FOR_ROLE_TWO_FACTOR: {
+    to: 'admin_users',
+    reason:
+      'Minted by issue #349 for the refusal a role write earns by turning `requiresTwoFactor` ' +
+      'on where no second factor can be enrolled: `mfa` is off, or has no encryption key. The ' +
+      'noun is the role editor\'s write, whose one raise site is `admin_users`\' ' +
+      '`PUT /admin-roles/:code`; it is raised while `mfa` may be absent, so `mfa`\'s bundle ' +
+      'could not be the one that translates it.',
+  },
+  ORGANIZATION_TAX_ID_SCOPE_DUPLICATES: {
+    to: 'organizations',
+    reason:
+      'Minted by `specs/177-tax-id-scope/` (D-290) for the refusal a switch of the tax-ID scope ' +
+      'to `global` earns while a tax ID is on more than one organization. The noun is the ' +
+      'installation\'s tax-ID scope, the policy row `organizations` owns, and the one raise ' +
+      'site is its `organization.tax_id_scope.set` Command.',
+  },
+  ORGANIZATION_WRITE_CONTENDED: {
+    to: 'organizations',
+    reason:
+      'Minted by `specs/177-tax-id-scope/` (review fix 2) for a write of organizations that ' +
+      'loses a lock to a concurrent one: the tax-ID scope swap or a racing writer (`40P01`, ' +
+      '`55P03`), answered 409 so that a retry succeeds. The noun is the organization row, and ' +
+      'every raise site is `organizations`\' own write wrapper.',
+  },
+  ORGANIZATION_CONVERSION_REFUSED: {
+    to: 'organizations',
+    reason:
+      'Minted by `specs/177-tax-id-scope/` (WP-5) for the refusal a personal-to-company ' +
+      'conversion earns: the organization is not personal, is deleted, or its member is not ' +
+      'its Administrator. The noun is the organization, and the one raise site is ' +
+      '`organizations`\' `organization.convert_to_company` Command.',
+  },
+  ORGANIZATION_TAX_ID_CHANGE_REFUSED: {
+    to: 'organizations',
+    reason:
+      'Minted by issue #1040 (follow-up to `specs/177-tax-id-scope/`) for the refusal an ' +
+      'operator\'s tax-ID correction earns: the organization is personal or deleted. The noun is ' +
+      'the organization, and the one raise site is `organizations`\' `organization.tax_id.change` ' +
+      'Command.',
+  },
   ADMIN_USER_ROLE_REQUIRED: {
     to: 'admin_users',
     reason:
@@ -130,6 +405,31 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'record\'s secrets are sent — an API Base URL, a mail host — without re-entering them. ' +
       'The noun is the credential configuration, `credentials`\' own row, and the one raise ' +
       'site is its update command.',
+  },
+  MFA_ENFORCEMENT_UNAVAILABLE: {
+    to: 'mfa',
+    reason:
+      'Minted by issue #930 for the refusal an operator earns by turning ' +
+      '`mfa.admin.totp_enforced` on where no second factor can be enrolled, because `mfa` has no ' +
+      'encryption key. The noun is the second factor, this module\'s whole subject; the one ' +
+      'raise site is `mfa`\'s own setting validator, which `settings` consults only while `mfa` ' +
+      'is present.',
+  },
+  MFA_LAST_FACTOR_REQUIRED: {
+    to: 'mfa',
+    reason:
+      'Minted by issue #935 for the refusal an account earns by switching off its last second ' +
+      'factor while a requirement is in force for it: a setting, an administrator\'s role or a ' +
+      'customer\'s organization. The noun is the second factor, this module\'s whole subject; ' +
+      'the one raise site is `mfa`\'s self-service `POST …/mfa/disable`.',
+  },
+  MFA_FEDERATED_HANDOFF_INVALID: {
+    to: 'mfa',
+    reason:
+      'Minted by issue #1279 for the refusal of a federated customer sign-in hand-off the ' +
+      'storefront tries to redeem: unknown, expired, already used, bound to another browser, ' +
+      'asked on another sales channel or withdrawn. The noun is the federated sign-in, which ' +
+      'this module owns; the one raise site is `mfa`\'s `POST /api/v1/auth/customer/oauth/exchange`.',
   },
   MFA_DEACTIVATION_BLOCKED: {
     to: 'mfa',
@@ -161,6 +461,14 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted for the refusal an administrator earns by issuing an API key with a scope their ' +
       'own role does not hold. The noun is the API key and its scopes, columns on the row ' +
       '`api_keys` owns, and the one raise site is its service.',
+  },
+  API_KEY_SERVICE_ACCOUNT_INACTIVE: {
+    to: 'api_keys',
+    reason:
+      'Minted by issue #644 (#86) for a bound key whose service account belongs to the bound ' +
+      'organization but is blocked, deleted or anonymized. It was one branch of the aggregate ' +
+      '`422 VALIDATION_FAILED`; the account\'s stored state refuses a well-formed request. The ' +
+      'noun is the API key binding, `api_keys`\' own row, and the one raise site is its service.',
   },
   NEW_PASSWORD_UNCHANGED: {
     to: 'admin_users',
@@ -284,33 +592,112 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'The noun is the attachment and the one raise site is that route; the media library\'s ' +
       'own size limit keeps its own code.',
   },
-  PRICE_MATRIX_ENTRY_NOT_FOUND: {
-    to: 'price_lists',
+  CRM_ATTACHMENT_NOT_PRIVATE: {
+    to: 'crm',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of a matrix entry that is missing, on another list or outside the caller scope. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted by issue #639 (#86) for a library file attached to an Opportunity while it is not ' +
+      'private. It was `VALIDATION_FAILED`: the request is well formed, and the file\'s ' +
+      'visibility refuses it. Named in parallel with `projects`\' twin, ' +
+      '`PROJECT_ATTACHMENT_NOT_PRIVATE` (issue #634), as the two `*_ATTACHMENT_TOO_LARGE` codes are.',
   },
-  PRICE_MATRIX_ENTRY_OVERLAP: {
+  PRICE_BOOK_CHANNEL_CURRENCY: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of an entry whose coordinates and quantity window overlap another entry. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a channel set naming a sales channel that does not offer the book\'s currency (FR-003). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
-  PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE: {
+  PRICE_BOOK_AUDIENCE_KIND: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of an attribute that may not select prices (not flagged, wrong value type, per-language or per-channel). ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of an audience set that mixes organizations and customer groups or names a member that does not exist or is out of scope (FR-002, A4). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
-  PRICE_MATRIX_ENTRY_LIMIT: {
+  PRICE_BOOK_IMMUTABLE_FIELD: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of one entry more than a price list may hold. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal to change a book\'s currency or type, its audience kind once it has been active, or a base book\'s header (FR-004). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_NOT_APPLICABLE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal to activate a book that would apply nowhere (no channel offering its currency) or to no one (no member). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_OVERLAP: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of rows of one selection whose quantity windows overlap (FR-006); details name each row. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_SHAPE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a row batch with rows that break a shape rule (FR-005 to FR-009); details name every failing row. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_TARGET: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: a row naming a product, variant, category, SKU, path or attribute value that does not exist or cannot select prices. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_LIMIT: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a batch that would leave a book over its row limit. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_STALE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a write made against an older version of the book (G5 of `specs/161-price-book-editor/`). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_BASE_BOOK: {
+    to: 'price_lists',
+    reason:
+      'Minted with `priceBookRowWritePort` (issue #1028), long after the prefix chain was deleted: ' +
+      'the refusal of a module row write naming a base book, whose rows are base prices written through `priceBookWritePort`. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_EXPIRED: {
+    to: 'price_lists',
+    reason:
+      'Minted with `priceBookRowWritePort` (issue #1028), long after the prefix chain was deleted: ' +
+      'the refusal of a module row write naming an expired book. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_BASE_PRICE_REQUIRED: {
+    to: 'price_lists',
+    reason:
+      'Minted by issue #636 (#86) for a base-price write that would leave a variant\'s percentage ' +
+      'or amount adjustment without the product\'s own base price in that currency. It was ' +
+      '`400 VALIDATION_FAILED` reading "The base prices were refused. …"; the product and the ' +
+      'currency now travel as scalar `details` beside the `issues` array.',
+  },
+  PRICE_BOOK_BASE_HAS_NO_CHANNELS: {
+    to: 'price_lists',
+    reason:
+      'Minted by issue #636 (#86) for a channel set written to a base book, which applies in ' +
+      'every channel. It was `400 VALIDATION_FAILED` reading "The channel set was refused. A base ' +
+      'book is channel-independent and has no channel set."',
+  },
+  PRECEDENCE_CHANGE_UNAVAILABLE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of every precedence write until the change flow ships (FR-023). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
   CRM_TAG_NAME_TAKEN: {
     to: 'crm',
@@ -325,6 +712,350 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted with the `crm` module (`specs/143-crm-sales-opportunities/`, User Story 4), which ' +
       'did not exist when the prefix chain was deleted: the refusal to edit or delete an ' +
       'internal message on an Opportunity, which is immutable once sent, whoever asks.',
+  },
+  TASK_NOT_FOUND: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A), which did not ' +
+      'exist when the prefix chain was deleted: a Task that does not exist, or one whose context ' +
+      'the caller may not see — the two answer identically (FR-031).',
+  },
+  TASK_CONTEXT_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A): a Task created ' +
+      'into a context whose type no present module has registered, or whose id the caller may ' +
+      'not see.',
+  },
+  TASK_ASSIGNEE_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A): a Task assigned ' +
+      'to somebody who is not an active administrator.',
+  },
+  TASK_STATUS_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change to a code the operator’s workflow does not hold.',
+  },
+  TASK_TRANSITION_FORBIDDEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change the operator’s workflow does not permit from the Task’s current ' +
+      'status.',
+  },
+  TASK_TRANSITION_CONFLICT: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change from a status the Task has since left.',
+  },
+  TASK_WORKFLOW_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 4): a workflow configuration write that breaks a rule — one initial open status, a done ' +
+      'and a cancelled status, moves between known statuses, a free code, a category changed under ' +
+      'Tasks, a removal in use without a replacement. From Phase 11 also the priority list’s two ' +
+      'refusals of that shape (`priority_code_taken`, `priority_replacement_required`).',
+  },
+  TASK_STATUS_IN_USE_TOO_MANY: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 4): removing a status that more Tasks are in than one Command moves to its replacement; ' +
+      'from Phase 11 also a priority, `details.code: priority` keying its sentence.',
+  },
+  TASK_PRIVATE_READ_ONLY: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a change to another administrator’s private Task by a holder of ' +
+      '`tasks:see_private`, who may only read and delete it.',
+  },
+  TASK_PRIORITY_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task given a priority code the operator’s priority list does not hold.',
+  },
+  TASK_TAG_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task given a tag id that does not exist.',
+  },
+  TASK_TAG_NAME_TAKEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task tag created with a name already taken, case-insensitively.',
+  },
+  TASK_ATTACHMENT_REFUSED: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a file refused as a Task attachment — over the size limit, or a document a browser would run. ' +
+      'Issue #642 (#86) added the refusal token `not_private` for a library file that is not private, ' +
+      'which was `422 VALIDATION_FAILED` with an English literal; the code itself is unchanged.',
+  },
+  CRM_SAVED_VIEW_NAME_TAKEN: {
+    to: 'crm',
+    reason:
+      'Minted with saved views on the CRM Opportunities page (issue #1734): a saved view of the page ' +
+      'named as one its owner already has, case-insensitively. One raise site, `OpportunityListViewService`.',
+  },
+  PROJECT_SAVED_VIEW_NAME_TAKEN: {
+    to: 'projects',
+    reason:
+      'Minted with saved views on the Projects list (issue #1734): a saved view of the list named as one ' +
+      'its owner already has, case-insensitively. One raise site, `ProjectListViewService`.',
+  },
+  TASK_VIEW_NAME_TAKEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 5): a saved view of the Tasks list named as one its owner already has, case-insensitively.',
+  },
+  TASK_PARENT_CYCLE: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 7): a Task made a sub-task of itself or of one of its own descendants.',
+  },
+  TASK_HIERARCHY_TOO_DEEP: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 7): a parent change or a new sub-task that would nest sub-tasks deeper than five levels.',
+  },
+  TASK_LINK_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 8): a record link to an Opportunity, an Order or a Quote Request whose owner is off, which ' +
+      'the caller may not read, or which does not exist — the three answer identically.',
+  },
+  TASK_REMINDER_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 9): a reminder naming a recipient who is neither the caller nor an assignee, an eleventh ' +
+      'reminder on one Task, or a reminder relative to the due moment of a Task that has none.',
+  },
+  TASK_PRIVATE_ASSIGNEE: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 10): a private Task given an assignee other than its Creator, on create or on edit.',
+  },
+  TASK_ALREADY_PUBLISHED: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 10): publishing a Task that is no longer a draft — publishing is one-way.',
+  },
+  MEGAMENU_KIND_NOT_ALLOWED_AS_TAB: {
+    to: 'megamenu',
+    reason:
+      'Minted by the navigation bar (`specs/168-megamenu-navigation-bar/`, issue #522): a top-level ' +
+      'item — a tab of the bar — of kind `asset`, `cms-block-embed` or `category-tree`, which open ' +
+      'under a tab and never as one.',
+  },
+  MEGAMENU_LINK_TAB_INVALID: {
+    to: 'megamenu',
+    reason:
+      'Minted by the navigation bar (`specs/168-megamenu-navigation-bar/`, issue #522): a tab shown ' +
+      'as a plain link that has children no visitor could reach, or that is a `group` with no link.',
+  },
+  MEGAMENU_LABEL_REQUIRED: {
+    to: 'megamenu',
+    reason:
+      'Minted by the navigation bar (`specs/168-megamenu-navigation-bar/`, issue #522): an ' +
+      '`external-link`, `button` or `group` with no label in any language — the kinds with no ' +
+      'target name to inherit one from.',
+  },
+  PROJECT_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, Phase 2B), which did not ' +
+      'exist when the prefix chain was deleted: a Project that does not exist, or one out of the ' +
+      'caller’s Organization reach or visibility — the three answer identically (FR-004, FR-020).',
+  },
+  PROJECT_HAS_LINKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project deleted while records are linked to it (FR-021).',
+  },
+  PROJECT_ORGANIZATION_OUT_OF_SCOPE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'an Organization named on a Project that is outside the caller’s reach or does not exist — the two answer alike (FR-004).',
+  },
+  PROJECT_STAGE_CURRENT: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'the deletion of the Stage a Project is in (spec edge case).',
+  },
+  PROJECT_STAGE_LAST: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'the deletion of a Project’s only Stage — an open Project is always in one (spec edge case).',
+  },
+  PROJECT_MOVE_NOT_PERMITTED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Stage move the Project’s workflow does not permit, or a move, close or reopen its state does not allow (FR-011, FR-012).',
+  },
+  PROJECT_CHANGED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a write naming a stale version of a Project — somebody changed it first (spec edge case "two users move at once").',
+  },
+  PROJECT_GUARD_REFUSED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Stage move, close or reopen refused by a guard another module or a deployment registered (FR-014).',
+  },
+  PROJECT_COMPLETION_NOT_PERMITTED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project closed as completed from a Stage that does not permit completion (FR-010).',
+  },
+  PROJECT_LOSS_REASON_INVALID: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project closed as lost with a loss reason that does not exist or is archived (FR-005).',
+  },
+  PROJECT_MEMBER_INVALID: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Member or listed person who is not an active administrator, or a Project Role that does not exist or is archived (FR-008).',
+  },
+  PROJECT_STAGE_HAS_TASKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'deleting a Stage that holds Tasks (`data-model.md` §2.2).',
+  },
+  PROJECT_STAGE_GATE_OPEN_TASKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'leaving or completing from a Stage whose completion gate is closed by open Tasks (FR-012).',
+  },
+  PROJECT_STAGE_TASKS_NOT_RETRYABLE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'creating a Stage\'s Tasks again where its last entry did not fail to create them (research R-8).',
+  },
+  PROJECT_TEMPLATE_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 3): ' +
+      'a Template that does not exist, or an archived one named to create a Project from (research R-7).',
+  },
+  PROJECT_DICTIONARY_ENTRY_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'a Project Role or loss reason id that names no row, on a rename, archive, restore or delete.',
+  },
+  PROJECT_DICTIONARY_ENTRY_SYSTEM: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'the deletion of a seeded Project Role or loss reason, which are renamable and archivable only (FR-007, `data-model.md` §2.1).',
+  },
+  PROJECT_DICTIONARY_ENTRY_IN_USE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'the deletion of a Project Role or loss reason a Project or a Template uses — archiving is how it stops being offered (US4 scenario 2).',
+  },
+  PROJECT_DICTIONARY_NAME_TAKEN: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'a Project Role or loss reason given the default name another row of the same dictionary has, whatever its case.',
+  },
+  PROJECT_ORGANIZATION_IN_USE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'an Organization removed from a Project while a record of it is linked there (spec edge case).',
+  },
+  PROJECT_RECORD_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record to link that does not exist or is out of the caller’s reach — the two answer alike (FR-021).',
+  },
+  PROJECT_RECORD_ALREADY_LINKED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record linked to a Project while it already belongs to one, naming that one only to a caller who may see it (FR-021, US6 scenario 2).',
+  },
+  PROJECT_LINK_ORGANIZATION_MISMATCH: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record linked to a Project that does not have the record’s Organization (FR-021).',
+  },
+  PROJECT_NOTE_NOT_AUTHOR: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'a note of a Project edited or deleted by somebody other than its author, whatever they hold (FR-025).',
+  },
+  PROJECT_MESSAGE_IMMUTABLE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'a message of a Project edited or deleted — the thread is append-only, whoever asks (FR-025).',
+  },
+  PROJECT_ATTACHMENT_TOO_LARGE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'an upload larger than the bound the attachment route reads into memory (FR-027), CRM’s rule.',
+  },
+  PROJECT_STAGE_LIMIT: {
+    to: 'projects',
+    reason:
+      'Minted by issue #634 (#86) for a Stage added to a Project that already has ' +
+      '`PROJECT_STAGES_MAX` of them. It was `422 VALIDATION_FAILED` with the maximum baked into ' +
+      'an English literal the envelope never replaces; it now travels as `details.maximum`. The ' +
+      'one raise site is `stage-service.ts`.',
+  },
+  PROJECT_ATTACHMENT_NOT_PRIVATE: {
+    to: 'projects',
+    reason:
+      'Minted by issue #634 (#86) for a library file attached while it is not private. It was ' +
+      '`VALIDATION_FAILED`: the request is well formed, and the file\'s visibility refuses it. ' +
+      'Named in parallel with `crm`\'s twin, `CRM_ATTACHMENT_NOT_PRIVATE` (issue #639), as the ' +
+      'two `*_ATTACHMENT_TOO_LARGE` codes are.',
+  },
+  PROJECT_TEMPLATE_ROLE_ARCHIVED: {
+    to: 'projects',
+    reason:
+      'Minted by issue #634 (#86) for an archived Role added to a Template that does not hold it ' +
+      'already. It was `VALIDATION_FAILED` through `template-service.ts`\' `invalid()`; a Role ' +
+      'that is not a project Role at all stays validation.',
   },
   SEO_CRAWLER_TEXT_TOO_LARGE: {
     to: 'seo',
@@ -365,6 +1096,259 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'reused: the request is well formed, and the sentence has to tell the admin to pick ' +
       'another name.',
   },
+  PRODUCT_FEED_LANGUAGE_INACTIVE: {
+    to: 'product_feeds',
+    reason:
+      'Minted by issue #631 (#86) for a feed saved in a language the installation has but has ' +
+      'switched off. It was `400 VALIDATION_FAILED` with an English literal the envelope never ' +
+      'replaces. The noun is the feed, and the one raise site is `product-feed.service.ts`. The ' +
+      'older `PRODUCT_FEED_*` codes are `catalog`\'s by the frozen capture; these are minted to ' +
+      'the module whose bundle holds their sentences.',
+  },
+  PRODUCT_FEED_CURRENCY_NOT_OFFERED: {
+    to: 'product_feeds',
+    reason:
+      'Minted by issue #631 (#86) for a feed whose currency its sales channel does not offer. It ' +
+      'was `VALIDATION_FAILED`, with the allowed currencies baked into the English text; they ' +
+      'now travel as `details.allowed`.',
+  },
+  PRODUCT_FEED_SLUG_TAKEN: {
+    to: 'product_feeds',
+    reason:
+      'Minted by issue #631 (#86) for a feed slug another feed holds, on create, update and ' +
+      'duplicate. It was `VALIDATION_FAILED`: the request is well formed, and the sentence has ' +
+      'to tell the operator to choose another slug.',
+  },
+  RETURN_SAVED_VIEW_NAME_TAKEN: {
+    to: 'returns',
+    reason:
+      'Minted for the refusal a saved view on the return list earns when its owner already holds ' +
+      'a view there whose name differs only by case or surrounding spaces (#312, the rules of ' +
+      '`specs/147-saved-views/` FR-022). The noun is a return-list saved view, `returns`\' own ' +
+      'row, and the one raise site is `return-list-view-service.ts`. `VALIDATION_FAILED` is not ' +
+      'reused: the request is well formed, and the sentence has to tell the admin to pick ' +
+      'another name.',
+  },
+  RETURN_ALTERNATIVE_RESOLUTION_CONSENT_REQUIRED: {
+    to: 'returns',
+    reason:
+      'Minted for the refusal a consumer withdrawal earns when it is settled as a credit, a ' +
+      'replacement or a repair while the consumer\'s consent to that resolution is not on record ' +
+      '(#905, design D1; Directive 2011/83 art. 13(1)). The noun is a return case\'s settlement, ' +
+      '`returns`\' own row, and the one raise site is `return-settlement-service.ts`. ' +
+      '`VALIDATION_FAILED` is not reused: the request is well formed, and the sentence has to tell ' +
+      'the operator to record the consumer\'s consent first.',
+  },
+  RETURN_ORDER_NOT_ELIGIBLE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a return requested on an order not completed yet. It was ' +
+      '`422 VALIDATION_FAILED` with `details.code` `order_not_completing`, gone with it: one ' +
+      'code, one reason. The returnability read keeps its own `order_not_completing`.',
+  },
+  RETURN_QUANTITY_EXCEEDS_RETURNABLE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a return asking for more than a line can still return. It ' +
+      'was `422 VALIDATION_FAILED` with `details.code` `qty_exceeds_returnable`; `details` now ' +
+      'carries the line, the requested and the remaining quantity the sentences name.',
+  },
+  RETURN_REASON_INACTIVE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86), the site the issue was unsure about: a reason that exists but ' +
+      'the operator switched off. An unknown reason id stays `VALIDATION_FAILED` ' +
+      '(`unknown_reason`); a switched-off one is configuration, so a refusal.',
+  },
+  RETURN_COMMENTS_CLOSED: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a comment on a case in a terminal status, the twin of ' +
+      '`ORDER_COMMENTS_CLOSED`. It was `409 VALIDATION_FAILED` with `details.code` `case_terminal`.',
+  },
+  RETURN_CASE_CLOSED: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for choosing a return delivery method on a case in a terminal ' +
+      'status. It was `409 VALIDATION_FAILED` with `details.code` `case_terminal`.',
+  },
+  RETURN_DELIVERY_METHOD_UNAVAILABLE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a return delivery method not offered, the twin of ' +
+      '`ORDER_DELIVERY_METHOD_UNAVAILABLE`. It was `422 VALIDATION_FAILED` with `details.code` ' +
+      '`method_not_allowed`, at both raise sites of `ReturnDeliveryMethodService.select`.',
+  },
+  RETURN_SETTLEMENT_IN_PROGRESS: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a settlement refused because another settlement of the same ' +
+      'order holds its lock; retryable. It was `409 VALIDATION_FAILED` with `details.code` ' +
+      '`settlement_in_progress`.',
+  },
+  RETURN_REFUND_EXCEEDS_PAID: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a settlement refunding more than may be refunded, for a line ' +
+      'or for a charge (tokens `delivery`, `surcharge`). Both were `422 VALIDATION_FAILED` with ' +
+      '`details.code` `refund_exceeds_paid`; the amounts now travel as two-decimal strings.',
+  },
+  RETURN_REFUND_GATEWAY_FAILED: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a refund the payment gateway refused. It was `502 ' +
+      'VALIDATION_FAILED` whose message was the gateway\'s own words; those travel as ' +
+      '`details.failureReason` now, never in the sentence.',
+  },
+  RETURN_STATUS_CODE_TAKEN: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a return status created with a code another status has, the ' +
+      'twin of `ORDER_STATUS_CODE_TAKEN`. It was `409 VALIDATION_FAILED`.',
+  },
+  RETURN_STATUS_TERMINAL_HAS_TRANSITIONS: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for a terminal return status with outgoing transitions, the twin ' +
+      'of `ORDER_STATUS_TERMINAL_HAS_TRANSITIONS` with the same tokens (`mark_terminal`, ' +
+      '`add_transition`).',
+  },
+  RETURN_STATUS_NOT_DELETABLE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for deleting the initial return status (token `initial`), the ' +
+      'twin of `ORDER_STATUS_NOT_DELETABLE`. It was `409 VALIDATION_FAILED`.',
+  },
+  RETURN_STATUS_IN_USE: {
+    to: 'returns',
+    reason:
+      'Minted by issue #625 (#86) for deleting a return status cases are in. It was `409 ' +
+      'VALIDATION_FAILED`; the count now travels as `details.caseCount`.',
+  },
+  RETURN_OFF_PLATFORM_DISABLED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/180-off-platform-complaints/` (contracts/settings-emails-events.md §4) for ' +
+      'the refusal of a complaint without a platform order while the channel does not accept them ' +
+      '(`returns.off_platform_complaints_enabled`). The noun is a return case, `returns`\' own row; ' +
+      'the one raise site is `return-case-service.ts`.',
+  },
+  RETURN_PROOF_OF_PURCHASE_REQUIRED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/180-off-platform-complaints/` (§4) for a complaint without a platform order ' +
+      'filed with no proof-of-purchase file while `returns.proof_of_purchase_required` is on. Raised ' +
+      'only in `return-case-service.ts`; `VALIDATION_FAILED` is not reused because the request is well ' +
+      'formed and the sentence has to name the missing document.',
+  },
+  RETURN_CLAUSES_NOT_ACCEPTED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/180-off-platform-complaints/` (§4) for a filing that does not accept every ' +
+      'current `must_accept` clause of the returns form, or accepted a revision since replaced. The ' +
+      'clauses are `returns`\' own table; the one raise site is `return-clause-service.ts`.',
+  },
+  RETURN_ATTACHMENT_REJECTED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/180-off-platform-complaints/` (§4) for a file a return case refuses: too ' +
+      'large, not an accepted type by content, unknown upload, too many files. The files are ' +
+      '`returns`\' own rows; the raise site is `return-attachment-service.ts`, the reason in ' +
+      '`details.reason`.',
+  },
+  RETURN_RESOLUTION_UNAVAILABLE_OFF_PLATFORM: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/180-off-platform-complaints/` (§4) for a refund, credit or corrective invoice ' +
+      'asked of a case without a platform order, which has no payment or invoice behind it. The noun ' +
+      'is a return case\'s settlement; the one raise site is `return-settlement-service.ts`.',
+  },
+  RETURN_GUEST_COMPLAINTS_DISABLED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (contracts/settings-emails-events.md §4) for a guest ' +
+      'request — verification, session, form, upload, filing — while the channel does not accept ' +
+      'complaints from guests (`returns.guest_complaints_enabled` with 180\'s no-order setting). The ' +
+      'noun is `returns`\' guest complaint; raised only by its guest routes.',
+  },
+  RETURN_GUEST_SESSION_REQUIRED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (§4) for a guest route reached without a live guest ' +
+      'session on the request\'s channel. `UNAUTHORIZED` is not reused: that is the account login\'s ' +
+      'answer, and the sentence has to send the visitor back to e-mail verification.',
+  },
+  RETURN_GUEST_LINK_INVALID: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (§4) for a verification link that cannot be redeemed — ' +
+      'unknown, altered, expired, used, superseded or of another channel — with one answer for all ' +
+      '(FR-022). The verification row is `returns`\' own table.',
+  },
+  RETURN_TRACKING_LINK_INVALID: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (§4) for a tracking token that opens no case — unknown, ' +
+      'altered, replaced, expired 90 days after closing, or of an erased case — with one answer for all ' +
+      '(FR-043). `NOT_FOUND` is not reused: the sentence has to say the link may have been replaced. The ' +
+      'case is `returns`\' own row; raised only by its tracking routes.',
+  },
+  RETURN_GUEST_LIMIT_REACHED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (§4, research R-8) for a guest over a per-identity limit — ' +
+      'cases per session, cases per verified address, comments per case — named in `details.limit`. ' +
+      '`RATE_LIMITED` is not reused: that is the per-client-address throttle, which names no identity.',
+  },
+  RETURN_GUEST_DATA_ERASED: {
+    to: 'returns',
+    reason:
+      'Minted by `specs/181-guest-complaints/` (§4) for an operator action that needs a guest\'s personal ' +
+      'data — sending a new tracking link — on a guest case whose data has been erased. The case is ' +
+      '`returns`\' own row; the raise site is `guest-tracking-link.ts`.',
+  },
+  RELATED_PAYER_LINK_EXISTS: {
+    to: 'related_payers',
+    reason:
+      'Minted by `specs/182-related-payers/` (FR-010) for a link the pair already has: at most one ' +
+      'non-revoked link per ordered pair. The link is `related_payers`\' own row; raised by the ' +
+      '`related_payers.link.create` Command behind the operator routes and `relatedPayerWritePort`. ' +
+      '`VERSION_CONFLICT` is not reused: nothing was stale, the pair is taken.',
+  },
+  RELATED_PAYER_INVALID_PAIR: {
+    to: 'related_payers',
+    reason:
+      'Minted by `specs/182-related-payers/` (FR-010) for a pair that can never be linked — one ' +
+      'Organization twice, or a personal Organization on either side. Raised by the link Commands ' +
+      'behind the operator routes and `relatedPayerWritePort`. `VALIDATION_FAILED` is not reused: ' +
+      'the request is well formed, and the sentence has to say why the pair is refused.',
+  },
+  RELATED_PAYER_NOT_USABLE: {
+    to: 'related_payers',
+    reason:
+      'Minted by `specs/182-related-payers/` (contracts/ports.md §5) for a payer the buyer names at ' +
+      'checkout or placement whose link is not usable now — inactive, revoked, outside its window, a ' +
+      'blocked payer, no allowed billing address, the capability off on the channel or the person ' +
+      'without the permission (FR-012, FR-068). Raised by `relatedPayerPolicyPort.assertUsable`. ' +
+      '`VALIDATION_FAILED` is not reused: the request is well formed, and the sentence has to say the ' +
+      'payer cannot be used.',
+  },
+  RELATED_PAYER_REQUEST_LIMIT: {
+    to: 'related_payers',
+    reason:
+      'Minted by `specs/182-related-payers/` (FR-046) for a sender whose Organization reached its daily ' +
+      'number of payer requests and invitations. Raised by the request Commands before the tax ID is ' +
+      'looked up, so the refusal reveals nothing about it. `RATE_LIMITED` is not reused: this is a ' +
+      'business limit the store sets per channel, and the sentence has to say so.',
+  },
+  RELATED_PAYER_REQUEST_DECIDED: {
+    to: 'related_payers',
+    reason:
+      'Minted by `specs/182-related-payers/` (FR-045) for a decision on a request already decided — ' +
+      'accepted, rejected, withdrawn or expired — including the loser of two concurrent decisions. ' +
+      'The request is `related_payers`\' own row. `VERSION_CONFLICT` is not reused: re-reading does ' +
+      'not help, the request is closed.',
+  },
   RFQ_SAVED_VIEW_NAME_TAKEN: {
     to: 'quote_requests',
     reason:
@@ -394,6 +1378,44 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'reaches — every request schema in front of it already refuses the same quantity as a ' +
       'malformed request.',
   },
+  CART_APPROVAL_NOT_REQUIRED: {
+    to: 'carts',
+    reason:
+      'Minted for the refusal to send a cart for approval when the Organization does not ' +
+      'require approval (issue #86). It was raised as `VALIDATION_FAILED` with the token ' +
+      '`approval_not_required` as its message, which the envelope never replaces, so the buyer ' +
+      'read the token. The one raise site is `carts`\' `CartApprovalService.submitForApproval`.',
+  },
+  CART_APPROVAL_ALREADY_SUBMITTED: {
+    to: 'carts',
+    reason:
+      'Minted for the refusal to send a cart for approval a second time (issue #86). It was ' +
+      'raised as `VALIDATION_FAILED` with the token `approval_already_initiated` as its message. ' +
+      'The one raise site is `carts`\' `CartApprovalService.submitForApproval`.',
+  },
+  CART_APPROVAL_SELF_APPROVE: {
+    to: 'carts',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-04, research R-36) for the ' +
+      'refusal of an approver approving or rejecting their own pending cart (422, ' +
+      '`details: { cartId }`). It replaces `CART_APPROVAL_SELF_SUBMIT` (an administrator sending ' +
+      'their own cart for approval), removed with its last raise site. The raise sites are `carts`\' `CartApprovalService.approve` and `reject`, after the ' +
+      'not-pending check.',
+  },
+  CART_APPROVAL_NOT_PENDING: {
+    to: 'carts',
+    reason:
+      'Minted for the refusal to approve or reject a cart that is not awaiting approval ' +
+      '(issue #86). It was raised as `VALIDATION_FAILED` with the token `approval_not_pending` ' +
+      'as its message. The raise sites are `carts`\' `CartApprovalService.approve` and `reject`.',
+  },
+  CART_ALREADY_TERMINAL: {
+    to: 'carts',
+    reason:
+      'Minted for the refusal to reject, in the admin, a cart that is already completed or ' +
+      'rejected (issue #86). It was raised as `VALIDATION_FAILED` with the token ' +
+      '`already_terminal` as its message. The one raise site is `carts`\' `CartAdminService.reject`.',
+  },
   CART_PRODUCT_UNPRICED: {
     to: 'carts',
     reason:
@@ -409,6 +1431,37 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'price is not the price it may be ordered at now. The noun is the cart line\'s price, so ' +
       'the owner is `carts`, as for `CART_EMPTY`; the one raise site is `orders`\' `placeOrder`, ' +
       'after `carts` has brought the cart up to date.',
+  },
+  CMS_CONTACT_FORM_UNAVAILABLE: {
+    to: 'cms',
+    reason:
+      'Minted by feature 169 (`specs/169-page-builder-contact-form/`) for the 409 a contact-form ' +
+      'submission meets on a sales channel with no recipients configured. The noun is the ' +
+      'Page Builder contact form, which `cms` owns along with the rest of the `CMS_*` family.',
+  },
+  CMS_DUPLICATE_ANCHOR: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'content save meets when one anchor names two sections or headings of the same page ' +
+      'tree, so an in-page link could only ever reach the first. The noun is the Page Builder ' +
+      'canvas, which `cms` owns along with the rest of the `CMS_*` family.',
+  },
+  CMS_PAGE_PARENT_CYCLE: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'page update meets when its new parent would make the page its own ancestor, or nest ' +
+      'the tree deeper than eight levels, which the breadcrumb trail cannot walk. The noun is ' +
+      'a CMS page, which `cms` owns along with the rest of the `CMS_*` family.',
+  },
+  CMS_RESERVED_ANCHOR: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'content save meets when an anchor is one the storefront layout already renders as an ' +
+      'id, such as `main-content`, so the link would jump somewhere else. The noun is the ' +
+      'Page Builder canvas, which `cms` owns along with the rest of the `CMS_*` family.',
   },
   CMS_SLUG_RESERVED: {
     to: 'cms',
@@ -479,6 +1532,41 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted by !1159 for a retry whose gateway adapter is absent. The noun is the payment ' +
       'adapter, which `payments` owns along with the adapter registry (D-121 T1).',
   },
+  PAYMENT_ALREADY_PAID: {
+    to: 'payments',
+    reason:
+      'Minted by issue #630 (#86) for a paid payment refused a retry (token `retry`) or marked ' +
+      'failed by the `receive_payment` ingress (token `mark_failed`). Both were `409 ' +
+      'VALIDATION_FAILED` with an English literal; one state seen from two callers, so one code.',
+  },
+  PAYMENT_REFUNDED: {
+    to: 'payments',
+    reason:
+      'Minted by issue #630 (#86) for a retry of a refunded or partially refunded payment. It was ' +
+      '`409 VALIDATION_FAILED` reading `This payment has been refunded; it cannot be retried.`',
+  },
+  PAYMENT_SETTLED_OUT_OF_BAND: {
+    to: 'payments',
+    reason:
+      'Minted by issue #630 (#86) for a retry of an order settled out of band (`deferred`). It ' +
+      'was `409 VALIDATION_FAILED` reading `This order is settled out of band; there is nothing ' +
+      'to retry.`',
+  },
+  PAYMENT_METHOD_IN_USE: {
+    to: 'payment_methods',
+    reason:
+      'Minted by issue #635 (#86) for the FR-003 delete guard: a payment method that payments ' +
+      'reference cannot be deleted. It was raised as `VALIDATION_FAILED` with an English ' +
+      'sentence the envelope never replaces. The noun is the payment method, and the one raise ' +
+      'site is `payment_methods`\' delete Command. Issue #632 mints the delivery twin.',
+  },
+  PAYMENT_METHOD_USAGE_UNKNOWN: {
+    to: 'payment_methods',
+    reason:
+      'Minted by issue #635 (#86) for the same guard when `payments` is switched off and the ' +
+      'payments that may reference the method cannot be counted. It was `VALIDATION_FAILED`. ' +
+      'The code names the method, not the absent module.',
+  },
 
   // The shared PIM connector layer, minted together with the UnoPim connector by
   // !1282 (feature 089). Neither module existed when the prefix chain was
@@ -524,6 +1612,15 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       + 'meets when they retry a delivery that has already succeeded or is otherwise not in a '
       + 'retryable state. The noun is the ledger delivery, which `invoice_ledger` owns.',
   },
+  INVOICE_LEDGER_NUMBERING_CHANGE_UNCONFIRMED: {
+    to: 'invoice_ledger',
+    reason:
+      'Minted by issue #644 (#86) for a routing write that changes the numbering mode without '
+      + '`confirm: true`. It was `400 VALIDATION_FAILED`, yet `confirm` is required only when the '
+      + 'stored mode differs from the submitted one, so the refusal follows from state. The noun '
+      + 'is the ledger routing, `invoice_ledger`\'s settings, and the one raise site is its '
+      + 'routing write service.',
+  },
   // `INFAKT_CONNECTION_FAILED` and `INFAKT_WEBHOOK_UNAUTHORIZED` were minted here with
   // the Infakt adapter (feature 119) and left the repository with it (feature 134,
   // T069); `ERROR_CODES` no longer holds them.
@@ -545,6 +1642,21 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'subscription naming an event type nothing delivers — one neither bridged by `webhooks` ' +
       'nor contributed by a module that is present. The noun is this module\'s `webhooks` row ' +
       'and the one raise site is its own `services/webhook-service.ts`.',
+  },
+  TRANSACTIONAL_EMAIL_SYSTEM_BLOCK: {
+    to: 'transactional_emails',
+    reason:
+      'Minted by issue #638 (#86) for deleting a system email block. It was `409 ' +
+      'VALIDATION_FAILED` with an English sentence the envelope never replaces. The noun is the ' +
+      'block, this module\'s row, and the one raise site is `email-block.service.ts`. The ' +
+      'newsletter twin is `NEWSLETTER_EMAIL_BLOCK_SYSTEM` (issue #626).',
+  },
+  TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE: {
+    to: 'transactional_emails',
+    reason:
+      'Minted by issue #638 (#86) for deleting a system email template. It was `409 ' +
+      'VALIDATION_FAILED`. A separate code from the block\'s rather than a token: the noun ' +
+      'differs, and the one raise site is `email-template.service.ts`.',
   },
   DOCUMENT_TEMPLATE_NOT_FOUND: {
     to: 'document_templates',
@@ -610,6 +1722,818 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted by feature 153 (`specs/153-quote-request-pdf-template/`, owner answer Q4, FR-097) for ' +
       'a Send PDF to customer every recipient of which the mail transport refused. The one raise ' +
       'site is `quote_requests`\' send Command.',
+  },
+  SALES_CHANNEL_SIGN_IN_REQUIRED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal an ' +
+      'anonymous request earns on a sales channel closed to anonymous visitors. The thrower is the ' +
+      'kernel\'s access step in the channel resolver; the noun is the sales channel, so it is ' +
+      'declared by `sales_channels`, as `INACTIVE_SALES_CHANNEL` is for the same thrower (D-95.2).',
+  },
+  SALES_CHANNEL_NOT_PERMITTED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal a ' +
+      'customer request earns on a sales channel its Organization is not assigned to — by the ' +
+      'kernel\'s access step, and by the customer sign-in paths. Owned by the domain noun, as ' +
+      '`INACTIVE_SALES_CHANNEL` is (D-95.2).',
+  },
+  ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED: {
+    to: 'orders',
+    reason:
+      'Minted by issue #1574 for a payment-status change the money axis\'s transition graph ' +
+      '(`PAYMENT_STATUS_TRANSITIONS` in the contracts) refuses on `POST ' +
+      '/api/v1/admin/orders/:id/payment-status`: anything out of `refunded` (token ' +
+      '`payment_refunded`) or `refunded` from an unpaid status (token `payment_not_paid`). The ' +
+      'route used to accept every move. Not `INVALID_TRANSITION`, which is the lifecycle axis\'s.',
+  },
+  ORDER_SALES_CHANNEL_MISMATCH: {
+    to: 'orders',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-033) for the refusal order ' +
+      'placement earns when the basket it is handed belongs to another sales channel. The raise ' +
+      'site is `orders`\' placement; the noun is the order.',
+  },
+  ORDER_SALES_CHANNEL_NOT_ALLOWED: {
+    to: 'orders',
+    reason:
+      'Minted by issue #515 for an operator\'s order on a customer\'s behalf — `POST ' +
+      '/api/v1/admin/orders` and its preview — whose sales channel is not one of the customer\'s ' +
+      'Organization\'s active assigned channels: unassigned, inactive or nonexistent alike. The ' +
+      'noun is the order\'s channel and the raise sites are `orders`\' admin create and preview. ' +
+      '`RFQ_SALES_CHANNEL_NOT_ALLOWED` is not reused: its sentence speaks of a quote request, and ' +
+      '`SALES_CHANNEL_NOT_PERMITTED` speaks to a signed-in buyer.',
+  },
+  ORDER_CART_APPROVAL_REQUIRED: {
+    to: 'orders',
+    reason:
+      'Minted by issue #648 for the refusal order placement earns when the basket it is handed ' +
+      'awaits its Organization\'s cart approval — the policy applies to its owner and it is not ' +
+      'approved. The raise site is `orders`\' placement, which asks `carts` through ' +
+      '`CartPlacementApplyPort.awaitsApproval`; the noun is the order being placed.',
+  },
+  ORGANIZATION_PERSONAL: {
+    to: 'organizations',
+    reason:
+      'Minted by issue #629 (#86) for the actions a personal (B2C) organization refuses because it ' +
+      'is single-member: an operator adding a member (token `add_member`), a buyer inviting one ' +
+      '(`invite`) and an operator assigning a sales representative (`sales_rep`). Each was `422 ' +
+      'VALIDATION_FAILED` with an English sentence; the noun is the organization, which ' +
+      '`organizations` owns and raises it for. `details.organizationId` always, and ' +
+      '`organizationName` where an operator reads the sentence.',
+  },
+  ORGANIZATION_STATUS_INVALID: {
+    to: 'organizations',
+    reason:
+      'Minted by issue #629 (#86) for a moderation action (approve, reject, block, unblock) refused ' +
+      'because the organization is in another status. It was `422 VALIDATION_FAILED` with an ' +
+      'English sentence naming the raw statuses; `details` keeps `currentStatus` and ' +
+      '`requiredStatus` and adds their labels in the reader\'s language, which fill the sentence.',
+  },
+  ORGANIZATION_PERMISSION_REQUIRED: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for the refusal of a buyer action the member\'s organization role does not allow (403, `details: { permission, permissionLabel }`). Raised by `organizations`\' permission port on behalf of every module that gates an action on an organization permission: what a role allows is that module\'s rule, whichever module\'s action it refuses. ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_ROLE_NAME_TAKEN: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for a custom role named like another role of the organization, or like a predefined role\'s label in a shipped language (409, research R-29). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_ROLE_STALE: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for a role write whose `expectedVersion` is no longer the stored one (409, R-29). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_ROLE_LIMIT_REACHED: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for the 51st custom role of an organization (422, FR-004). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_ROLE_PROTECTED: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for an edit, rename or delete a predefined role does not allow (409, US 6.3). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_ROLE_REPLACEMENT_REQUIRED: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for deleting a role somebody holds without a different replacement role (422, FR-024). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORGANIZATION_PERMISSION_UNKNOWN: {
+    to: 'organizations',
+    reason:
+      'Minted by feature 170 (`specs/170-organization-roles/` WP-02a, ' +
+      '`contracts/organization-permission-port.md` §3) for a submitted organization-permission code no module declares (422). ' +
+      'The noun is the organization\'s role, which `organizations` owns.',
+  },
+  ORDER_DELIVERY_METHOD_UNAVAILABLE: {
+    to: 'orders',
+    reason:
+      'Minted for the refusal of a delivery method that cannot be used for the order being ' +
+      'previewed or placed — not active, refused by its adapter, outside the Organization\'s ' +
+      'allow-list or not offered in the order\'s sales channel (issue #86). It was raised as ' +
+      '`VALIDATION_FAILED` with an English sentence the envelope never replaces. The noun is the ' +
+      'order\'s method choice and every raise site is `orders`\' (`OrderService`, both method ' +
+      'gates); `DELIVERY_METHOD_*` is the family `delivery_methods` would reach for.',
+  },
+  ORDER_PAYMENT_METHOD_UNAVAILABLE: {
+    to: 'orders',
+    reason:
+      'The payment twin of `ORDER_DELIVERY_METHOD_UNAVAILABLE` (issue #86), on the same ' +
+      'reasoning; `PAYMENT_METHOD_*` is the family `payment_methods` would reach for.',
+  },
+  DELIVERY_METHOD_IN_USE: {
+    to: 'delivery_methods',
+    reason:
+      'Minted by issue #632 (#86) for the FR-003 guard: a delivery method that shipments ' +
+      'reference cannot be deleted (token `delete`) or rebound to another adapter (token ' +
+      '`change_adapter`). It was raised as `VALIDATION_FAILED` with an English sentence the ' +
+      'envelope never replaces. The noun is the delivery method, and both raise sites are in ' +
+      '`delivery_methods`\' own Commands.',
+  },
+  DELIVERY_METHOD_USAGE_UNKNOWN: {
+    to: 'delivery_methods',
+    reason:
+      'Minted by issue #632 (#86) for the same guard when `shipments` is switched off and the ' +
+      'shipments that may reference the method cannot be counted, with the same two tokens. ' +
+      'It was `VALIDATION_FAILED`. The one raise site is `delivery_methods`\' ' +
+      '`shipment-usage-guard.ts`; the code names the method, not the absent module.',
+  },
+  ORDER_BELOW_MINIMUM_VALUE: {
+    to: 'orders',
+    reason:
+      'Minted for the refusal of an order whose basket is below the sales channel\'s minimum ' +
+      'order value (issue #86). It was raised as `VALIDATION_FAILED` with `details.code = ' +
+      '\'order_below_minimum\'` and an English sentence; `details` now carries the minimum, the ' +
+      'basket value and the currency the sentences name. The one raise site is ' +
+      '`OrderService.placeOrder`, and the setting is `orders.min_order_value`.',
+  },
+  ORDER_COMMENTS_CLOSED: {
+    to: 'orders',
+    reason:
+      'Minted for the refusal of a comment on an order in a terminal status (issue #86). It was ' +
+      'raised as `VALIDATION_FAILED` with an English sentence. The one raise site is ' +
+      '`OrderCommentService`, reached by the buyer and by an operator.',
+  },
+  ORDER_CLONE_NO_LINES: {
+    to: 'orders',
+    reason:
+      'Minted for the refusal to copy an order with no lines into a quote request (issue #86). ' +
+      'It was raised as `VALIDATION_FAILED` with an English sentence. The one raise site is ' +
+      '`OrderCloneToQuoteService.clone`; the noun is the order.',
+  },
+  ORDER_STATUS_CODE_TAKEN: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for an order status created with a code another status has. It ' +
+      'was `409 VALIDATION_FAILED` with an English sentence; the code travels as ' +
+      '`details.statusCode` because `details.code` is the token slot.',
+  },
+  ORDER_STATUS_TERMINAL_HAS_TRANSITIONS: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for a terminal order status with outgoing transitions, at its two ' +
+      'raise sites in `OrderStatusGraphService`: marking a status terminal (token `mark_terminal`, ' +
+      '409) and adding an edge from a terminal one (token `add_transition`, 422).',
+  },
+  ORDER_STATUS_NOT_DELETABLE: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for deleting the initial (token `initial`) or a system (token ' +
+      '`system`) order status. Both were `409 VALIDATION_FAILED` with an English sentence.',
+  },
+  ORDER_STATUS_IN_USE: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for deleting an order status orders are in. It was `409 ' +
+      'VALIDATION_FAILED`; the count now travels as `details.orderCount`.',
+  },
+  ORDER_INTAKE_LINES_REFUSED: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for the external API intake refusing one or more lines. It was ' +
+      '`422 VALIDATION_FAILED`; `details` stays the per-line array the integration reads.',
+  },
+  ORDER_INTAKE_BUSY: {
+    to: 'orders',
+    reason:
+      'Minted by issue #627 (#86) for an external API intake refused while another intake of the ' +
+      'same key holds its lock. It was `409 VALIDATION_FAILED` with `details.code` `intake_busy`, ' +
+      'which is gone: one code, one reason.',
+  },
+  SHIPMENT_ALREADY_GENERATED: {
+    to: 'shipments',
+    reason:
+      'Minted by issue #637 (#86), the module\'s first code, for a write refused because a ' +
+      'shipment was already generated successfully: generating again for its order (token ' +
+      '`generate`) and the `receive_shipment` ingress marking it failed (token `mark_failed`). ' +
+      'Both were `VALIDATION_FAILED` with an English literal. The noun is the shipment, and ' +
+      'both raise sites are in `shipments`.',
+  },
+  ASSET_REPLACE_KIND_MISMATCH: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replacement file whose kind (image, video, PDF, other) differs from the kind the asset already holds, so every page embedding it keeps rendering. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_LEGACY_CANNOT_REPLACE: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to replace in place an asset whose file sits at an address the platform did not issue. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_REPLACE_CONFLICT: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replace or a restore whose expected file versions no longer match the asset, because another write changed its file first. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_NO_PREVIOUS_VERSION: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to restore a previous version of an asset that keeps none. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_TAKEN: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink another asset already holds. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_PREVIOUSLY_USED: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal, until it is confirmed, of a permalink whose last holder was a different asset. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_INVALID: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink that breaks the shared permalink rule, the broken rule named by the `details.code` token. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  MEGAMENU_ASSET_URL_UNSUPPORTED: {
+    to: 'megamenu',
+    reason:
+      'Minted by issue #640 (#86) for the megamenu save\'s refusal of a free-URL asset item: ' +
+      'importing an asset from a URL is not supported yet, so the item is well-formed and the ' +
+      'capability is missing. It was `400 VALIDATION_FAILED` with an English sentence the envelope ' +
+      'never replaces. The one raise site is `megamenu`\'s `target-validator.ts`, and the noun is ' +
+      'the menu item, so the code is `megamenu`\'s, not `assets_library`\'s.',
+  },
+  PRICE_SET_IN_PRICE_BOOKS: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 160 (`specs/160-pricing-model-v2/`, FR-043) for a product or variant ' +
+      'write — the admin create and update routes and the products import — that names the old ' +
+      '*default price* key or the variant price override. D-121 T1: the noun is the product\'s ' +
+      'own field, `catalog`\'s, so `catalog` owns the sentence; `import_export` raises it too, ' +
+      'from the products adapter.',
+  },
+  PRODUCT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of an ' +
+      'order line whose product falls short of its minimum order quantity in pieces. D-121 T1: ' +
+      'the noun is the minimum, a column on `catalog`\'s product row, so `catalog` owns the ' +
+      'sentence although it raises nothing — the raisers are `carts` (adding and editing a ' +
+      'line), `orders` (placement, admin create, API intake) and `quote_requests` (create, ' +
+      'draft edit, resubmit), each of them reading the rule through the catalogue port.',
+  },
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
+      'minimum number of units of its packaging unit. D-121 T1 decides it the way it decided ' +
+      '`PACKAGING_UNIT_NOT_FOUND`: a packaging unit is a row on `catalog`\'s product, and the ' +
+      'raisers — `carts`, `orders` and `quote_requests` — are callers reading that row.',
+  },
+  PACKAGING_UNIT_MISMATCH: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 for a quote-request line whose packaging unit is not one of its ' +
+      'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
+      '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
+  },
+  RFQ_SALES_CHANNEL_NOT_ALLOWED: {
+    to: 'quote_requests',
+    reason:
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, security review M1) for an ' +
+      'operator\'s quote request on a customer\'s behalf whose sales channel — the one it names, or ' +
+      'the one the admin request resolved when it names none (owner decision 2026-10-29 "A") — is not ' +
+      'one of the Organization\'s active channels. The noun is the quote request\'s channel, ' +
+      '`quote_requests`\' own column, and the one raise site is its admin create. ' +
+      '`SALES_CHANNEL_NOT_PERMITTED` is not reused: its sentence speaks to a signed-in buyer.',
+  },
+  RFQ_ALREADY_SHARED: {
+    to: 'quote_requests',
+    reason:
+      'Minted by `specs/192-quote-request-draft-share/` (FR-024, FR-025) for a share of an operator\'s ' +
+      'quote request that is already visible to its customer — repeated, concurrent, or a quote that was ' +
+      'never unshared. The noun is the quote request\'s sharing state, `quote_requests`\' own column, and ' +
+      'the one raise site is its share Command.',
+  },
+  RFQ_SHARE_CUSTOMER_UNAVAILABLE: {
+    to: 'quote_requests',
+    reason:
+      'Minted by `specs/192-quote-request-draft-share/` (FR-027) for a share refused because the quote ' +
+      'request\'s customer account is gone or in another Organization, deleted or anonymised, or blocked — ' +
+      'named by the `details.code` token. The refusal is about sharing `quote_requests`\' own quote, and ' +
+      'the one raise site is its share Command; no `customer_accounts` code speaks to an operator about a quote.',
+  },
+  RFQ_NOT_SHARED: {
+    to: 'quote_requests',
+    reason:
+      'Minted by `specs/192-quote-request-draft-share/` (FR-007) for a Send PDF to customer of a quote ' +
+      'request its customer cannot see yet. The noun is the quote request\'s sharing state, ' +
+      '`quote_requests`\' own column, and the one raise site is its send Command.',
+  },
+  RFQ_ASSIGNEE_NOT_ELIGIBLE: {
+    to: 'quote_requests',
+    reason:
+      'Minted by issue #1906 for an assignee who is not an active administrator holding ' +
+      '`rfqs:handle` and reaching the request\'s Organization. The noun is the quote request\'s ' +
+      'assignee, `quote_requests`\' own column. It is raised where an assignee is named: ' +
+      '`quote_request.assign` (the admin route `POST …/:id/assign` and `quoteRequestCommandPort.assign`), ' +
+      'and the hook data\'s `assign` inside the buyer\'s `quote_request.create` and `.resubmit`, with ' +
+      'the token `submission` — the sentence the buyer reads, since uncaught it refuses their submission.',
+  },
+  ONE_CLICK_UNAVAILABLE: {
+    to: 'quick_order',
+    reason:
+      'Minted by issue #641 (#86) for one-click buy refused by the operator setting or the ' +
+      'buyer\'s defaults (tokens `setting_disabled`, `missing_defaults`, the eligibility reasons). ' +
+      'It was `422 VALIDATION_FAILED` with `details.code: "one_click_unavailable"` and an English ' +
+      'sentence the envelope never replaces. The one raise site is `quick_order`\'s ' +
+      '`one-click-service.ts`, and it is the module\'s first code.',
+  },
+  FIELD_NOT_AT_SCOPE: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 174 (`specs/174-product-editor-scope-switcher/`, FR-012) for a scoped write ' +
+      'naming a field at a scope outside its scope set — a Channel × language value of the audience, ' +
+      'the window, the minimum order quantity, returnable or a non-text attribute. The noun is a ' +
+      'product field\'s scope set, `catalog`\'s rule; the raise sites are its save, copy, scopes PATCH ' +
+      'and scope write port. `VALIDATION_FAILED` is not reused: the body is well formed, and the ' +
+      'sentence has to name the levels the field accepts.',
+  },
+  SCOPED_VALUE_INVALID: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 174 (FR-062, FR-113) for a scoped write the one write encoding refuses for ' +
+      'what it means: an empty value on a required field, a single select or a boolean, `inherit` at ' +
+      'Global, a subject that is not the product\'s, a source with no own value to copy. The noun is a ' +
+      'product\'s scoped value, a `catalog` row; every raise site is a `catalog` write.',
+  },
+  GLOBAL_ONLY_FIELD: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 174 (FR-081) for a save that writes a global-only product field (SKU, ' +
+      'attribute set, categories, stock flags, download) at a Channel or Channel × language scope. ' +
+      'The noun is the product row, `catalog`\'s; the raise site is its scoped-values save.',
+  },
+  IMPORT_PROFILE_REQUIRED: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 174 (FR-048) for a products import that names no import profile. The noun is ' +
+      'an import profile, an `import_export` row; the raise site is its products import route.',
+  },
+  IMPORT_PROFILE_NOT_FOUND: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 174 (FR-048) for a profile id that names no import profile, on the profile ' +
+      'routes and the products import. The noun is an `import_export` row.',
+  },
+  IMPORT_NOT_SUPPORTED: {
+    to: 'import_export',
+    reason:
+      'Minted by issue #644 (#86) for an import of an entity whose adapter is export-only. It ' +
+      'was `405 VALIDATION_FAILED`, yet the entity exists, the caller holds its permission and ' +
+      'the body is not read: the adapter\'s capability refuses it. The noun is the import ' +
+      'centre, `import_export`\'s, and the one raise site is its service.',
+  },
+  IMPORT_PROFILE_NAME_TAKEN: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 174 (R14) for a profile created or renamed to a name another profile holds, ' +
+      'compared case-insensitively. The noun is an `import_export` row; `CONFLICT` is not reused because ' +
+      'the sentence has to say the name is taken.',
+  },
+  SCOPE_INVALID: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, FR-014) for a scoped write that ' +
+      'names a sales channel the product is not a member of, or a language that channel does ' +
+      'not offer. The noun is a product scope, a row `catalog` owns (D-121 T1), and every raise ' +
+      'site is one of its admin writes — scoped values, URL keys, media. `VALIDATION_FAILED` is ' +
+      'not reused: the body is well formed, and the sentence has to tell the operator to assign ' +
+      'the product or pick one of the channel\'s languages.',
+  },
+  SCOPE_INCOMPLETE: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-060) for the completeness gate in `refuse` mode: a status write ' +
+      'that would turn the product on at a (channel, language) still missing its name, a ' +
+      'required language-scoped attribute or its URL key. The noun is the product scope, ' +
+      '`catalog`\'s row, and the gate is `catalog`\'s own service.',
+  },
+  URL_KEY_TAKEN: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-070) for a URL-key write meeting another product\'s current key; ' +
+      'since feature 174 a key text belongs to at most one product per channel, across all the ' +
+      'channel\'s languages. The noun is a product URL key, a `catalog` row; the one raise site ' +
+      'is its URL-key write. `VALIDATION_FAILED` is not reused: the key is well formed, and the ' +
+      'operator has to choose another one.',
+  },
+  URL_KEY_REDIRECT_TAKEOVER_REQUIRED: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-072) for a URL-key write meeting another product\'s redirect: ' +
+      'the operator must confirm that the other product loses it. The noun is a product URL ' +
+      'redirect, a `catalog` row, raised only by `catalog`\'s URL-key write.',
+  },
+  URL_REDIRECT_NOT_FOUND: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 for deleting a URL redirect that is not the product\'s. The noun is ' +
+      'a product URL redirect, a `catalog` row; `NOT_FOUND` is not reused because the admin ' +
+      'needs to tell this apart from the product itself being gone.',
+  },
+  ATTRIBUTE_KEY_TAKEN: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for an attribute created with a key another attribute has. It was `409 VALIDATION_FAILED` reading `Attribute key \"<key>\" already exists.`; the key travels as `details.attributeKey`.",
+  },
+  ATTRIBUTE_VALUE_TYPE_LOCKED: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for an attribute whose value type is changed while products hold values for it (the custom-fields `value_type_locked` failure). It was `409 VALIDATION_FAILED` with the custom-fields message. Issue #1218 added the token `page_builder` for a type change to or from Page Builder content (feature 172, FR-005), which was `409 VALIDATION_FAILED` too.",
+  },
+  ATTRIBUTE_IN_USE: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for deleting an attribute an attribute set contains (token `attribute_sets`, `attributeSetCount`) or products hold values of (token `products`, `productCount`). It was `409 VALIDATION_FAILED` reading `Attribute is still referenced by N \u2026`.",
+  },
+  ATTRIBUTE_OPTION_VALUE_TAKEN: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for an option created with a value the attribute's stored options already have (`duplicate_value`). It was `409 VALIDATION_FAILED` with the validator's message.",
+  },
+  ATTRIBUTE_DEFAULT_OPTION_TAKEN: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for a second default option on a single-choice attribute, on create (`409`) and on making an option the default (`400` before, `409` now). It was `VALIDATION_FAILED` with the validator's message.",
+  },
+  ATTRIBUTE_OPTIONS_NOT_SUPPORTED: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for an option written to an attribute whose stored type takes none (`attribute_type_unsupported`). It was `400 VALIDATION_FAILED`; options in a create request stay validation.",
+  },
+  ATTRIBUTE_OPTION_IN_USE: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for deleting an option products carry (token `products` with `productCount` from catalog's own count; without a token from the custom-fields probe). It was `409 VALIDATION_FAILED` reading `option_in_use: N product(s) \u2026`.",
+  },
+  ATTRIBUTE_SLIDER_NOT_SUPPORTED: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for `displayAsSlider` turned on for an attribute whose **stored** type is not numeric. It was `400 VALIDATION_FAILED`; on create, where the request names the type, it stays validation.",
+  },
+  ATTRIBUTE_VALUES_REQUIRED: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for a product save that leaves the set's required attributes without a value, judged on the stored values merged with the patch. It was `400 VALIDATION_FAILED` reading `missing_required_attribute_values: <keys>`; the keys travel joined as `details.attributeKeys`.",
+  },
+  MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for a minimum order quantity on a product type that takes none, on the product and per channel. It was `422 VALIDATION_FAILED` with `details.field` `minOrderQuantity`, which it keeps; a value out of range stays validation.",
+  },
+  CATEGORY_SLUG_TAKEN: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for a category created or renamed onto a slug a sibling holds. It was `409 VALIDATION_FAILED` with an English literal at both raise sites of `category-admin.service.ts`.",
+  },
+  CATEGORY_HAS_CHILDREN: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for deleting a category that still has subcategories. It was `409 VALIDATION_FAILED` reading `Cannot delete: N child category(ies) \u2026`; `BLOG_CATEGORY_HAS_CHILDREN` is the `blog` module's own.",
+  },
+  CATEGORY_MOVE_CYCLE: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for moving a category beneath one of its own descendants. It was `409 VALIDATION_FAILED` with an English literal.",
+  },
+  GROUPED_ITEM_ALREADY_EXISTS: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #624 (#86) for adding a child a grouped product already contains. It was `409 VALIDATION_FAILED` naming the child's id; the sentence names its SKU.",
+  },
+  CONTENT_ATTRIBUTE_CAPABILITY_LOCKED: {
+    to: 'catalog',
+    reason:
+      "Minted by issue #1218 (#86) for a stored Page Builder content attribute patched to switch on a capability it holds off (feature 172, FR-003). It was `400 VALIDATION_FAILED` with one `details[]` entry per flag; the flags travel joined as `details.capabilities`. On create, where the request names the type, it stays validation.",
+  },
+  DICTIONARY_ENTRY_CODE_TAKEN: {
+    to: 'dictionaries',
+    reason:
+      'Minted by issue #643 (#86) for creating a country, currency or language whose code already ' +
+      'exists (token: the dictionary). It was `409 VALIDATION_FAILED` with an English literal the ' +
+      'envelope never replaces. `currencies` and `languages` raise it as well as `dictionaries`: ' +
+      'the three reference dictionaries share the `DICTIONARY_*` family, which `dictionaries` owns.',
+  },
+  DICTIONARY_DEFAULT_ENTRY_INACTIVE: {
+    to: 'dictionaries',
+    reason:
+      'Minted by issue #643 (#86) for making an inactive country, currency or language the default ' +
+      '(token: the dictionary), `409 VALIDATION_FAILED` until then. Owned by `dictionaries` and ' +
+      'raised by all three services, as its family is. `DICTIONARY_ENTRY_INACTIVE` is not reused: ' +
+      'its sentence speaks of an entry that can no longer be selected.',
+  },
+  RETURN_LINE_NOT_RETURNABLE: {
+    to: 'returns',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of a ' +
+      '`return`-kind case that names an order line recorded as not returnable at purchase. ' +
+      'The noun is the return case and the policy reading the stamp is `returns`\' own — ' +
+      '`orders` only reports the stamp through `OrderReturnContextPort` — so `returns` owns ' +
+      'the sentence, and its `createCase` is the one raise site.',
+  },
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`, FR-011) for the refusal ' +
+      'an admin list earns when it is asked to filter on a custom field it does not offer. The ' +
+      'noun is the definition and its list-filter attribute, and the deciding seam is ' +
+      '`custom_fields`\' list-filter port (D-121 T1). `orders`, `quote_requests` and `crm` raise ' +
+      'it from what that port answers, as the hosts raise `CUSTOM_FIELD_VALUE_INVALID`.',
+  },
+  CUSTOM_FIELD_OPTION_IN_USE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal removing a ' +
+      'select option earns while records still hold it. It shared `CUSTOM_FIELD_DEFINITION_INVALID` ' +
+      'and an English message naming the raw value; the noun is the option, `custom_fields`\' own ' +
+      'row, and its admin routes are the raise site (D-121 T1).',
+  },
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal changing a ' +
+      'definition\'s value type earns while records hold values under its key. The noun is the ' +
+      'definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  CUSTOM_FIELD_STORED_VALUES_EXIST: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal a ' +
+      'customer-visible definition earns over values a deleted field left under its key. The noun ' +
+      'is the definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  ADMIN_FEEDBACK_NOT_CONFIGURED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379), which did not exist when the prefix ' +
+      'chain was deleted: the refusal to send feedback while the relay address is empty or not an ' +
+      'http(s) URL. The noun is the feedback, the module\'s one route.',
+  },
+  ADMIN_FEEDBACK_DELIVERY_FAILED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379): the relay could not be reached in time, ' +
+      'refused the message or redirected. The noun is the feedback, the module\'s one route.',
+  },
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 162 (`specs/162-custom-fields-value-carry/`, FR-003, FR-011) for turning ' +
+      'on a definition\'s carry option towards a target that cannot take its values, named by the ' +
+      '`details.code` token. The noun is the custom-field definition and its carry option, and the ' +
+      'judgement is `custom_fields`\' own definition Command (D-121 T1).',
+  },
+  FORM_NOT_FOUND: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 1), which did not exist ' +
+      'when the prefix chain was deleted: a form that does not exist, or a malformed form id, which ' +
+      'answers the same.',
+  },
+  FORM_KEY_TAKEN: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 1), which did not exist ' +
+      'when the prefix chain was deleted: a form key another form already holds; keys are unique and ' +
+      'name a form in exports and webhooks.',
+  },
+  FORM_DEFINITION_INVALID: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 1), which did not exist ' +
+      'when the prefix chain was deleted: a publish refused by the definition rules, with each broken ' +
+      'rule named by its element in `details.issues`.',
+  },
+  FORM_REVISION_CONFLICT: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 1), which did not exist ' +
+      'when the prefix chain was deleted: a write naming a revision of the form that another write has ' +
+      'already moved past (optimistic concurrency, R-26).',
+  },
+  FORM_HAS_ENTRIES: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 1), which did not exist ' +
+      'when the prefix chain was deleted: deleting a form that has entries without the confirmation ' +
+      'that deletes them with it (FR-013).',
+  },
+  FORM_NOT_ACCEPTING: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 2), which did not exist ' +
+      'when the prefix chain was deleted: a submission to a form that takes none now — closed, not yet ' +
+      'open, full, signed-in only, or unavailable — named by the `details.code` token.',
+  },
+  FORM_SUBMISSION_TOO_LARGE: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 2), which did not exist ' +
+      'when the prefix chain was deleted: a form submission whose body is over the 256 KiB limit (FR-036).',
+  },
+  FORM_SUBMISSION_INVALID: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 3), which did not ' +
+      'exist when the prefix chain was deleted: a form submission whose answers break the rules of ' +
+      'the version it was sent to, each named by its field in `details.fields` (FR-034).',
+  },
+  FORM_ENTRY_NOT_FOUND: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 4), which did not ' +
+      'exist when the prefix chain was deleted: an entry that does not exist, or one outside the ' +
+      'caller\'s organisations, which answers the same (FR-046).',
+  },
+  FORM_ENTRY_STATUS_CONFLICT: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 4), which did not ' +
+      'exist when the prefix chain was deleted: a status change or its undo naming a status the ' +
+      'entry has already left (R-16).',
+  },
+  FORM_SCOPE_REQUIRED: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 4), which did not ' +
+      'exist when the prefix chain was deleted: deleting a form with entries, or changing its ' +
+      'retention, by an administrator confined to some organisations — both remove entries of every ' +
+      'organisation.',
+  },
+  FORM_CAPTCHA_FAILED: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 6), which did not exist ' +
+      'when the prefix chain was deleted: a form submission whose CAPTCHA response the configured provider did not verify, or that carried none (FR-042).',
+  },
+  FORM_CAPTCHA_UNAVAILABLE: {
+    to: 'forms',
+    reason:
+      'Minted with the `forms` module (`specs/170-forms-module/`, User Story 6), which did not exist ' +
+      'when the prefix chain was deleted: a form submission refused because the CAPTCHA provider could not be reached to verify it; retryable (FR-042).',
+  },
+  PROMOTION_USAGE_LIMIT_REACHED: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for a promotion whose usage limit is reached between the cart ' +
+      'and placement — the buyer\'s one refusal in the module. It was `409 VALIDATION_FAILED` ' +
+      'reading `promotion_unavailable: usage limit reached for <uuid>`; the sentence now names ' +
+      'the coupon applied (token `with_coupon`) and never the id.',
+  },
+  PROMOTION_COUPON_CODE_TAKEN: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for a coupon created with a code another coupon has. It was ' +
+      '`409 VALIDATION_FAILED` reading `coupon_code_taken: <code>`; the code travels as ' +
+      '`couponCode` because `details.code` is the token slot.',
+  },
+  PROMOTION_COUPON_SPACE_EXHAUSTED: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for a coupon batch whose length and format hold fewer unique ' +
+      'codes than were asked for. It was `400 VALIDATION_FAILED` reading ' +
+      '`coupon_space_exhausted: …`; the batch size bound beside it stays validation.',
+  },
+  PROMOTION_RULE_NAME_TAKEN: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for a named promotion rule created or renamed onto a name ' +
+      'another rule has. It was `409 VALIDATION_FAILED` reading `rule_name_taken: <name>` at ' +
+      'both raise sites of `promotion-rule-store.ts`.',
+  },
+  PROMOTION_RULE_IN_USE: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for deleting a named rule promotions reference. It was ' +
+      '`409 VALIDATION_FAILED` reading `rule_in_use: referenced by N promotion(s)`; the count ' +
+      'now travels as `details.promotionCount`.',
+  },
+  PROMOTION_ATTRIBUTE_NOT_ELIGIBLE: {
+    to: 'promotions',
+    reason:
+      'Minted by issue #628 (#86) for a criterion naming a catalogue attribute that exists but ' +
+      'is not flagged usable in promotion rules — configuration the operator can change, so a ' +
+      'refusal; an attribute that names nothing stays `VALIDATION_FAILED`.',
+  },
+  NEWSLETTER_AUTOMATION_ACTIVE: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'editing an active automation, which has to be paused first.',
+  },
+  NEWSLETTER_CAMPAIGN_NOT_EDITABLE: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'editing a campaign that is no longer a draft or scheduled; the status travels in `details`.',
+  },
+  NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'cancelling a campaign that is no longer a draft or scheduled; the status travels in `details`.',
+  },
+  NEWSLETTER_PROVIDER_NOT_CONFIGURED: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'sending a campaign while no sending provider is configured. Its `provider_not_configured` token was dropped: it was the only reason under the code.',
+  },
+  NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'a `409` duplicate custom-field key.',
+  },
+  NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'a `409` duplicate email-block code, carried as `blockCode` because `details.code` is the token slot.',
+  },
+  NEWSLETTER_EMAIL_BLOCK_SYSTEM: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'deleting a system email block.',
+  },
+  NEWSLETTER_TAG_CODE_TAKEN: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'a `409` duplicate tag code, carried as `tagCode` because `details.code` is the token slot.',
+  },
+  NEWSLETTER_TAG_IN_USE: {
+    to: 'newsletter',
+    reason:
+      'Minted by issue #626 (#86) for a `newsletter` admin refusal raised as `VALIDATION_FAILED` ' +
+      'with an English literal the envelope never replaces: ' +
+      'deleting a tag a campaign or an automation references. Its `tag_in_use` token was dropped: the code says it.',
+  },
+  PREFERRED_LANGUAGE_NOT_OFFERED: {
+    to: 'customers',
+    reason:
+      'Minted by issue #652 (D-292) for `PATCH /api/v1/me/customer/preferred-language` naming a ' +
+      "language the request's sales channel does not offer (422). The route and the check are " +
+      "`customers`' own, and the reader is the buyer on their account page.",
   },
 };
 
@@ -803,16 +2727,6 @@ export const REHOMED_ERROR_CODES: RehomedErrorCodes = {
       'back. The judgement, the rules and the definitions the rules come from are all here ' +
       '(D-121 T1; `d129-sweep.md` §2.3 flags it by name).',
   },
-  CUSTOMER_ADDRESS_NOT_FOUND: {
-    from: '_i18n',
-    to: 'customers',
-    tier: 'T1',
-    reason:
-      'The prefix is `CUSTOMER_` and the noun is not the customer: it is a `CustomerAddress`, ' +
-      'whose entity this module owns. D-186 §1 settles the split — `customer_accounts` owns ' +
-      'the customer record, `customers` owns the address — so the four `CUSTOMER_*` record ' +
-      'codes go elsewhere and this one comes here, on the same rule that separates them.',
-  },
   REGISTRATION_REQUIRES_ORGANIZATION: {
     from: '_i18n',
     to: 'customers',
@@ -956,8 +2870,10 @@ export const REHOMED_ERROR_CODES: RehomedErrorCodes = {
     tier: 'T1',
     reason:
       'It reads like `organizations` and is not: the invariant is counted over ' +
-      '`CustomerAccount.role` within one organization, in this module\'s `role-service.ts`, ' +
-      'which is the only thing in the tree that raises it. `organizations` owns the ' +
+      'the holders of the organization\'s Administrator role, in this module\'s ' +
+      '`customer_account.change_role` Command (it replaced `role-service.ts` in ' +
+      '`specs/170-organization-roles/` WP-02b), the only thing in the tree that raises it. ' +
+      '`organizations` owns the ' +
       'organization; this module owns its membership. It carried a placeholder and arrives ' +
       'with prose instead (§5.4): the reader is an organization administrator managing ' +
       'their own company\'s users and the refusal has one remedy to offer.',
@@ -1011,8 +2927,10 @@ export const REHOMED_ERROR_CODES: RehomedErrorCodes = {
     tier: 'T1',
     reason:
       'The noun is the record again and the window is a property of it: after the retention ' +
-      'period the row is anonymized and there is nothing left to restore. Raised only in ' +
-      'this module\'s `customer-account-lifecycle-ports.ts`.',
+      'period the row is anonymized and there is nothing left to restore. Raised in this ' +
+      'module\'s `customer-account-lifecycle-ports.ts` and, since issue #800, by ' +
+      '`customers`\' `customer-deletion-service.ts` once the window has elapsed but before ' +
+      'the sweep reached the row: D-95.2\'s caller shape, as for `CUSTOMER_ALREADY_DELETED`.',
   },
   CURRENCY_MISMATCH: {
     from: '_i18n',
@@ -1534,6 +3452,96 @@ export const PLATFORM_OWNED_ERROR_CODES: PlatformOwnedErrorCodes = {
       'The unqualified absence, named in fifty modules plus the platform\'s 404 fallback. ' +
       'Every module that owns an entity also owns a specific `*_NOT_FOUND`; what is left ' +
       'here is the case where the noun is not known at the point of the refusal.',
+  },
+  AMOUNT_PRECISION_EXCEEDED: {
+    tier: 'T3',
+    reason:
+      'A typed money amount with more than two decimal places (issue #417, owner ruling of ' +
+      '2026-10-24), refused on every money field a person or an integration enters — delivery ' +
+      'methods, payment methods, quote requests, returns, credit limits, promotions, orders and ' +
+      'invoices. The noun is the request\'s amount, which no one module owns, and the raiser is ' +
+      'the error envelope reading the Zod issue `money-input.ts` tags.',
+  },
+  UNIT_PRICE_PRECISION_EXCEEDED: {
+    tier: 'T3',
+    reason:
+      'A typed unit price with more than four decimal places (owner ruling of 2026-10-25) — a ' +
+      'quote\'s desired, agreed or proposed price. The noun is the request\'s unit price, which no ' +
+      'one module owns, and the raiser is the error envelope reading the Zod issue `money-input.ts` tags.',
+  },
+  LINE_QUANTITY_EXCEEDED: {
+    tier: 'T3',
+    reason:
+      'A line quantity past `LINE_QUANTITY_MAX` (issue #351, architect ruling R1 on PR #1009), ' +
+      'refused on every request carrying a line — the basket, quote requests, orders, quick order, ' +
+      'shopping lists, returns, external pricing and the promotion preview. The noun is the ' +
+      'request\'s line quantity, which no one module owns; the raisers are the error envelope reading ' +
+      'the Zod issue `line-bounds.ts` tags and `carts` for a merged or packaging-unit line.',
+  },
+  // `specs/176-command-hooks-outbox/` P2 — a Command's hook chain is the
+  // platform's Command Bus, which no module owns.
+  COMMAND_EXTENSION_UNCLAIMED: {
+    tier: 'T3',
+    reason:
+      'Extension input on a Command that no present hook module on its action claims. The noun is ' +
+      'the Command\'s hook chain, which the platform\'s Command Bus runs for every module; the hook ' +
+      'module a key was meant for is named in the details, not owned by the code.',
+  },
+  COMMAND_HOOK_CYCLE: {
+    tier: 'T3',
+    reason:
+      'A hookable action reappearing in its own hook chain, or nesting past the bound. The noun is ' +
+      'the hook chain the Command Bus runs, which spans the owner and every hook module at once.',
+  },
+  COMMAND_HOOK_DATA_MISSING: {
+    tier: 'T3',
+    reason:
+      'A Command declared hookable that supplied no hook data. The refusal is the Command Bus\'s, ' +
+      'raised for whichever owner declared the action, so no one module owns it.',
+  },
+  // `specs/189-command-middleware/` P1 — command middleware is a step of the
+  // platform's Command Bus, which no module owns.
+  COMMAND_ADMISSION_TIMEOUT: {
+    tier: 'T3',
+    reason:
+      'An admission rule that did not answer in time. The noun is the Command Bus\'s admission step, ' +
+      'which runs every contributing module\'s rules over every module\'s Commands; the middleware is ' +
+      'named in the log, not owned by the code.',
+  },
+  COMMAND_ADMISSION_FAILED: {
+    tier: 'T3',
+    reason:
+      'An admission rule that failed. The noun is the Command Bus\'s admission step, which spans every ' +
+      'contributing module and every Command at once, so no one module owns it.',
+  },
+  COMMAND_MIDDLEWARE_REENTRY: {
+    tier: 'T3',
+    reason:
+      'A command middleware that ran a Command. The refusal is the Command Bus\'s, raised for whichever ' +
+      'module contributed the middleware, so no one module owns it.',
+  },
+  // `specs/187-side-table-extensions/` B1 — the include is answered by the
+  // platform for every extensible host, so no one module owns it.
+  ENTITY_EXTENSION_UNCLAIMED: {
+    tier: 'T3',
+    reason:
+      'An extension include no composed loader claims. The noun is the side-table include on a host ' +
+      'read port, which the platform answers for all nine hosts and every extending module at once; ' +
+      'the module the include names is in the details, not owned by the code.',
+  },
+  COMMAND_OUTBOX_NOT_DEAD: {
+    tier: 'T3',
+    reason:
+      'A retry of a command outbox row that is not dead. The noun is the command outbox, the ' +
+      'platform\'s own table of afterCommit deliveries for every module; the hook module a row ' +
+      'is for is a column of the row, not the owner of the refusal.',
+  },
+  ORDER_STALE: {
+    tier: 'T3',
+    reason:
+      'A batch reorder whose list is not the current one (issue #1560). The noun is an ordered ' +
+      'configuration list, which `crm` (Opportunity statuses) and `tasks` (Task statuses and ' +
+      'priorities) each own — two claimants, so by D-122 neither owns the code.',
   },
   UNAUTHORIZED: {
     tier: 'T3',

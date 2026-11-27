@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { setMobileViewport } from '../setup';
@@ -109,7 +109,7 @@ function sidebarHrefs(): (string | null)[] {
  * row while the palette leaked — which is exactly the defect under test.
  */
 async function openPaletteItems(): Promise<string[]> {
-  await userEvent.click(screen.getByPlaceholderText('appShell.search.placeholder'));
+  await userEvent.click(within(document.querySelector<HTMLElement>('aside.b2b-sidebar')!).getByRole('button', { name: 'appShell.search.openPalette' }));
   const dialog = await screen.findByRole('dialog');
   return [...dialog.querySelectorAll('.b2b-palette__item')].map((el) => el.textContent ?? '');
 }
@@ -249,12 +249,14 @@ describe('AppShell — permission gates the palette and the sidebar alike (issue
    * used: `catalog:read` never opened this screen. It is the catalogue
    * **editor**, which did, and which now must not.
    *
-   * The sidebar is asserted alone because there is nothing else to assert:
-   * `taxes` contributes no `PALETTE_ITEMS` Navigate row and no manifest action,
-   * so the ⌘K palette has never offered this screen at all. That is a
-   * Principle XVI gap and it is reported rather than repaired here — adding a
-   * discovery surface is not this merge request's subject, and a palette row
-   * added now would carry the code without ever having carried the wrong one.
+   * The sidebar is asserted alone because it is the only half this file
+   * renders. `taxes` has had a palette entry since issue #510 — the manifest
+   * action `open-taxes`, gated on `taxes:read` — and like every manifest action
+   * it is the **server's** advertisement, resolved against the role and the
+   * effective enabled-set, not a `PALETTE_ITEMS` row this shell renders. That
+   * it carries the code its `targetRoute` enforces is
+   * `check:action-route-permissions`' assertion, and that the module declares
+   * one at all is `admin/test/unit/palette-coverage.test.ts`'.
    */
   it('hides /taxes from a catalogue editor', () => {
     renderShell(['catalog:read', 'catalog:write']);
@@ -342,6 +344,8 @@ describe('AppShell — permission gates the palette and the sidebar alike (issue
     expect(hrefs).toContain('/orders');
     expect(hrefs).toContain('/comparisons');
     expect(hrefs).toContain('/organizations');
+    // Feature 161 — the price-lists entry opens the price-book list again
+    // (feature 160 had pointed it at the display-mode page meanwhile).
     expect(hrefs).toContain('/price-lists');
     // `/price-lists`' palette row went the other of batch 13's two ways:
     // `price_lists` declared no action at all, so `open-price-lists` arrives in

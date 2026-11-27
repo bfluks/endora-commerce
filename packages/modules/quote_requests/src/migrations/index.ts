@@ -11,7 +11,7 @@
  * invisible because a workspace member is not an installed package and the
  * committed host registry names each class directly.
  *
- * **Twelve classes, and the order in this array is not the order they run in.**
+ * **Nineteen classes, and the order in this array is not the order they run in.**
  * They are listed here in ascending timestamp, which is the order
  * `backend/src/db/migration-order.ts` computes *within* a module — and within a
  * module only. Where this module's block sits relative to every other module's
@@ -54,6 +54,13 @@ import { Migration20261014T115053QuoteRequestsNegotiationPolicies } from './2026
 import { Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews } from './20261014T173236_quote_requests_quote_request_list_saved_views.js';
 import { Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate } from './20261017T142116_quote_requests_quote_request_document_template.js';
 import { Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent } from './20261017T142121_quote_requests_quote_request_event_pdf_sent.js';
+import { Migration20261018T122118QuoteRequestsItemPackagingUnitId } from './20261018T122118_quote_requests_item_packaging_unit_id.js';
+import { Migration20261020T171341QuoteRequestsQuoteRequestItemGroups } from './20261020T171341_quote_requests_quote_request_item_groups.js';
+import { Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped } from './20261021T164808_quote_requests_quote_request_event_carry_skipped.js';
+import { Migration20261025T031736QuoteRequestsUnitPriceFourPlaces } from './20261025T031736_quote_requests_unit_price_four_places.js';
+import { Migration20261113T081826QuoteRequestsNotificationsRedesign } from './20261113T081826_quote_requests_notifications_redesign.js';
+import { Migration20261117T120057QuoteRequestsRenumberResubmittedPlaceholders } from './20261117T120057_quote_requests_renumber_resubmitted_placeholders.js';
+import { Migration20261124T131435QuoteRequestsQuoteRequestSharing } from './20261124T131435_quote_requests_quote_request_sharing.js';
 
 export const migrations = [
   Migration20260424T190112QuoteRequestsInit,
@@ -68,6 +75,13 @@ export const migrations = [
   Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews,
   Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate,
   Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent,
+  Migration20261018T122118QuoteRequestsItemPackagingUnitId,
+  Migration20261020T171341QuoteRequestsQuoteRequestItemGroups,
+  Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped,
+  Migration20261025T031736QuoteRequestsUnitPriceFourPlaces,
+  Migration20261113T081826QuoteRequestsNotificationsRedesign,
+  Migration20261117T120057QuoteRequestsRenumberResubmittedPlaceholders,
+  Migration20261124T131435QuoteRequestsQuoteRequestSharing,
 ];
 
 export {
@@ -83,4 +97,11 @@ export {
   Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews,
   Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate,
   Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent,
+  Migration20261018T122118QuoteRequestsItemPackagingUnitId,
+  Migration20261020T171341QuoteRequestsQuoteRequestItemGroups,
+  Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped,
+  Migration20261025T031736QuoteRequestsUnitPriceFourPlaces,
+  Migration20261113T081826QuoteRequestsNotificationsRedesign,
+  Migration20261117T120057QuoteRequestsRenumberResubmittedPlaceholders,
+  Migration20261124T131435QuoteRequestsQuoteRequestSharing,
 };

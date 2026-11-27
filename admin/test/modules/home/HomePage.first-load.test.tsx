@@ -67,14 +67,15 @@ const { HomePage } = await import('../../../../packages/admin-shell/src/modules/
 
 const PRESENCE = '/api/v1/admin/module-presence';
 const PRODUCTS = '/api/v1/admin/catalog/products?pageSize=1';
-const QUOTES = '/api/v1/admin/quote-requests?status=Pending';
-const ORDERS = '/api/v1/admin/orders?status=new';
+// Issue #317 — the list is paged, so the tile asks for one row and reads the total.
+const QUOTES = '/api/v1/admin/quote-requests?status=Pending&pageSize=1';
+// Issue #1358 — the same for the orders list: one row, and the total read.
+const ORDERS = '/api/v1/admin/orders?status=new&pageSize=1';
 const INVENTORY = '/api/v1/admin/inventory';
 const LOW_STOCK = '/api/v1/admin/inventory/low-stock';
 
 const BUNDLE = passthroughBundle('core', [
   'home.welcomeBack',
-  'home.subtitle',
   'home.defaultName',
   'home.kpi.activeProducts',
   'home.kpi.pendingQuotes',
@@ -90,7 +91,6 @@ const BUNDLE = passthroughBundle('core', [
   'home.quickActions.importInventory',
   'home.quickActions.convertQuote',
   'home.stockAlerts.title',
-  'home.stockAlerts.subtitle',
   'home.stockAlerts.empty',
   'home.stockAlerts.seeAll',
   'home.stockAlerts.loading',
@@ -135,8 +135,13 @@ const EVERY_MODULE: AdminModulePresenceResponse = modulePresence({ present: ever
 
 function answerEveryTile(): void {
   net.routes.set(PRODUCTS, json({ data: [], counts: { active: 42 } }));
-  net.routes.set(QUOTES, json({ data: [{}, {}, {}] }));
-  net.routes.set(ORDERS, json({ data: [{}, {}, {}, {}, {}, {}, {}] }));
+  net.routes.set(
+    QUOTES,
+    json({ data: [{}], pagination: { page: 1, pageSize: 1, total: 3, limit: 1, hasMore: true, nextCursor: null } }),
+  );
+  // A total above the list's default page size (25): the tile reads the total,
+  // never the number of rows on the page it was sent.
+  net.routes.set(ORDERS, json({ data: [{}], pagination: { page: 1, pageSize: 1, total: 137 } }));
   net.routes.set(INVENTORY, json({ data: { outOfStockCount: 5 } }));
   net.routes.set(
     LOW_STOCK,
@@ -204,7 +209,7 @@ describe('HomePage — the first load, before module presence has resolved', () 
       expect(within(tile('home.kpi.activeProducts')).getByText('42')).toBeInTheDocument();
     });
     expect(within(tile('home.kpi.pendingQuotes')).getByText('3')).toBeInTheDocument();
-    expect(within(tile('home.kpi.openOrders')).getByText('7')).toBeInTheDocument();
+    expect(within(tile('home.kpi.openOrders')).getByText('137')).toBeInTheDocument();
     expect(within(tile('home.kpi.outOfStock')).getByText('5')).toBeInTheDocument();
     expect(await screen.findByText('Low widget')).toBeInTheDocument();
   });
@@ -272,7 +277,7 @@ describe('HomePage — a tile says what state its number is in', () => {
     // A failure is not a number: neither a stale placeholder nor a zero.
     expect(within(failed).queryByText('—')).toBeNull();
     await waitFor(() => {
-      expect(within(tile('home.kpi.openOrders')).getByText('7')).toBeInTheDocument();
+      expect(within(tile('home.kpi.openOrders')).getByText('137')).toBeInTheDocument();
     });
 
     net.routes.set(PRODUCTS, json({ data: [], counts: { active: 42 } }));

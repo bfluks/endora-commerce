@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { calendarDateSchema, isoDateTimeSchema, uuidSchema } from './common.js';
+import type { SupportedLanguage } from './platform-language.js';
 
 /**
  * Custom Fields Layer (feature 055) — entity-agnostic runtime custom fields
@@ -25,10 +26,131 @@ export const supportedEntityTypeSchema = z.enum([
   // names that module as the type's owner, and the type is offered only while
   // the owner is present.
   'opportunity',
+  // Feature 163 — a Project of the `projects` module; offered only while that
+  // module is present, as an Opportunity's type follows `crm`.
+  'project',
+  // Feature 165 — a Task of the `tasks` module (research R-8); offered only
+  // while that module is present.
+  'task',
 ]);
 export type SupportedEntityType = z.infer<typeof supportedEntityTypeSchema>;
 
-/** The set of runtime value types. `text` is stored as a string; `select` stores one option value; `multiselect` an array. */
+/** Where one host entity type keeps its custom-field values, and which module owns that table. */
+export interface CustomFieldHostBinding {
+  /** The host table. For `product` the value bag is a column, so the table is `products` itself. */
+  readonly table: string;
+  /** The column on {@link table} that holds the value bag. */
+  readonly valueColumn: string;
+  /** The module whose entity maps {@link table}. */
+  readonly ownerModuleId: string;
+  /**
+   * The class name of the entity that maps {@link table} — the second half of
+   * a side-table declaration's host reference, `<ownerModuleId>.<entityClassName>`
+   * (`specs/187-side-table-extensions/` FR-003). Held to the discovered entities
+   * at every ORM initialisation (metadata rule M0, `host-binding-mismatch`).
+   */
+  readonly entityClassName: string;
+  /**
+   * The container name of the host aggregate's one write port, which
+   * {@link ownerModuleId} publishes and registers, and through which a
+   * server-side caller writes the host's custom-field values
+   * (`setCustomFieldValues`) — `specs/186-aggregate-ports/` research R-14,
+   * `specs/conventions/module-composition.md` item 2a. Adding a host means
+   * naming its port here, in the same row.
+   *
+   * A name, not a promise that the port is registered yet: until each
+   * aggregate's port lands, its host sits in `check:port-shape`'s ledger.
+   */
+  readonly aggregatePort: string;
+}
+
+/**
+ * The one custom-field host binding registry (`specs/178-extensible-columns/`
+ * FR-010, research R-8).
+ *
+ * Moved here from `custom_fields`' module-internal storage binding so that two
+ * readers can share one answer: `custom_fields` reads it for the table and the
+ * value column its host probes and list filters build against, and the platform
+ * derives its extensible host list from it — every custom-field host table is
+ * extensible (OD-15), so a second list of them would be a second answer waiting
+ * to disagree. Purely a storage binding: no host logic lives here, and neither
+ * the table nor the column ever comes from a caller.
+ */
+export const CUSTOM_FIELD_HOST_BINDINGS = {
+  category: {
+    table: 'categories',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'catalog',
+    entityClassName: 'Category',
+    aggregatePort: 'catalogCategoryCommandPort',
+  },
+  order: {
+    table: 'orders',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'orders',
+    entityClassName: 'Order',
+    aggregatePort: 'orderCommandPort',
+  },
+  organization: {
+    table: 'organizations',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'organizations',
+    entityClassName: 'Organization',
+    aggregatePort: 'organizationCommandPort',
+  },
+  customer: {
+    table: 'customer_accounts',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'customer_accounts',
+    entityClassName: 'CustomerAccount',
+    aggregatePort: 'customerAccountCommandPort',
+  },
+  quote_request: {
+    table: 'quote_requests',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'quote_requests',
+    entityClassName: 'QuoteRequest',
+    aggregatePort: 'quoteRequestCommandPort',
+  },
+  product: {
+    table: 'products',
+    valueColumn: 'attribute_values',
+    ownerModuleId: 'catalog',
+    entityClassName: 'Product',
+    aggregatePort: 'catalogProductCommandPort',
+  },
+  opportunity: {
+    table: 'crm_opportunities',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'crm',
+    entityClassName: 'CrmOpportunity',
+    aggregatePort: 'opportunityCommandPort',
+  },
+  project: {
+    table: 'projects',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'projects',
+    entityClassName: 'Project',
+    aggregatePort: 'projectCommandPort',
+  },
+  task: {
+    table: 'tasks',
+    valueColumn: 'custom_field_values',
+    ownerModuleId: 'tasks',
+    entityClassName: 'Task',
+    aggregatePort: 'taskCommandPort',
+  },
+} as const satisfies Record<SupportedEntityType, CustomFieldHostBinding>;
+
+/**
+ * The set of runtime value types. `text` is stored as a string; `select` stores one option value; `multiselect` an array.
+ *
+ * `page_builder` (feature 172) is a Page Builder document per language. It is
+ * never a field value: the generic value path refuses it, no list filter
+ * applies to it, and a definition may take it only on an entity type whose
+ * registry entry offers it (`product` alone) — the document lives in its
+ * host's own storage.
+ */
 export const customFieldValueTypeSchema = z.enum([
   'text',
   'number',
@@ -36,6 +158,7 @@ export const customFieldValueTypeSchema = z.enum([
   'date',
   'select',
   'multiselect',
+  'page_builder',
 ]);
 export type CustomFieldValueType = z.infer<typeof customFieldValueTypeSchema>;
 
@@ -55,6 +178,27 @@ export type CustomFieldValueType = z.infer<typeof customFieldValueTypeSchema>;
 export const customFieldAudienceSchema = z.enum(['customer', 'internal']);
 export type CustomFieldAudience = z.infer<typeof customFieldAudienceSchema>;
 
+/**
+ * Feature 175 — the forms on which a BUYER may supply a custom-field value
+ * (`specs/175-buyer-input-custom-fields/`, OD-3). A closed vocabulary: the
+ * next surface is a release, not data an operator types. A definition names
+ * the surfaces it is open on (`customerInput`); an entity type's registry entry
+ * names the surfaces it offers at all.
+ */
+export const customFieldInputSurfaceSchema = z.enum(['organization.register']);
+export type CustomFieldInputSurface = z.infer<typeof customFieldInputSurfaceSchema>;
+
+/**
+ * Feature 175 — how the admin custom-field panel offers a field: `edit`
+ * (an input), `read` (the value, no input) or `hidden` (not rendered).
+ *
+ * **A panel convenience, not access control** (OD-8, FR-007): no API endpoint
+ * reads it, so what the admin API accepts, answers, filters, exports and
+ * audits is the same at every level. A `required` field is always `edit`.
+ */
+export const customFieldAdminAccessSchema = z.enum(['edit', 'read', 'hidden']);
+export type CustomFieldAdminAccess = z.infer<typeof customFieldAdminAccessSchema>;
+
 export const localizedLabelSchema = z.record(z.string(), z.string());
 export type LocalizedLabel = z.infer<typeof localizedLabelSchema>;
 
@@ -68,6 +212,39 @@ export const customFieldOptionSchema = z.object({
   sortOrder: z.number().int().default(0),
 });
 export type CustomFieldOptionDto = z.infer<typeof customFieldOptionSchema>;
+
+/**
+ * Patch an option (feature 157). Every member optional and **without the create
+ * defaults**: `customFieldOptionSchema.partial()` keeps them, so a patch naming
+ * only the label used to arrive carrying `isDefault: false`, `sortOrder: 0`
+ * and `label: {}` and reset all three. The stored `value` is never patched.
+ */
+export const updateCustomFieldOptionSchema = z.object({
+  label: localizedLabelSchema.optional(),
+  labelDefault: z.string().min(1).max(200).optional(),
+  isDefault: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+export type UpdateCustomFieldOptionRequest = z.infer<typeof updateCustomFieldOptionSchema>;
+
+/**
+ * How many entity types one definition may carry its values to (feature 162).
+ * Every source type of the registry offers at most two targets.
+ */
+export const CUSTOM_FIELD_CARRY_MAX_TARGETS = 2;
+
+/**
+ * The entity types a definition's values carry **to** when a record of such a
+ * type is created from, or joins, a record of the definition's own type
+ * (feature 162). Which pairs exist is the registry's `carryTargets` marker to
+ * say ({@link customFieldEntityTypeInfoSchema}); "never the definition's own
+ * type" is a server refusal, not a refine — the patch schema does not know
+ * the type.
+ */
+export const customFieldCarryToSchema = z
+  .array(supportedEntityTypeSchema)
+  .max(CUSTOM_FIELD_CARRY_MAX_TARGETS)
+  .refine((list) => new Set(list).size === list.length, 'Duplicate carry target');
 
 /** A full custom-field definition, options embedded. */
 export const customFieldDefinitionSchema = z.object({
@@ -84,18 +261,56 @@ export const customFieldDefinitionSchema = z.object({
   // Opaque host-capability flags (FR-006). The generic core stores but never
   // interprets `config`; a host module reads its own flags from here.
   config: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Whether the admin lists of the definition's entity type offer it as a
+   * filter (feature 157). Settable only where the entity type's registry entry
+   * offers the option ({@link customFieldEntityTypeInfoSchema}).
+   */
+  listFilter: z.boolean(),
+  /** See {@link customFieldCarryToSchema} (feature 162). */
+  carryTo: customFieldCarryToSchema,
+  /**
+   * Feature 175 — the input surfaces a buyer may supply this field's value on
+   * ({@link customFieldInputSurfaceSchema}). Only surfaces the entity type
+   * offers ({@link customFieldEntityTypeInfoSchema}); non-empty only with the
+   * `customer` audience and never for `page_builder`. Stored deduplicated and
+   * sorted.
+   */
+  customerInput: z.array(customFieldInputSurfaceSchema),
+  /** Feature 175 — see {@link customFieldAdminAccessSchema}. */
+  adminAccess: customFieldAdminAccessSchema,
   options: z.array(customFieldOptionSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
 export type CustomFieldDefinitionDto = z.infer<typeof customFieldDefinitionSchema>;
 
+/**
+ * `GET /api/v1/admin/custom-fields/definitions` — the definitions, optionally of
+ * one entity type, whose type's owner module is present (issue #599).
+ */
+export const customFieldDefinitionListResponseSchema = z.object({
+  data: z.array(customFieldDefinitionSchema),
+});
+export type CustomFieldDefinitionListResponse = z.infer<typeof customFieldDefinitionListResponseSchema>;
+
 /** Create a definition. `entityType` + `key` are immutable after create. */
 export const createCustomFieldDefinitionSchema = customFieldDefinitionSchema
   .omit({ id: true, createdAt: true, updatedAt: true })
   // A definition created without an audience is `internal`: values reach a
   // customer only where an administrator has said they may.
-  .extend({ audience: customFieldAudienceSchema.default('internal') });
+  // A definition created without `listFilter` is not a list filter; the
+  // server reads the absence as `false` rather than the schema defaulting it.
+  // A definition created without `carryTo` carries nothing (feature 162).
+  // Feature 175 — one created without `customerInput` is open on no surface,
+  // and one without `adminAccess` is editable in the admin panel.
+  .extend({
+    audience: customFieldAudienceSchema.default('internal'),
+    listFilter: z.boolean().optional(),
+    carryTo: customFieldCarryToSchema.default([]),
+    customerInput: z.array(customFieldInputSurfaceSchema).default([]),
+    adminAccess: customFieldAdminAccessSchema.default('edit'),
+  });
 export type CreateCustomFieldDefinitionRequest = z.infer<typeof createCustomFieldDefinitionSchema>;
 
 /** Patch a definition. `entityType` and `key` cannot change once records may hold values. */
@@ -110,6 +325,10 @@ export const updateCustomFieldDefinitionSchema = createCustomFieldDefinitionSche
   .extend({
     audience: customFieldAudienceSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    listFilter: z.boolean().optional(),
+    carryTo: customFieldCarryToSchema.optional(),
+    customerInput: z.array(customFieldInputSurfaceSchema).optional(),
+    adminAccess: customFieldAdminAccessSchema.optional(),
   });
 export type UpdateCustomFieldDefinitionRequest = z.infer<typeof updateCustomFieldDefinitionSchema>;
 
@@ -130,8 +349,27 @@ export const customFieldEntityTypeInfoSchema = z.object({
       route: z.string(),
     })
     .optional(),
+  /** Whether definitions of this type may be marked as list filters (feature 157). */
+  listFilter: z.boolean(),
+  /**
+   * The entity types definitions of this type may carry their values to
+   * (feature 162), filtered to targets whose owner module is present.
+   */
+  carryTargets: z.array(supportedEntityTypeSchema).default([]),
+  /**
+   * Feature 175 — the input surfaces definitions of this type may be opened
+   * on; the definition editor offers the buyer-input option only when it is
+   * non-empty (FR-035).
+   */
+  customerInputSurfaces: z.array(customFieldInputSurfaceSchema).default([]),
 });
 export type CustomFieldEntityTypeInfo = z.infer<typeof customFieldEntityTypeInfoSchema>;
+
+/** `GET /api/v1/admin/custom-fields/entity-types` — the served entity types (issue #599). */
+export const customFieldEntityTypeListResponseSchema = z.object({
+  data: z.array(customFieldEntityTypeInfoSchema),
+});
+export type CustomFieldEntityTypeListResponse = z.infer<typeof customFieldEntityTypeListResponseSchema>;
 
 /** A validated value bag keyed by definition `key`. Values are typed by their definition's `valueType`. */
 export const customFieldValuesSchema = z.record(z.string(), z.unknown());
@@ -146,10 +384,215 @@ export const customFieldValidationErrorSchema = z.object({
     'unknown_option',
     'out_of_range',
     'duplicate_option',
+    // Feature 175 — a buyer-supplied key that is not a live definition open on
+    // the surface (also every key when the value port is not composed).
+    'not_open_for_input',
+    // Feature 175 — more than 50 keys in one buyer-supplied group; `field` is
+    // the group's name, not a key.
+    'too_many_keys',
   ]),
   message: z.string(),
 });
 export type CustomFieldValidationError = z.infer<typeof customFieldValidationErrorSchema>;
+
+// ---------------------------------------------------------------------------
+// --- list filters (specs/157-custom-fields-list-filters/) -----------------
+// ---------------------------------------------------------------------------
+
+/** A bound of a number, as a decimal string. */
+const filterDecimalBoundSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
+
+/**
+ * One custom field's filter: the operators of every value type in one object.
+ * Which of them apply is the definition's value type to say
+ * (`CUSTOM_FIELD_FILTER_OPERATORS`): the admin lists refuse any other with 400
+ * `VALIDATION_FAILED` (`assertCustomFieldFilterOperators`), and only the CRM
+ * board ignores it. The CRM board's field filter is this same object.
+ */
+export const customFieldFilterSchema = z
+  .object({
+    contains: z.string().trim().min(1).max(200).optional(),
+    in: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
+    is: z.boolean().optional(),
+    min: filterDecimalBoundSchema.optional(),
+    max: filterDecimalBoundSchema.optional(),
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
+  })
+  .strict();
+export type CustomFieldFilter = z.infer<typeof customFieldFilterSchema>;
+
+/**
+ * The operators each value type applies (FR-008). A filter carrying another
+ * operator for its field is refused rather than ignored: a filter is never
+ * silently dropped (FR-011).
+ */
+export const CUSTOM_FIELD_FILTER_OPERATORS: Readonly<
+  Record<CustomFieldValueType, readonly (keyof CustomFieldFilter)[]>
+> = {
+  text: ['contains'],
+  number: ['min', 'max'],
+  boolean: ['is'],
+  date: ['from', 'to'],
+  select: ['in'],
+  multiselect: ['in'],
+  // Feature 172 — a Page Builder document is not a filterable value: every
+  // operator on such a field is refused, never ignored.
+  page_builder: [],
+};
+
+/**
+ * Throws the `ZodError` naming every operator of `filters` that does not apply
+ * to its field's value type, each at `[key, operator]` — answered 400
+ * `VALIDATION_FAILED`, as any other malformed filter. A key `valueTypeOf`
+ * does not know is not this check's to judge.
+ */
+export function assertCustomFieldFilterOperators(
+  filters: CustomFieldFilters,
+  valueTypeOf: (key: string) => CustomFieldValueType | undefined,
+): void {
+  const issues: Array<{ code: 'custom'; path: string[]; message: string; input: unknown }> = [];
+  for (const key of Object.keys(filters)) {
+    const filter = filters[key];
+    const valueType = valueTypeOf(key);
+    if (filter === undefined || valueType === undefined) continue;
+    const allowed: readonly string[] = CUSTOM_FIELD_FILTER_OPERATORS[valueType];
+    for (const operator of Object.keys(filter)) {
+      if (filter[operator as keyof CustomFieldFilter] === undefined || allowed.includes(operator)) continue;
+      issues.push({
+        code: 'custom',
+        path: [key, operator],
+        message: `"${operator}" does not apply to a ${valueType} field`,
+        input: filter[operator as keyof CustomFieldFilter],
+      });
+    }
+  }
+  if (issues.length > 0) throw new z.ZodError(issues as never);
+}
+
+/** Bounds the work one list request can ask of the database (keys per request). */
+export const CUSTOM_FIELD_FILTERS_MAX_KEYS = 10;
+/** Bounds the work one list request can ask of the database (`in` values summed over every key). */
+export const CUSTOM_FIELD_FILTERS_MAX_IN_VALUES = 100;
+
+/**
+ * A list request's custom-field filters, keyed by definition key. The key
+ * grammar is the definition's, so `__proto__` and anything with a dot, a colon
+ * or markup is refused here. `constructor` matches it: a consumer looks keys up
+ * through a `Map` or `Object.hasOwn`, never a plain-object index.
+ */
+const customFieldFiltersRecordSchema = z
+  .record(customFieldDefinitionSchema.shape.key, customFieldFilterSchema)
+  .refine(
+    (filters) => Object.keys(filters).length <= CUSTOM_FIELD_FILTERS_MAX_KEYS,
+    'Too many custom-field filters',
+  )
+  .refine(
+    (filters) =>
+      Object.values(filters).reduce((count, filter) => count + (filter.in?.length ?? 0), 0) <=
+      CUSTOM_FIELD_FILTERS_MAX_IN_VALUES,
+    'Too many custom-field filter values',
+  );
+
+export const customFieldFiltersSchema = z
+  .unknown()
+  .superRefine((value, ctx) => {
+    // Zod's record skips an own `__proto__` key without a word; refuse it, so
+    // the request reads as refused rather than as a filter quietly dropped.
+    if (typeof value === 'object' && value !== null && Object.hasOwn(value, '__proto__')) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid custom-field key', path: ['__proto__'] });
+    }
+  })
+  .pipe(customFieldFiltersRecordSchema);
+export type CustomFieldFilters = z.infer<typeof customFieldFiltersSchema>;
+
+/**
+ * The `customFieldFilters` query parameter: {@link customFieldFiltersSchema}
+ * as JSON, at most 8000 characters.
+ *
+ * **Idempotent.** The route validator replaces `request.query` with its parsed
+ * output and a handler may parse it again with the same query schema, so an
+ * already-parsed object is validated rather than refused. A repeated parameter
+ * (an array) matches neither branch and is refused.
+ */
+export const customFieldFiltersQueryParamSchema = z
+  .union([z.string().max(8000), customFieldFiltersSchema])
+  .optional()
+  .transform((raw, ctx): CustomFieldFilters | undefined => {
+    if (raw === undefined || raw === '') return undefined;
+    if (typeof raw !== 'string') return raw;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'customFieldFilters is not JSON' });
+      return z.NEVER;
+    }
+    const result = customFieldFiltersSchema.safeParse(parsed);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        // Relative to this parameter: the query schema names it already.
+        ctx.addIssue({ code: 'custom', message: issue.message, path: [...issue.path] });
+      }
+      return z.NEVER;
+    }
+    return result.data;
+  });
+
+/**
+ * One custom field an admin list offers as a filter. Deliberately narrow: no
+ * `audience`, `required`, `config`, `listFilter`, `id` or `sortOrder`.
+ */
+export const customFieldListFilterFieldSchema = z
+  .object({
+    key: customFieldDefinitionSchema.shape.key,
+    valueType: customFieldValueTypeSchema,
+    label: localizedLabelSchema,
+    labelDefault: z.string(),
+    options: z.array(
+      z.object({ value: z.string(), label: localizedLabelSchema, labelDefault: z.string() }),
+    ),
+  })
+  .strict();
+export type CustomFieldListFilterField = z.infer<typeof customFieldListFilterFieldSchema>;
+
+/**
+ * Feature 175 — one field open on a buyer input surface, as the public read
+ * `GET /api/v1/custom-fields/input-surfaces/:surface` answers it
+ * (`specs/175-buyer-input-custom-fields/contracts/input-surface-read.md`).
+ * Labels are resolved in the request's language with `labelDefault` as the
+ * fallback. Never a stored value, the audience, the admin access level or
+ * `config`; never a `page_builder` field.
+ */
+export const inputSurfaceFieldSchema = z.object({
+  key: z.string(),
+  valueType: customFieldValueTypeSchema.exclude(['page_builder']),
+  required: z.boolean(),
+  label: z.string(),
+  /** `[]` unless the field is `select` / `multiselect`. */
+  options: z.array(z.object({ value: z.string(), label: z.string() })),
+  sortOrder: z.number().int(),
+});
+export type InputSurfaceField = z.infer<typeof inputSurfaceFieldSchema>;
+
+/**
+ * The fields open on one surface, per entity type in display order. An
+ * unknown surface, or one no entity type declares, answers `entities: {}`.
+ */
+export const inputSurfaceFieldsResponseSchema = z.object({
+  data: z.object({
+    surface: z.string(),
+    entities: z.partialRecord(supportedEntityTypeSchema, z.array(inputSurfaceFieldSchema)),
+  }),
+});
+export type InputSurfaceFieldsResponse = z.infer<typeof inputSurfaceFieldsResponseSchema>;
+
+export const customFieldListFilterFieldsResponseSchema = z.object({
+  data: z.array(customFieldListFilterFieldSchema),
+});
+export type CustomFieldListFilterFieldsResponse = z.infer<
+  typeof customFieldListFilterFieldsResponseSchema
+>;
 
 /**
  * What `CustomFieldValuePort.validateAndMerge` throws, as a **shape** rather
@@ -234,6 +677,21 @@ export const CUSTOM_FIELD_DEFINITION_ERROR_CODES = [
   'entity_type_unknown',
   'value_type_locked',
   'option_in_use',
+  // Feature 157 — `listFilter` set on a definition whose entity type does not offer it.
+  'list_filter_unsupported',
+  // Feature 162 — a carry target turned on that cannot take the definition's values.
+  'carry_incompatible',
+  // Feature 172 — a value type the definition's entity type does not offer (`page_builder` off `product`).
+  'value_type_unsupported',
+  // Feature 175 (research R-4) — the four refusals of the buyer-input and
+  // admin-access attributes, each judged on the RESULTING definition: a
+  // surface the entity type does not offer; an open field whose audience is
+  // not `customer`; an open `page_builder` field; a `required` field that is
+  // not `edit` in the admin.
+  'customer_input_unsupported',
+  'customer_input_audience',
+  'customer_input_value_type',
+  'admin_access_required',
 ] as const;
 export type CustomFieldDefinitionErrorCode =
   (typeof CUSTOM_FIELD_DEFINITION_ERROR_CODES)[number];
@@ -277,6 +735,13 @@ export interface CustomFieldDefinitionRecord {
   audience: CustomFieldAudience;
   sortOrder: number;
   config: Record<string, unknown>;
+  listFilter: boolean;
+  /** Feature 162 — see {@link customFieldCarryToSchema}. */
+  carryTo: SupportedEntityType[];
+  /** Feature 175 — the input surfaces a buyer may supply the value on. */
+  customerInput: CustomFieldInputSurface[];
+  /** Feature 175 — see {@link customFieldAdminAccessSchema}. */
+  adminAccess: CustomFieldAdminAccess;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -412,7 +877,70 @@ export interface CustomFieldValuePort {
     entityType: SupportedEntityType,
     bag: Record<string, unknown>,
   ): Promise<Record<string, unknown>>;
+  /**
+   * Feature 175 — values a BUYER supplies on a declared input surface, for a record
+   * being created. Refuses (never drops) any key not open on `surface`; enforces
+   * `required` only among open definitions; text ≤ 1 000 chars after trimming,
+   * whitespace-only = empty; ≤ 50 keys, refused before any definition is read.
+   * Returns the bag to store. Throws the CustomFieldValidationError family.
+   *
+   * The administrator's {@link validateAndMerge} is a different rule set and is
+   * never the one a buyer-facing route calls: it drops unknown keys and
+   * enforces `required` across every definition of the type.
+   *
+   * Each refusal's `message` is a sentence a buyer can read beside the field —
+   * it never names the key or echoes the value. Given `language` (the
+   * request's, `request.responseLanguage()`), it is worded in that language by
+   * the owning module (`specs/conventions/module-i18n.md`: an HTTP response is
+   * translated by the backend, and `code` stays on the wire beside it).
+   */
+  validateForCustomerInput(
+    entityType: SupportedEntityType,
+    values: Record<string, unknown> | undefined,
+    surface: CustomFieldInputSurface,
+    language?: SupportedLanguage,
+  ): Promise<Record<string, unknown>>;
 }
+
+/**
+ * Feature 175 (research R-11) — one admin write path of a custom-field host,
+ * as the host declares it in the `customFieldWrites` export beside its
+ * manifest. Read as literal source by `check:custom-field-writes`; typed here
+ * so `tsc` checks the export too.
+ *
+ * - `create` / `update` / `values` — the route (`method` + `path`) and the
+ *   name of the `@endora-commerce/contracts` export validating its body, which
+ *   must carry `customFieldValues` (a `values` body is the value-bag schema
+ *   itself).
+ * - an exemption — a `create` or `update` the host does not offer values on,
+ *   with the non-empty reason why.
+ * - `buyer-input` — a route on which a buyer supplies values for an input
+ *   `surface`; `at` is the dotted path of the bag inside `body`, and `test`
+ *   the file proving its refusals.
+ */
+export type CustomFieldWriteDeclaration =
+  | {
+      readonly entityType: SupportedEntityType;
+      readonly kind: 'create' | 'update' | 'values';
+      readonly method: 'POST' | 'PATCH' | 'PUT';
+      readonly path: string;
+      readonly body: string;
+    }
+  | {
+      readonly entityType: SupportedEntityType;
+      readonly kind: 'create' | 'update';
+      readonly exempt: string;
+    }
+  | {
+      readonly entityType: SupportedEntityType;
+      readonly kind: 'buyer-input';
+      readonly surface: CustomFieldInputSurface;
+      readonly method: 'POST';
+      readonly path: string;
+      readonly body: string;
+      readonly at: string;
+      readonly test: string;
+    };
 
 // `CustomFieldValidationFailure` and `isCustomFieldValidationFailure` are
 // declared once, above, beside the other D-77 structural guards. Two Phase-C
@@ -422,3 +950,288 @@ export interface CustomFieldValuePort {
 // Error'` test rather than re-parsing every entry: it is the check that still
 // works once each module is its own npm package (F4), which is the reason the
 // guard exists, and it costs nothing on an error path.
+
+/**
+ * Container name: `customFieldListFilterPort`. Owner: `custom_fields`
+ * (feature 157).
+ *
+ * The admin lists of `orders`, `quote_requests` and `crm` ask it which custom
+ * fields they offer as filters, and turn a request's filters into one
+ * server-side condition.
+ */
+export interface CustomFieldListFilterPort {
+  /** The served definitions of the type with `listFilter` on; `[]` when the type offers none. */
+  listFilterable(entityType: SupportedEntityType): Promise<CustomFieldListFilterField[]>;
+  /**
+   * The whole request's filters as **one** condition — one scan of the bound
+   * host table, every predicate of every key ANDed in its WHERE — or `null`
+   * when nothing applies. Throws a {@link CustomFieldFilterUnavailableFailure}
+   * naming every key that is not offered.
+   */
+  condition(
+    entityType: SupportedEntityType,
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null>;
+}
+
+/**
+ * `select t."id" from "<bound table>" t where (<p1>) and (<p2>) …` — every key
+ * and value bound. A caller wraps it in a fresh raw fragment for every
+ * statement it runs; a raw fragment is not reused.
+ */
+export interface CustomFieldListFilterCondition {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
+/** What {@link CustomFieldListFilterPort.condition} throws for filters a list does not offer. */
+export interface CustomFieldFilterUnavailableFailure extends Error {
+  readonly name: 'CustomFieldFilterUnavailableError';
+  readonly keys: readonly string[];
+}
+
+/**
+ * Throws the `ZodError` naming every inverted range of `filters` — a minimum
+ * above its maximum, a start date after its end — each at `[key, 'min']` or
+ * `[key, 'from']`, answered 400 `VALIDATION_FAILED`. Such a filter could only
+ * ever match nothing; refusing it says so instead of showing an empty list.
+ */
+export function assertCustomFieldFilterRanges(filters: CustomFieldFilters): void {
+  const issues: Array<{ code: 'custom'; path: string[]; message: string; input: unknown }> = [];
+  for (const key of Object.keys(filters)) {
+    const filter = filters[key];
+    if (filter === undefined) continue;
+    if (filter.min !== undefined && filter.max !== undefined && Number(filter.min) > Number(filter.max)) {
+      issues.push({ code: 'custom', path: [key, 'min'], message: 'The minimum is above the maximum', input: filter.min });
+    }
+    if (filter.from !== undefined && filter.to !== undefined && filter.from > filter.to) {
+      issues.push({ code: 'custom', path: [key, 'from'], message: 'The start date is after the end date', input: filter.from });
+    }
+  }
+  if (issues.length > 0) throw new z.ZodError(issues as never);
+}
+
+/** A refused list filter naming `keys`, in the shape {@link isCustomFieldFilterUnavailableFailure} narrows. */
+export function customFieldFilterUnavailable(
+  keys: readonly string[],
+  message = 'Custom-field filters are not available on this list.',
+): CustomFieldFilterUnavailableFailure {
+  return Object.assign(new Error(message), {
+    name: 'CustomFieldFilterUnavailableError' as const,
+    keys: [...keys],
+  });
+}
+
+/** Whether `error` is a refused list filter, narrowed by shape (as the sibling guards above). */
+export function isCustomFieldFilterUnavailableFailure(
+  error: unknown,
+): error is CustomFieldFilterUnavailableFailure {
+  return (
+    error instanceof Error &&
+    error.name === 'CustomFieldFilterUnavailableError' &&
+    Array.isArray((error as { keys?: unknown }).keys)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// --- value carry-over (specs/162-custom-fields-value-carry/) ---------------
+// ---------------------------------------------------------------------------
+
+/** One side of a carry pair, as the compatibility rule reads it. */
+export interface CustomFieldCarryParty {
+  valueType: CustomFieldValueType;
+  audience: CustomFieldAudience;
+  options: ReadonlyArray<{ value: string }>;
+}
+
+/** Why a carry from one definition to the same-key definition of another type cannot work. */
+export type CustomFieldCarryIncompatibility =
+  | { reason: 'target_missing' }
+  | {
+      reason: 'value_type_mismatch';
+      sourceValueType: CustomFieldValueType;
+      targetValueType: CustomFieldValueType;
+    }
+  | { reason: 'options_missing'; missingOptionValues: string[] }
+  | { reason: 'audience_mismatch' };
+
+/**
+ * The one compatibility rule of a carry pair (feature 162). The server refuses
+ * turning a carry on with it, the admin marks drifted carries with it, and the
+ * carry port applies its type and audience halves at conversion. Pure: no I/O.
+ *
+ * Every reason, in this order; `[]` means compatible:
+ * - no target → `target_missing`, and nothing else;
+ * - value types differ → `value_type_mismatch` — no widening, and the options
+ *   question is not asked;
+ * - `select` / `multiselect`: the source option values the target lacks, in
+ *   source order (labels ignored, extra target options fine) → `options_missing`;
+ * - an `internal` source into a `customer` target → `audience_mismatch`.
+ */
+export function assessCustomFieldCarry(
+  source: CustomFieldCarryParty,
+  target: CustomFieldCarryParty | null,
+): CustomFieldCarryIncompatibility[] {
+  if (target === null) return [{ reason: 'target_missing' }];
+  const reasons: CustomFieldCarryIncompatibility[] = [];
+  if (source.valueType !== target.valueType) {
+    reasons.push({
+      reason: 'value_type_mismatch',
+      sourceValueType: source.valueType,
+      targetValueType: target.valueType,
+    });
+  } else if (source.valueType === 'select' || source.valueType === 'multiselect') {
+    const offered = new Set(target.options.map((option) => option.value));
+    const missingOptionValues = source.options
+      .map((option) => option.value)
+      .filter((value) => !offered.has(value));
+    if (missingOptionValues.length > 0) {
+      reasons.push({ reason: 'options_missing', missingOptionValues });
+    }
+  }
+  if (source.audience === 'internal' && target.audience === 'customer') {
+    reasons.push({ reason: 'audience_mismatch' });
+  }
+  return reasons;
+}
+
+/**
+ * Why one value was not carried at conversion. `value_invalid` is the
+ * per-value twin of `options_missing`: the value itself does not satisfy the
+ * target definition.
+ */
+export const customFieldCarrySkipReasonSchema = z.enum([
+  'target_missing',
+  'value_type_mismatch',
+  'audience_mismatch',
+  'value_invalid',
+]);
+export type CustomFieldCarrySkipReason = z.infer<typeof customFieldCarrySkipReasonSchema>;
+
+/**
+ * The longest string a skip's label snapshot holds — a definition's
+ * `labelDefault` cap. `custom_fields` cuts the snapshot to it when it takes it,
+ * since a definition's per-locale labels are not capped.
+ */
+export const CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX = 200;
+
+/**
+ * The skipped field's label as its **source** definition read when the value
+ * was skipped (owner ruling 2026-10-21, V3): a history line names the field in
+ * the reader's language without asking `custom_fields` for definitions, so an
+ * administrator without `custom_fields:read` reads it too. A snapshot — a later
+ * rename does not rewrite history. Each string is at most
+ * {@link CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX} characters.
+ */
+export const customFieldCarrySkipLabelSchema = z.object({
+  labelDefault: z.string().max(CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX),
+  labels: z.record(z.string(), z.string().max(CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX)),
+});
+export type CustomFieldCarrySkipLabel = z.infer<typeof customFieldCarrySkipLabelSchema>;
+
+/** `label` is absent on a skip recorded before the snapshot existed. */
+export const customFieldCarrySkipSchema = z.object({
+  key: z.string(),
+  reason: customFieldCarrySkipReasonSchema,
+  label: customFieldCarrySkipLabelSchema.optional(),
+});
+
+/** One key not carried, with its reason and the source field's label snapshot. */
+export interface CustomFieldCarrySkip {
+  readonly key: string;
+  readonly reason: CustomFieldCarrySkipReason;
+  readonly label?: CustomFieldCarrySkipLabel;
+}
+
+/**
+ * A plain copy of a skip for a record to store: `key`, `reason` and — when the
+ * skip has one — a copy of its label snapshot (`labelDefault` and `labels`).
+ * **It strips every other field**: whatever else the value carries, on the skip
+ * or on its label, is dropped and never reaches a stored record.
+ */
+export function customFieldCarrySkipRecord(
+  skip: Omit<CustomFieldCarrySkip, 'label'> & { readonly label?: CustomFieldCarrySkipLabel | undefined },
+): CustomFieldCarrySkip {
+  const { key, reason, label } = skip;
+  return label === undefined
+    ? { key, reason }
+    : { key, reason, label: { labelDefault: label.labelDefault, labels: { ...label.labels } } };
+}
+
+/**
+ * What {@link CustomFieldCarryPort.plan} answers: `values` is the target bag to
+ * persist — the target's own bag plus the carried keys, never a removed or
+ * overwritten key — `carried` the keys added and `skipped` the keys not
+ * carried, each with its reason.
+ */
+export interface CustomFieldCarryPlan {
+  readonly values: Record<string, unknown>;
+  readonly carried: readonly string[];
+  readonly skipped: readonly CustomFieldCarrySkip[];
+}
+
+/**
+ * Container name: `customFieldCarryPort`. Owner: `custom_fields` (feature 162).
+ *
+ * The host that owns a carry's **target** record asks it which source values
+ * carry into its own current bag, and persists the answer in its own write.
+ * Only source definitions whose `carryTo` names the target type and whose value
+ * is non-empty are considered; a target key that already holds a value is kept
+ * and neither carried nor skipped; unrelated target fields — required ones
+ * included — are never consulted, so a host must not run `validateAndMerge`
+ * over the answer. Either type's owner absent → an empty plan.
+ *
+ * It performs **no** database write, **no** audit and emits **no** event.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`, so nothing
+ * half-executes. Whether `custom_fields` has an off state at all is its manifest's
+ * `activation` to say, not this line's: a module declaring
+ * `nonDeactivatable` never enters one.
+ */
+export interface CustomFieldCarryPort {
+  plan(input: {
+    sourceType: SupportedEntityType;
+    targetType: SupportedEntityType;
+    sourceValues: Record<string, unknown>;
+    targetValues: Record<string, unknown>;
+  }): Promise<CustomFieldCarryPlan>;
+}
+
+/** What a receiver answers: `not-found` for a missing record and for another Organization's alike. */
+export interface CustomFieldCarryReceipt {
+  readonly outcome: 'applied' | 'not-found';
+  readonly carried: readonly string[];
+  readonly skipped: readonly CustomFieldCarrySkip[];
+}
+
+/**
+ * Container name: `orderCustomFieldCarryPort`. Owner: `orders`.
+ * Container name: `quoteRequestCustomFieldCarryPort`. Owner: `quote_requests`.
+ * (Feature 162.)
+ *
+ * `crm` pushes a Sales Opportunity's values to the document created from it,
+ * once its origin link is made; the document's owner carries them into empty
+ * fields in one Command of its own and records what it skipped on the record.
+ * `not-found` for a missing record **and** for a record of another
+ * Organization — one answer, no existence leak; `applied` otherwise, even when
+ * nothing was carried. A second call carries nothing more (fill-empty).
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`, so nothing
+ * half-executes. `orders` is not deactivatable; for `quote_requests` the caller
+ * decides presence first and does not call.
+ */
+export interface CustomFieldCarryReceiverPort {
+  receiveCarriedValues(input: {
+    recordId: string;
+    organizationId: string;
+    source: {
+      entityType: 'opportunity';
+      recordId: string;
+      /** The source's business number, for the skip entry's sentence. */
+      reference: string;
+      values: Record<string, unknown>;
+    };
+  }): Promise<CustomFieldCarryReceipt>;
+}

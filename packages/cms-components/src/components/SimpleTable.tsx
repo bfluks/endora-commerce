@@ -1,7 +1,7 @@
 'use client';
 
 import { type ComponentConfig, type Field, type PuckComponent, FieldLabel } from '@puckeditor/core';
-import { withHideOn } from '@endora-commerce/page-builder-core';
+import { PB_FIELD_INPUT_CLASS, withHideOn, createToggleField } from '@endora-commerce/page-builder-core';
 import { usePreviewBreakpointTier } from '@endora-commerce/page-builder-core/client';
 import type {
   SimpleTableCell,
@@ -17,7 +17,8 @@ import {
   DEFAULT_BOX_PROPS,
 } from '../fields/shared-fields.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+/** The page builder's field input class (feature 163, T116: Puck's own class name went stale in 0.23). */
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
 function parsePipeHeaders(raw: string): SimpleTableHeader[] {
   return raw
@@ -176,14 +177,7 @@ const BASE_TABLE_FIELDS = {
     },
     defaultItemProps: { label: 'Column' },
   },
-  striped: {
-    type: 'radio' as const,
-    label: 'Striped rows',
-    options: [
-      { label: 'Yes', value: true },
-      { label: 'No', value: false },
-    ],
-  },
+  striped: createToggleField({ label: 'Striped rows', defaultValue: true }),
   margin: BOX_MARGIN_FIELD,
   padding: BOX_PADDING_FIELD,
   border: BOX_BORDER_FIELD,

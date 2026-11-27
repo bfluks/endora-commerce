@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -13,6 +13,6 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  * (alongside the single order view); keep this path working for existing
  * links, bookmarks, and post-checkout redirects.
  */
-export default function AccountOrdersRedirect(): never {
-  redirect('/orders');
+export default async function AccountOrdersRedirect(): Promise<never> {
+  return await localeRedirect('/orders');
 }

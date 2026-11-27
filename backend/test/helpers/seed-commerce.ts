@@ -11,6 +11,9 @@ import {
 import { SEED_PRODUCT_101_ID } from './seed-catalog.js';
 import { STUB_CUSTOMER_PASSWORD } from './seed-organizations.js';
 import { Order } from './package-entities.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
+import { systemDefaultSalesChannelId } from './sales-channel-fixtures.js';
+import { predefinedRoleIdOf } from './seed-organization-roles.js';
 
 /**
  * Deterministic fixture IDs referenced by the US2 contract tests.
@@ -55,7 +58,7 @@ export async function seedUs2Commerce(em: EntityManager): Promise<void> {
     statusOnSuccess: 'paid',
     statusOnFailure: 'cancelled',
   });
-  await em.persistAndFlush([delivery, payment]);
+  await em.persist([delivery, payment]).flush();
 
   const deliveryAddress = em.create(Address, {
     id: SEED_ADDRESS_DELIVERY_ID,
@@ -79,7 +82,7 @@ export async function seedUs2Commerce(em: EntityManager): Promise<void> {
     country: 'PL',
     isDefault: true,
   });
-  await em.persistAndFlush([deliveryAddress, billingAddress]);
+  await em.persist([deliveryAddress, billingAddress]).flush();
 
   const stock = em.create(StockLevel, {
     productId: SEED_PRODUCT_101_ID,
@@ -87,7 +90,31 @@ export async function seedUs2Commerce(em: EntityManager): Promise<void> {
     onHand: 100,
     reserved: 0,
   });
-  await em.persistAndFlush(stock);
+  await em.persist(stock).flush();
+}
+
+/**
+ * Tops up the stock of exactly the products a file places orders for, so no
+ * placement in it is refused on availability (issue #607).
+ *
+ * The statement it replaces, `update "stock_levels" set "on_hand" = 100000`,
+ * rewrote every stock level in the database — rows other files had seeded and
+ * were about to assert over. Naming the products is the scope: a file passes
+ * the ones it orders, and nobody else's stock moves. An empty list is refused
+ * rather than read as "every product", which is the shape this exists to end.
+ */
+export async function topUpStock(
+  em: EntityManager,
+  productIds: readonly string[],
+  onHand = 100_000,
+): Promise<void> {
+  if (productIds.length === 0) {
+    throw new Error('topUpStock: name the products this file places orders for');
+  }
+  const placeholders = productIds.map(() => '?').join(', ');
+  await em
+    .getConnection()
+    .execute(`update "stock_levels" set "on_hand" = ? where "product_id" in (${placeholders})`, [onHand, ...productIds]);
 }
 
 /**
@@ -113,7 +140,10 @@ export async function seedSuspendedOrganization(em: EntityManager): Promise<void
       country: 'PL',
     },
   });
-  await em.persistAndFlush(org);
+  await em.persist(org).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [TEST_SUSPENDED_ORGANIZATION_ID]);
   const customer = em.create(CustomerAccount, {
     id: TEST_SUSPENDED_CUSTOMER_ID,
     organizationId: TEST_SUSPENDED_ORGANIZATION_ID,
@@ -121,18 +151,19 @@ export async function seedSuspendedOrganization(em: EntityManager): Promise<void
     passwordHash,
     firstName: 'Suspended',
     lastName: 'Customer',
-    role: 'organization_admin',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_SUSPENDED_ORGANIZATION_ID, 'administrator'),
     emailVerifiedAt: new Date(),
   });
   // Needs a non-empty cart so the order-place path passes the CART_EMPTY check
   // and reaches the suspended guard.
-  await em.persistAndFlush(customer);
+  await em.persist(customer).flush();
   const cart = em.create(Cart, {
     customerAccountId: customer.id,
     organizationId: org.id,
     status: 'active',
+    salesChannelId: await systemDefaultSalesChannelId(em),
   });
-  await em.persistAndFlush(cart);
+  await em.persist(cart).flush();
   const item = em.create(CartItem, {
     cartId: cart.id,
     productId: SEED_PRODUCT_101_ID,
@@ -140,7 +171,7 @@ export async function seedSuspendedOrganization(em: EntityManager): Promise<void
     unitPrice: '19.99',
     currency: 'PLN',
   });
-  await em.persistAndFlush(item);
+  await em.persist(item).flush();
 }
 
 /**
@@ -156,7 +187,7 @@ export async function seedStockRaceFixture(em: EntityManager): Promise<void> {
     passwordHash,
     firstName: 'Race',
     lastName: 'A',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
   const b = em.create(CustomerAccount, {
@@ -166,10 +197,10 @@ export async function seedStockRaceFixture(em: EntityManager): Promise<void> {
     passwordHash,
     firstName: 'Race',
     lastName: 'B',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
-  await em.persistAndFlush([a, b]);
+  await em.persist([a, b]).flush();
 
   // Cap stock at 1 — overwrite whatever seedUs2Commerce wrote.
   await em.getConnection().execute(
@@ -177,13 +208,15 @@ export async function seedStockRaceFixture(em: EntityManager): Promise<void> {
     [SEED_PRODUCT_101_ID],
   );
 
+  const salesChannelId = await systemDefaultSalesChannelId(em);
   for (const cust of [a, b]) {
     const cart = em.create(Cart, {
       customerAccountId: cust.id,
       organizationId: TEST_ORGANIZATION_ID,
       status: 'active',
+      salesChannelId,
     });
-    await em.persistAndFlush(cart);
+    await em.persist(cart).flush();
     const item = em.create(CartItem, {
       cartId: cart.id,
       productId: SEED_PRODUCT_101_ID,
@@ -191,18 +224,42 @@ export async function seedStockRaceFixture(em: EntityManager): Promise<void> {
       unitPrice: '19.99',
       currency: 'PLN',
     });
-    await em.persistAndFlush(item);
+    await em.persist(item).flush();
   }
 }
 
-/** Cart seed for the primary stub customer — used by T098 (empty) inverse and T103 happy path. */
-export async function seedCartForStubCustomer(em: EntityManager): Promise<void> {
+/**
+ * Cart seed for the primary stub customer — used by T098 (empty) inverse and T103 happy path.
+ *
+ * The basket is the one of `salesChannelId`, the system default unless a test
+ * places on another channel: a customer holds one basket per channel and an
+ * order is placed from the basket of its own (`specs/154-sales-channel-access/`).
+ * An active basket the customer already holds on that channel is replaced —
+ * `carts_one_active_per_customer_per_channel` admits one, and a seed that left
+ * the old one beside the new would have no basket to write.
+ */
+export async function seedCartForStubCustomer(
+  em: EntityManager,
+  salesChannelId?: string,
+): Promise<void> {
+  const channelId = salesChannelId ?? (await systemDefaultSalesChannelId(em));
+  const previous = await em.find(Cart, {
+    customerAccountId: TEST_CUSTOMER_ID,
+    salesChannelId: channelId,
+    status: 'active',
+  });
+  if (previous.length > 0) {
+    const ids = previous.map((c) => c.id);
+    await em.nativeDelete(CartItem, { cartId: { $in: ids } });
+    await em.nativeDelete(Cart, { id: { $in: ids } });
+  }
   const cart = em.create(Cart, {
     customerAccountId: TEST_CUSTOMER_ID,
     organizationId: TEST_ORGANIZATION_ID,
     status: 'active',
+    salesChannelId: channelId,
   });
-  await em.persistAndFlush(cart);
+  await em.persist(cart).flush();
   const item = em.create(CartItem, {
     cartId: cart.id,
     productId: SEED_PRODUCT_101_ID,
@@ -210,7 +267,7 @@ export async function seedCartForStubCustomer(em: EntityManager): Promise<void> 
     unitPrice: '19.99',
     currency: 'PLN',
   });
-  await em.persistAndFlush(item);
+  await em.persist(item).flush();
 }
 
 /** T101 fixture — an Order already in status=shipped. Admin shipped→new → 409. */
@@ -241,7 +298,7 @@ export async function seedShippedOrder(em: EntityManager): Promise<void> {
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
 }
 
 /** T102 fixture — two Orders plus their invoice rows in different states. */
@@ -276,7 +333,7 @@ export async function seedOrdersForInvoiceTests(em: EntityManager): Promise<void
 
   const pendingOrder = baseOrder(RFQ_ORDER_INVOICE_PENDING_ID);
   const readyOrder = baseOrder(RFQ_ORDER_INVOICE_READY_ID);
-  await em.persistAndFlush([pendingOrder, readyOrder]);
+  await em.persist([pendingOrder, readyOrder]).flush();
 
   const pendingInvoice = em.create(Invoice, {
     orderId: pendingOrder.id,
@@ -294,5 +351,5 @@ export async function seedOrdersForInvoiceTests(em: EntityManager): Promise<void
     total: '24.59',
     status: 'ready',
   });
-  await em.persistAndFlush([pendingInvoice, readyInvoice]);
+  await em.persist([pendingInvoice, readyInvoice]).flush();
 }

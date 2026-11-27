@@ -8,6 +8,7 @@ import { CustomFieldDefinition } from '../entities/custom-field-definition.entit
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
 import {
   applyCreateDefinition,
+  assertCarryTargetsAccepted,
   CustomFieldDefinitionError,
   applyCreateOption,
   applyDeleteDefinition,
@@ -40,6 +41,27 @@ function snapshotDefinition(def: CustomFieldDefinition): Record<string, unknown>
     audience: def.audience,
     sortOrder: def.sortOrder,
     config: def.config,
+    listFilter: def.listFilter,
+    carryTo: [...def.carryTo],
+    // Feature 175 (FR-008) — both attributes are audited like any other.
+    customerInput: [...(def.customerInput ?? [])],
+    adminAccess: def.adminAccess ?? 'edit',
+  };
+}
+
+/**
+ * Every member an option edit can change (feature 157): an audit entry whose
+ * before and after differ in exactly what the operator changed — the labels,
+ * the default flag or the position — rather than looking unchanged.
+ */
+function snapshotOption(o: CustomFieldOption): Record<string, unknown> {
+  return {
+    id: o.id,
+    value: o.value,
+    label: o.label,
+    labelDefault: o.labelDefault,
+    isDefault: o.isDefault,
+    sortOrder: o.sortOrder,
   };
 }
 
@@ -67,8 +89,22 @@ export function createDefinitionCommand(
           'stored_values_exist',
           `Records already hold values under "${input.key}", left by a field that was deleted. ` +
             'Create the field as internal, review those values, then change who can see it.',
+          { key: input.key },
         );
       }
+      // Feature 162 — every carry target of a new definition is judged now,
+      // in this transaction, against the same-key definition of the target.
+      await assertCarryTargetsAccepted(
+        em,
+        {
+          entityType: input.entityType,
+          key: input.key,
+          valueType: input.valueType,
+          audience: input.audience,
+          options: input.options,
+        },
+        input.carryTo,
+      );
       const def = await applyCreateDefinition(em, input);
       return { result: def, after: snapshotDefinition(def) };
     },
@@ -90,6 +126,25 @@ export function updateDefinitionCommand(
       return def ? snapshotDefinition(def) : null;
     },
     run: async ({ em }) => {
+      // Feature 162 — only the carry targets this patch turns on are judged:
+      // one already on stays as configured whatever has drifted since (FR-019).
+      const current = await em.findOne(CustomFieldDefinition, { id });
+      const added = current
+        ? (patch.carryTo ?? []).filter((target) => !current.carryTo.includes(target))
+        : [];
+      if (current && added.length > 0) {
+        await assertCarryTargetsAccepted(
+          em,
+          {
+            entityType: current.entityType,
+            key: current.key,
+            valueType: patch.valueType ?? current.valueType,
+            audience: patch.audience ?? current.audience,
+            options: await em.find(CustomFieldOption, { definitionId: id }),
+          },
+          added,
+        );
+      }
       const def = await applyUpdateDefinition(em, id, patch, probes);
       return { result: def, after: snapshotDefinition(def) };
     },
@@ -141,11 +196,11 @@ export function updateOptionCommand(
     objectId: optionId,
     capture: async ({ em }) => {
       const o = await em.findOne(CustomFieldOption, { id: optionId });
-      return o ? { id: o.id, value: o.value, labelDefault: o.labelDefault } : null;
+      return o ? snapshotOption(o) : null;
     },
     run: async ({ em }) => {
       const o = await applyUpdateOption(em, definitionId, optionId, patch);
-      return { result: o, after: { id: o.id, value: o.value, labelDefault: o.labelDefault } };
+      return { result: o, after: snapshotOption(o) };
     },
   };
 }

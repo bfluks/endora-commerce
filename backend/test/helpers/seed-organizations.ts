@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Organization } from './package-entities.js';
 import { CustomerAccount } from './package-entities.js';
@@ -10,6 +11,9 @@ import {
   OTHER_TEST_ORGANIZATION_ID,
   TEST_ORGANIZATION_ID,
 } from './test-actors.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
+import { predefinedRoleIdOf } from './seed-organization-roles.js';
+import { organizationTreePath } from './organization-tree.js';
 
 /**
  * Seeds the Organization + CustomerAccount rows that back the stub-session
@@ -49,7 +53,7 @@ export const TEST_ORGANIZATION_TAX_ID = 'PL0000000099';
 export async function seedOtherTestOrganization(em: EntityManager): Promise<void> {
   const existing = await em.findOne(Organization, { id: OTHER_TEST_ORGANIZATION_ID });
   if (existing) return;
-  await em.persistAndFlush(
+  await em.persist(
     em.create(Organization, {
       id: OTHER_TEST_ORGANIZATION_ID,
       name: 'Other Test Organization',
@@ -63,7 +67,10 @@ export async function seedOtherTestOrganization(em: EntityManager): Promise<void
         country: 'PL',
       },
     }),
-  );
+  ).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [OTHER_TEST_ORGANIZATION_ID]);
 }
 
 /**
@@ -85,7 +92,7 @@ export async function seedOtherTestCustomer(
   if (organizationId === OTHER_TEST_ORGANIZATION_ID) await seedOtherTestOrganization(em);
   const existing = await em.findOne(CustomerAccount, { id: OTHER_TEST_CUSTOMER_ID }, { filters: false });
   if (existing) return;
-  await em.persistAndFlush(
+  await em.persist(
     em.create(CustomerAccount, {
       id: OTHER_TEST_CUSTOMER_ID,
       organizationId,
@@ -93,10 +100,10 @@ export async function seedOtherTestCustomer(
       passwordHash: await hashPassword(STUB_CUSTOMER_PASSWORD),
       firstName: 'Stub',
       lastName: 'Other',
-      role: 'regular_user',
+      organizationRoleId: await predefinedRoleIdOf(em, organizationId, 'member'),
       emailVerifiedAt: new Date(),
     }),
-  );
+  ).flush();
 }
 
 export async function seedTestOrganizations(em: EntityManager): Promise<void> {
@@ -115,7 +122,10 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
       country: 'PL',
     },
   });
-  await em.persistAndFlush(org);
+  await em.persist(org).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [TEST_ORGANIZATION_ID]);
 
   const admin = em.create(CustomerAccount, {
     id: TEST_CUSTOMER_ID,
@@ -124,7 +134,7 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
     passwordHash,
     firstName: 'Stub',
     lastName: 'Customer',
-    role: 'organization_admin',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'administrator'),
     emailVerifiedAt: new Date(),
   });
   const rfq = em.create(CustomerAccount, {
@@ -134,7 +144,7 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
     passwordHash,
     firstName: 'Stub',
     lastName: 'RFQ',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
   const empty = em.create(CustomerAccount, {
@@ -144,10 +154,10 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
     passwordHash,
     firstName: 'Stub',
     lastName: 'Empty',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
-  await em.persistAndFlush([admin, rfq, empty]);
+  await em.persist([admin, rfq, empty]).flush();
 }
 
 /**
@@ -162,12 +172,21 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
  * The tax id is unique per call — the column is globally `@Unique` — and derived
  * from the clock rather than from a counter, so two files seeding inside one
  * run do not collide.
+ *
+ * Issue #956 — `parent` seeds a child instead of a root, with the real
+ * materialized path written by the insert itself (`organizationTreePath`). A
+ * root's path comes from the entity's create hook.
  */
 export async function seedAdHocOrganization(
   em: EntityManager,
   name = 'Fixture Organization',
+  options: { parent?: Pick<Organization, 'id' | 'path'> } = {},
 ): Promise<Organization> {
+  const id = randomUUID();
+  const { parent } = options;
   const org = em.create(Organization, {
+    id,
+    ...(parent ? { parentId: parent.id, path: organizationTreePath(id, parent) } : {}),
     name,
     taxId: `PL${String(Math.floor(performance.now() * 1000)).slice(-8).padStart(8, '0')}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`,
     status: 'active',
@@ -179,6 +198,9 @@ export async function seedAdHocOrganization(
       country: 'PL',
     },
   });
-  await em.persistAndFlush(org);
+  await em.persist(org).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [org.id]);
   return org;
 }

@@ -1,3 +1,4 @@
+import type { EntityManager } from '@mikro-orm/postgresql';
 import { describe, expect, it } from 'vitest';
 import type {
   AssetReference,
@@ -44,6 +45,48 @@ describe('megamenu contributes to the asset reference registry', () => {
     });
 
     expect(registry.owners()).toEqual(['megamenu']);
+  });
+});
+
+// Feature 166, research R-6 — a batch is answered in one statement, each hit
+// tagged with the asset it points at (the item's `assetId` or its
+// `iconAssetId`), so the library can attribute it.
+describe('megamenu attributes a two-asset batch', () => {
+  const ASSET_ITEM = '44444444-0000-4000-8000-000000000004';
+  const ASSET_ICON = '55555555-0000-4000-8000-000000000005';
+
+  it('tags each hit with the asset it matched, in one statement', async () => {
+    const statements: string[] = [];
+    const em = {
+      async execute(sql: string) {
+        statements.push(sql);
+        return [
+          { item_id: 'item-1', menu_name: 'Main menu', asset_id: ASSET_ITEM },
+          { item_id: 'item-2', menu_name: 'Footer', asset_id: ASSET_ICON },
+        ];
+      },
+    } as unknown as EntityManager;
+    const registered: AssetReferenceDescriptor[] = [];
+    registerMegamenuAssetReferences(
+      {
+        register: (d) => {
+          registered.push(d);
+        },
+        owners: () => [],
+        findReferences: async () => [],
+        findReferencesMany: async () => new Map(),
+      },
+      () => em,
+    );
+
+    const hits = await registered[0]!.findReferences([ASSET_ITEM, ASSET_ICON]);
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/as asset_id/);
+    expect(hits).toEqual([
+      { kind: 'megamenu_item_target', entityId: 'item-1', label: 'Megamenu "Main menu"', assetId: ASSET_ITEM },
+      { kind: 'megamenu_item_target', entityId: 'item-2', label: 'Megamenu "Footer"', assetId: ASSET_ICON },
+    ]);
   });
 });
 

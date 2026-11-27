@@ -7,10 +7,10 @@ import {
 /**
  * MFA module — feature 042.
  *
- * Owns two-factor authentication (TOTP + recovery codes) and federated
+ * Owns two-step verification (TOTP + recovery codes) and federated
  * sign-in (Google / Microsoft) across the Storefront and Admin UI, plus the
  * per-surface / per-channel / per-organization enablement & enforcement
- * policy and Platform-Admin 2FA reset.
+ * policy and Platform-Admin two-step verification reset.
  *
  * `mfa` is a singular acronym module name — a documented Principle VI
  * carve-out (see specs/042-mfa-authentication/plan.md Complexity Tracking).
@@ -28,42 +28,42 @@ const settings = defineModuleSettingsManifest({
       code: MFA_SETTING_CODES.ACTIVATION,
       name: 'MFA enabled',
       description:
-        'Switches the whole module on or off: two-factor enrolment and challenges, the federated sign-in buttons, the per-organization enforcement policy and the admin reset screen. Nothing is dropped — enrolled secrets, recovery codes and every policy value stay in the database and apply again exactly as before when you switch it back on.',
+        'Switches the whole module on or off: two-step verification enrolment and challenges, the federated sign-in buttons, the per-organization enforcement policy and the admin reset screen. Nothing is dropped — enrolled secrets, recovery codes and every policy value stay in the database and apply again exactly as before when you switch it back on.',
       groupCode: 'mfa',
       valueType: 'boolean',
       defaultValue: true,
     },
     {
       code: MFA_SETTING_CODES.ADMIN_TOTP_ENABLED,
-      name: 'Admin UI — allow 2FA',
-      description: 'When enabled, admin users may set up TOTP two-factor authentication.',
+      name: 'Admin UI — allow two-step verification',
+      description: 'When enabled, admin users may set up TOTP two-step verification.',
       groupCode: 'mfa',
       valueType: 'boolean',
       defaultValue: false,
     },
     {
       code: MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED,
-      name: 'Admin UI — enforce 2FA',
+      name: 'Admin UI — enforce two-step verification',
       description:
-        'When enabled, admin users must complete 2FA setup before accessing the Admin UI.',
+        'When enabled, admin users must complete two-step verification setup before accessing the Admin UI.',
       groupCode: 'mfa',
       valueType: 'boolean',
       defaultValue: false,
     },
     {
       code: MFA_SETTING_CODES.STOREFRONT_TOTP_ENABLED,
-      name: 'Storefront — allow 2FA',
+      name: 'Storefront — allow two-step verification',
       description:
-        'When enabled, customers may set up TOTP two-factor authentication. Can be overridden per sales channel.',
+        'When enabled, customers may set up TOTP two-step verification. Can be overridden per sales channel.',
       groupCode: 'mfa',
       valueType: 'boolean',
       defaultValue: false,
     },
     {
       code: MFA_SETTING_CODES.STOREFRONT_TOTP_ENFORCED,
-      name: 'Storefront — enforce 2FA',
+      name: 'Storefront — enforce two-step verification',
       description:
-        'When enabled, customers must complete 2FA setup before using the storefront. Can be overridden per sales channel.',
+        'When enabled, customers must complete two-step verification setup before using the storefront. Can be overridden per sales channel.',
       groupCode: 'mfa',
       valueType: 'boolean',
       defaultValue: false,
@@ -112,36 +112,19 @@ export const manifest = defineModuleManifest({
   id: 'mfa',
   name: 'MFA',
   description:
-    'Two-factor authentication (TOTP + recovery codes) and Google/Microsoft sign-in, with per-scope enablement/enforcement and admin reset.',
+    'Two-step verification (TOTP + recovery codes) and Google/Microsoft sign-in, with per-scope enablement/enforcement and admin reset.',
   version: '1.0.0',
   /**
    * What this module needs from the environment (`specs/117-instance-bring-up/`
    * FR-002). Only what it **owns**: its reads of platform-owned names are
-   * satisfied by `packages/platform/src/env/index.ts`.
+   * satisfied by `packages/platform/src/env/index.ts`. `ADMIN_BASE_URL` was
+   * declared here until issue #185 moved it to the platform, which every module
+   * now reads it through (`configuredAdminBaseUrl`).
    *
    * Why each of these is not a Setting is its entry in
    * `backend/scripts/ledgers/module-environment-inputs/mfa.ts`.
    */
   env: [
-    {
-      name: 'ADMIN_BASE_URL',
-      describes: {
-        en: 'Where the admin panel is, so that a link this instance mails an administrator opens their own installation.',
-        pl: 'Gdzie znajduje się panel administracyjny, aby link wysłany administratorowi otwierał jego własną instalację.',
-      },
-      requirement: {
-        kind: 'optional',
-        without: {
-          en: 'A sign-in or recovery link mailed to an administrator points nowhere they can open — which matters most when the panel is on a host of its own.',
-          pl: 'Link logowania lub odzyskiwania wysłany administratorowi prowadzi donikąd — co ma największe znaczenie, gdy panel stoi na osobnym hoście.',
-        },
-      },
-      secret: false,
-      generable: false,
-      owner: { kind: 'module', moduleId: 'mfa' },
-      consumers: ['backend'],
-      addressOf: 'admin',
-    },
     {
       name: 'MFA_SECRET_ENCRYPTION_KEY',
       describes: {
@@ -168,7 +151,12 @@ export const manifest = defineModuleManifest({
   // Feature 075 Phase C turned the session edge into the published port: the
   // second factor mints its session over `authSessionPort`, so no `Session`
   // entity and no `SessionService` class crosses into this module any more.
-  dependencies: ['admin_users', 'customer_accounts', 'organizations', 'settings', 'auth'],
+  //
+  // Issue #349 — `admin_roles` answers the administrator's role, whose
+  // two-factor flag is read at sign-in, and lists the roles the
+  // deactivation guard asks about. It is `nonDeactivatable` and has no
+  // dependencies, so the edge forms no cycle and locks no operator flip.
+  dependencies: ['admin_users', 'admin_roles', 'customer_accounts', 'organizations', 'settings', 'auth'],
   settings,
   // Feature 074 (Constitution XVII) — a control this module never had, so an
   // operator could not decline it at all. Two-factor authentication is a client
@@ -260,10 +248,24 @@ export const manifest = defineModuleManifest({
     // Raised by the platform's activation write, on this module's behalf: the
     // module cannot be switched off while administrators are required to use a
     // second factor. Only ever raised while the module is present, so this
-    // bundle is there to translate it.
-    { code: 'MFA_DEACTIVATION_BLOCKED' },
+    // bundle is there to translate it. Issue #349 — the two tokens name the
+    // roles that require it, alone or beside the setting; with no token the
+    // setting alone does.
+    { code: 'MFA_DEACTIVATION_BLOCKED', tokens: ['role_requirement', 'setting_and_role_requirement'] },
+    // Issue #930 — the `mfa.admin.totp_enforced` write, refused while no
+    // second factor can be enrolled. Raised by this module's own validator,
+    // which `settings` consults only while the module is present. Issue #947
+    // — `customer_encryption_key_missing` is the same refusal of
+    // `mfa.storefront.totp_enforced` and of an organization's policy.
+    { code: 'MFA_ENFORCEMENT_UNAVAILABLE', tokens: ['encryption_key_missing', 'customer_encryption_key_missing'] },
+    // Issue #1279 — the storefront's redemption of a federated sign-in hand-off,
+    // refused for an unknown, expired, used, wrongly bound or withdrawn code.
+    { code: 'MFA_FEDERATED_HANDOFF_INVALID' },
     { code: 'MFA_INVALID_CHALLENGE' },
     { code: 'MFA_INVALID_CODE' },
+    // Issue #935 — the self-service disable, refused while the factor is the
+    // account's last one and a requirement is in force.
+    { code: 'MFA_LAST_FACTOR_REQUIRED' },
     { code: 'MFA_NOT_ENABLED' },
     { code: 'MFA_NO_ACTIVE_ENROLMENT' },
     { code: 'MFA_NO_PENDING_ENROLMENT' },
@@ -275,8 +277,29 @@ export const manifest = defineModuleManifest({
     { code: 'TWO_FACTOR_REQUIRED_BY_ROLE' },
   ],
   i18n: { bundlesDir: 'i18n' },
+  docs: { dir: 'docs' },
   permissions: [
-    { code: 'mfa:reset', label: "Reset a user's 2FA" },
-    { code: 'mfa:manage', label: 'Manage 2FA policies and organization enforcement' },
+    { code: 'mfa:reset', label: "Reset a user's two-step verification" },
+    { code: 'mfa:manage', label: 'Manage two-step verification policies and organization enforcement' },
+  ],
+  // Principle XVI (issue #510): the signed-in admin's own two-factor screen was
+  // reachable from neither the sidebar nor the palette. **No
+  // `requiredPermission`, deliberately** — the route declares none and its six
+  // endpoints are gated by the bare admin guard, because every admin manages
+  // their own second factor (`src/admin/index.ts` carries the reasoning). The
+  // palette therefore offers it to every signed-in admin while `mfa` is on.
+  // Since issue #1519 the screen is the Profile's *Security* tab and has no
+  // sidebar row, so this action is the one shortcut to it besides the avatar.
+  actions: [
+    {
+      id: 'open-security',
+      labelKey: 'actions.openSecurity.label',
+      descriptionKey: 'actions.openSecurity.description',
+      icon: 'ShieldCheck',
+      targetRoute: '/profile/security',
+      keywords: ['2fa', 'mfa', 'two-factor', 'two-step verification', 'security', 'authenticator', 'totp', 'profile'],
+      keywordsKey: 'actions.openSecurity.keywords',
+      weight: 900,
+    },
   ],
 });

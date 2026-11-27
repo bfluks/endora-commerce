@@ -6,8 +6,10 @@ import type { ChannelMemberEntityType } from '@endora-commerce/contracts';
 import {
   CATALOG_WEBHOOK_EVENT_TYPES,
   ERROR_CODES,
+  createProductTaxRateResolver,
   type ListingPriceOrderPort,
   type ListingPricePort,
+  type ListingPriceDetailPort,
   type WebhookEventRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
@@ -34,18 +36,28 @@ import type {
   CatalogProductLinkPort,
   CatalogProductReadPort,
   CatalogProductWritePort,
-  CatalogProductValueOverrideUpsert,
-  CatalogProductValueOverrideWritePort,
+  CatalogProductCommandPort,
+  CatalogAttributeCommandPort,
   CatalogPromoAttributePort,
   CatalogQuickSearchPort,
+  CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
+  CatalogProductScopeWritePort,
+  SeoProductMetaPort,
+  SeoProductMetaWritePort,
+  ScopeRef,
+  ScopedWriteOp,
   InventoryProductThresholdWritePort,
+  InventoryStockReadPort,
   SearchQueryPort,
   SearchReindexPort,
   LanguageReadPort,
   OrganizationDetailsPort,
+  OrganizationTaxProfilePort,
   ProductAvailability,
+  TaxServicePort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker, AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -66,11 +78,20 @@ import { BulkOperation } from './entities/bulk-operation.entity.js';
 import { BundleSlotOption } from './entities/bundle-slot-option.entity.js';
 import { BundleSlot } from './entities/bundle-slot.entity.js';
 import { Category } from './entities/category.entity.js';
+import { GalleryItemScopeOverride } from './entities/gallery-item-scope-override.entity.js';
+import { GalleryRoleScopeOverride } from './entities/gallery-role-scope-override.entity.js';
+import { ProductAttachmentScopeOverride } from './entities/product-attachment-scope-override.entity.js';
+import { ProductPackagingUnitScopeOverride } from './entities/product-packaging-unit-scope-override.entity.js';
 import { GalleryItemLabel } from './entities/gallery-item-label.entity.js';
 import { GalleryItem } from './entities/gallery-item.entity.js';
 import { GroupedItem } from './entities/grouped-item.entity.js';
 import { ProductAttachment } from './entities/product-attachment.entity.js';
 import { ProductAttribute } from './entities/product-attribute.entity.js';
+import { ProductChannelLanguageScope } from './entities/product-channel-language-scope.entity.js';
+import { ProductChannelScope } from './entities/product-channel-scope.entity.js';
+import { ProductContentValue } from './entities/product-content-value.entity.js';
+import { ProductUrlKey } from './entities/product-url-key.entity.js';
+import { ProductUrlRedirect } from './entities/product-url-redirect.entity.js';
 import { ProductEditorPreference } from './entities/product-editor-preference.entity.js';
 import { ProductLink } from './entities/product-link.entity.js';
 import { ProductListSavedView } from './entities/product-list-saved-view.entity.js';
@@ -84,6 +105,23 @@ import { catalogModule, type CatalogModuleOptions } from './plugin.js';
 import type { CustomFieldDefinitionApplyApi } from './commands/attribute-commands.js';
 import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
+import { ProductAvailabilityService } from './services/product-availability.service.js';
+import { ProductUrlKeyReadService } from './services/url-key-resolution.service.js';
+import {
+  PRODUCT_PAGE_CHANGE_EVENTS,
+  ProductPageRevalidation,
+  productPageChangeHandler,
+} from './services/product-page-revalidation.js';
+import { UrlKeyService } from './services/url-key.service.js';
+import {
+  PublicationWindowSweep,
+  startPublicationWindowSweep,
+} from './services/publication-window-sweep.js';
+import {
+  createTableMaintenanceProducer,
+  startTableMaintenanceWorker,
+  type TableMaintenanceProducer,
+} from './services/table-maintenance-queue.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
 import { AttributeSetService } from './services/attribute-set.service.js';
 import { GalleryService } from './services/gallery.service.js';
@@ -96,18 +134,24 @@ import { CatalogAttributeReadService } from './services/catalog-attribute-read.s
 import { CatalogCategoryReadService } from './services/catalog-category-read.service.js';
 import { CatalogProductFilterService } from './services/catalog-product-filter.service.js';
 import { CatalogProductReadService } from './services/catalog-product-read.service.js';
-import { CatalogQueryService } from './services/catalog-query.service.js';
+import { CatalogQueryService, type CatalogCursorSeal } from './services/catalog-query.service.js';
 import { CatalogQuickSearchService } from './services/catalog-quick-search.service.js';
-import { ProductOverridesService } from './services/product-overrides.service.js';
 import { AttributeValueKeyService } from './services/attribute-value-key.service.js';
 import type { CatalogAttributeValueKeyApi } from '../ports/index.js';
 import {
+  createCatalogAttributeCommandPort,
+  createCatalogProductCommandPort,
+} from './services/catalog-command-ports.js';
+import {
   createCatalogCategoryWritePort,
+  createCatalogProductScopeWritePort,
   createCatalogProductWritePort,
   createCatalogPromoAttributePort,
 } from './services/catalog-write-ports.js';
 import type {
   CatalogEventBus,
+  CatalogSeoProductMetaCopy,
+  CatalogStockFilterSource,
   CatalogWarehouseThresholdCopy,
 } from './services/catalog-admin.service.js';
 import { registerCatalogAssetReferences } from './services/asset-references.js';
@@ -172,6 +216,18 @@ export interface CatalogCradle {
   readonly commandBus: CommandBus;
   readonly auditLogService: AuditPort;
   readonly moduleQueueRedis: Redis | undefined;
+  /**
+   * Issue #497 — the platform's cursor seal, a host value both composition
+   * roots register; declared here in the narrow shape the price walks use.
+   */
+  readonly cursorSeal: CatalogCursorSeal;
+  /**
+   * Whether this process consumes queues — the host's answer; the shared test
+   * server says no and drives the publication-window sweep directly.
+   */
+  readonly processRunsWorkers: boolean;
+  /** Issue #409 — the `catalog.table-maintenance` producer; a recorder in a test that asks. */
+  readonly catalogTableMaintenance: TableMaintenanceProducer;
   /**
    * The process connection, distinct from `moduleQueueRedis`: the assistant's
    * bulk tools delegate over the same queue in both compositions, which is a
@@ -251,6 +307,12 @@ export interface CatalogCradle {
     CatalogModuleOptions['resolveProductImagePlaceholderUrl']
   >;
   readonly catalogSearchReindex: NonNullable<CatalogModuleOptions['reindexSearchIndexes']>;
+  /** Feature 163 — `seo`'s product metadata, `null` while `seo` is off (`seoProductMetaPort`). */
+  readonly catalogSeoProductMeta: NonNullable<CatalogModuleOptions['resolveSeoProductMeta']>;
+  /** Feature 163 (T118c) — `seo`'s scopes of a product, `[]` while `seo` is off. */
+  readonly catalogSeoProductScopes: NonNullable<CatalogModuleOptions['listSeoProductScopes']>;
+  /** Feature 174 (T123) — `seo`'s view of a product at one scope, `null` while `seo` is off. */
+  readonly catalogSeoProductScoped: NonNullable<CatalogModuleOptions['readSeoProductScoped']>;
   /**
    * Owned by `assets_library`: the registry that refuses to delete an asset a
    * product gallery, attachment, virtual download or category image points at.
@@ -289,6 +351,7 @@ export interface CatalogCradle {
   readonly bundleService: BundleService;
   readonly packagingUnitService: PackagingUnitService;
   readonly catalogCategoryRevalidator: StorefrontRevalidator;
+  readonly catalogProductPageRevalidation: ProductPageRevalidation;
   readonly catalog: ReturnType<typeof catalogModule>;
 }
 
@@ -406,6 +469,55 @@ export function registerModule(ctx: ModuleContext): void {
   };
 
   /**
+   * Issue #1624 — the admin products list's stock filter. `catalog` declares
+   * `inventoryStockReadPort` `refuses-without`: `available()` is the probe the
+   * list answers as `stockFilterAvailable`, and `predicate()` is deliberately
+   * **not** probed — with `inventory` off the gate throws and the filtered list,
+   * or the selection resolved from it, answers 503. Ignoring the filter instead
+   * would let "select all matching" reach the whole catalogue.
+   */
+  const inventoryStockRead = lazyPort<InventoryStockReadPort>(ctx, 'inventoryStockReadPort');
+  const stockFilter: CatalogStockFilterSource = {
+    available: () => effectiveState.isPresent('inventory'),
+    predicate: (state, columns) => inventoryStockRead.stockStatePredicate(state, columns),
+  };
+
+  /**
+   * Feature 174 (FR-119, T151) — a duplicate's SEO values at every scope its source holds, read
+   * and written through `seo`'s write port on the duplicate Command's em, so they commit or roll
+   * back with the copy and its one audit entry. The same D-44 shape as the threshold copy: presence
+   * is decided here, in front of both ports — with `seo` off a duplicate copies no metadata and is
+   * not refused for it — and the write port is resolved only when the source holds SEO rows.
+   */
+  const seoProductMetaRead = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+  const seoProductMetaWrite = lazyPort<SeoProductMetaWritePort<EntityManager>>(ctx, 'seoProductMetaWritePort');
+  const copySeoProductMeta: CatalogSeoProductMetaCopy = async (em, { sourceProductId, targetProductId }) => {
+    if (!effectiveState.isPresent('seo')) return 'not-present';
+    let copied = 0;
+    for (const held of await seoProductMetaRead.listScopesForProduct(sourceProductId)) {
+      // A locale-only row has no product scope any more (FR-010): nothing to copy it to.
+      if (held.channelId === null && held.languageCode !== null) continue;
+      if (held.fields.length === 0) continue;
+      const scope: ScopeRef =
+        held.channelId === null
+          ? { level: 'global' }
+          : held.languageCode === null
+            ? { level: 'channel', channelId: held.channelId }
+            : { level: 'channel_language', channelId: held.channelId, languageCode: held.languageCode };
+      const own = await seoProductMetaWrite.readWithin(em, { productId: sourceProductId, scope, fields: held.fields });
+      const changes: Partial<Record<keyof typeof own, ScopedWriteOp<string>>> = {};
+      for (const [field, value] of Object.entries(own) as Array<[keyof typeof own, (typeof own)[keyof typeof own]]>) {
+        if (value === undefined || !('own' in value)) continue;
+        changes[field] = typeof value.own === 'string' ? { op: 'set', value: value.own } : { op: 'empty' };
+      }
+      if (Object.keys(changes).length === 0) continue;
+      await seoProductMetaWrite.applyWithin(em, { productId: targetProductId, scope, changes });
+      copied += 1;
+    }
+    return { copied };
+  };
+
+  /**
    * The three names a composition root supplied on this module's behalf until
    * `specs/117-instance-bring-up/` Phase 6 (FR-033).
    *
@@ -417,6 +529,14 @@ export function registerModule(ctx: ModuleContext): void {
    * the shape a module writes for itself.
    */
   ctx.di.register({
+    catalogTableMaintenance: ctx
+      .asFunction(({ moduleQueueRedis }: CatalogCradle) =>
+        createTableMaintenanceProducer({
+          redis: moduleQueueRedis,
+          onError: (err) => ctx.log.warn({ err }, 'catalog: could not ask for the vacuum after an import; autovacuum remains the fallback'),
+        }),
+      )
+      .singleton(),
     /**
      * The availability band the external catalog namespace decorates a product
      * with. D-61: `catalog` declares `inventory` `degrades-without`, and the
@@ -462,6 +582,53 @@ export function registerModule(ctx: ModuleContext): void {
         return async () => {
           if (!effectiveState.isPresent('search')) return { documentCount: 0 };
           return reindex.reindexAll();
+        };
+      })
+      .singleton(),
+
+    /**
+     * Feature 163 (R13) — the product page's metadata per sales channel ×
+     * language. `catalog` declares `seoProductMetaPort` `degrades-without`: the
+     * probe comes **before** the resolution and the absent answer is `null` in
+     * the return type, so the page serves its derived metadata — there is no
+     * `catch` to swallow a genuine `seo` failure with the absence.
+     */
+    catalogSeoProductMeta: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductMeta'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (input) => {
+          if (!effectiveState.isPresent('seo')) return null;
+          const { sources: _sources, ...values } = await seoMeta.resolveForProduct(input);
+          return values;
+        };
+      })
+      .singleton(),
+
+    /**
+     * Feature 163 (T118c) — `seo`'s scopes of one product for the scope overview, by
+     * the same probe-before-resolve as the page's metadata above: with `seo` off the
+     * overview lists no SEO field and answers no error, and there is no `catch` to
+     * hide a genuine `seo` failure behind that absence.
+     */
+    /**
+     * Feature 174 (T123, FR-092) — `seo`'s view of the product at the editor's scope, by the same
+     * probe-before-resolve: with `seo` off the read answers `seo: null` and no SEO section shows.
+     */
+    catalogSeoProductScoped: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductScoped'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (productId, scope) => {
+          if (!effectiveState.isPresent('seo')) return null;
+          return seoMeta.readScoped(productId, scope);
+        };
+      })
+      .singleton(),
+    catalogSeoProductScopes: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductScopes'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (productId) => {
+          if (!effectiveState.isPresent('seo')) return [];
+          return seoMeta.listScopesForProduct(productId);
         };
       })
       .singleton(),
@@ -525,6 +692,32 @@ export function registerModule(ctx: ModuleContext): void {
       )
       .singleton(),
 
+    /**
+     * Feature 163 (T155 finding CACHE-1) — drops a product's cached storefront
+     * product-page reads after an availability-changing write (subscriptions
+     * below). Rides the category revalidator: the same storefront endpoint, and
+     * the plugin hands it `app.log`.
+     */
+    catalogProductPageRevalidation: ctx
+      .asFunction(
+        ({ emFactory, catalogCategoryRevalidator }: Pick<CatalogCradle, 'emFactory' | 'catalogCategoryRevalidator'>) =>
+          new ProductPageRevalidation({
+            revalidator: catalogCategoryRevalidator,
+            keysOf: async (productIds) => {
+              const em = emFactory();
+              const ids = [...productIds];
+              const [products, keys, redirects] = await Promise.all([
+                em.find(Product, { id: { $in: ids } }, { fields: ['slug'] }),
+                em.find(ProductUrlKey, { productId: { $in: ids } }, { fields: ['key'] }),
+                em.find(ProductUrlRedirect, { productId: { $in: ids } }, { fields: ['key'] }),
+              ]);
+              return [...products.map((p) => p.slug), ...keys.map((k) => k.key), ...redirects.map((r) => r.key)];
+            },
+            log: { warn: (obj, msg) => ctx.log.warn(obj as object, msg) },
+          }),
+      )
+      .singleton(),
+
     catalog: ctx
       .asFunction(
         ({
@@ -534,12 +727,14 @@ export function registerModule(ctx: ModuleContext): void {
           auditLogService,
           moduleQueueRedis,
           catalogRunBulkOperationWorker,
+          cursorSeal,
         }: CatalogCradle) =>
           catalogModule({
             emFactory,
             eventBus,
             commandBus,
             auditLogService,
+            cursorSeal,
             ...(moduleQueueRedis === undefined ? {} : { redis: moduleQueueRedis }),
             runBulkOperationWorker: catalogRunBulkOperationWorker,
             log: ctx.log,
@@ -581,11 +776,20 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'salesChannelMembershipPort',
             ),
+            // Feature 163 (W5 = A) — the registered availability port, for the
+            // external bulk-price probe.
+            productAvailability: lazyPort<CatalogProductAvailabilityPort>(
+              ctx,
+              'catalogProductAvailabilityPort',
+            ),
             // Feature 075 — the *read* port rather than the whole admin service.
             // The two consumers in this module ask two questions between them,
             // `listActive` and `getDefault`, which is what `languageReadPort`
             // publishes.
             languageService: lazyPort<LanguageReadPort>(ctx, 'languageReadPort'),
+            // Feature 163 (FR-060) — the completeness gate's mode, a platform-wide
+            // setting; the platform's own registration, so no module edge.
+            settingsReadPort: lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'),
             // Absent from the harness before T142, so the bulk-operation
             // completion notice and its e-mail ran in no test.
             //
@@ -619,7 +823,19 @@ export function registerModule(ctx: ModuleContext): void {
             // the bulk-operation requester's e-mail address. Both were reads of
             // another module's entity against another module's table.
             organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+            // Issue #852 — the buyer's VAT rate per product, by the rule the
+            // cart uses: `organizations`' tax profile and `taxes`' rules, both
+            // owners non-deactivatable.
+            productTaxRates: createProductTaxRateResolver({
+              taxProfiles: lazyPort<OrganizationTaxProfilePort>(ctx, 'organizationTaxProfilePort'),
+              taxes: lazyPort<TaxServicePort>(ctx, 'taxService'),
+            }),
             adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+            // Feature 163, checkpoint F (S-3) — the queued bulk operation's requester
+            // is re-checked at worker start. `admin_roles` is declared in
+            // `dependencies`; with it absent the gated port throws and the
+            // operation fails closed.
+            permissionChecker: lazyPort<AdminPermissionChecker>(ctx, 'permissionService'),
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireApiKey: requireApiKeyGate,
@@ -631,8 +847,32 @@ export function registerModule(ctx: ModuleContext): void {
             resolveProductImagePlaceholderUrl: (salesChannelCode) =>
               cradle().catalogImagePlaceholderUrl(salesChannelCode),
             reindexSearchIndexes: () => cradle().catalogSearchReindex(),
+            shareSearchReindexEnqueuer: (enqueue) => cradle().catalogAdminService.setSearchReindexEnqueuer(enqueue),
+            resolveSeoProductMeta: (input) => cradle().catalogSeoProductMeta(input),
+            listSeoProductScopes: (productId) => cradle().catalogSeoProductScopes(productId),
+            readSeoProductScoped: (productId, scope) => cradle().catalogSeoProductScoped(productId, scope),
+            // Feature 174 (T123) — the save's SEO cells, written on its Command's em (refuses-without).
+            seoProductMetaWrite: () => seoProductMetaWrite,
+            // Feature 172 (FR-051, research R-13) — the product page carries its
+            // Page Builder content only while `cms` is effectively present.
+            //
+            // Owner ruling OR-8: this probe is deliberately portless, and no
+            // `dependencies` or `nonBindingDependencies` entry names `cms`.
+            //  1. `catalog` is `nonDeactivatable`, so a `dependencies` entry on
+            //     `cms` would make `cms.enabled` a dead switch
+            //     (`module-composition.md` item 4a).
+            //  2. `cms` is deactivatable, so its absence is a normal state to
+            //     answer, not a wiring fault to fail on.
+            //  3. The probe gates only a projection of `catalog`'s own data (the
+            //     PDP's `contentAttributes`). It calls no `cms` code and reads no
+            //     `cms` data, so there is no port to declare — and a soft edge
+            //     (`nonBindingDependencies`) needs a port name this edge has not.
+            // Read the ruling here rather than re-raising it in review.
+            isPageBuilderPresent: () => effectiveState.isPresent('cms'),
             categoryRevalidator: cradle().catalogCategoryRevalidator,
             copyWarehouseThresholds,
+            copySeoProductMeta,
+            stockFilter,
           }),
       )
       .singleton(),
@@ -684,45 +924,72 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogProductFilterPort>(
     'catalogProductFilterPort',
     ctx
-      .asFunction(({ emFactory }: CatalogCradle) => new CatalogProductFilterService(emFactory))
-      .singleton(),
-  );
-
-  ctx.di.providePort<CatalogProductWritePort>(
-    'catalogProductWritePort',
-    ctx
-      .asFunction(() =>
-        createCatalogProductWritePort(() => ctx.cradle<CatalogCradle>().catalogAdminService),
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new CatalogProductFilterService(
+            emFactory,
+            // Feature 163 — a feed's scoped floor is effective availability:
+            // the registered `catalogProductAvailabilityPort` instance (typed as
+            // the service for its `scopeChannel`, as `catalogAttributeReadPort`
+            // is below), never a second one (code review N4).
+            lazyPort<ProductAvailabilityService>(ctx, 'catalogProductAvailabilityPort'),
+          ),
       )
       .singleton(),
   );
 
   /**
-   * Feature 089 — channel/locale-scoped product value writes for PIM importers.
-   * Narrows `ProductOverridesService.applyBulk` so a foreign module never holds
-   * the class (and never reaches `product_value_overrides` by SQL).
+   * `specs/186-aggregate-ports/` US6 (issue #1825) — the Product aggregate's write port and the
+   * attribute-definition port. Each method calls the service method its admin route calls, on
+   * the container's `catalogAdminService` (no completeness gate, A-6), resolved per call; the
+   * scoped write is the connector's Command `product.scoped_values.import` on the save's
+   * planner and writers.
    */
-  ctx.di.providePort<CatalogProductValueOverrideWritePort>(
-    'catalogProductValueOverrideWritePort',
+  ctx.di.providePort<CatalogProductCommandPort>(
+    'catalogProductCommandPort',
     ctx
       .asFunction(({ emFactory, commandBus }: CatalogCradle) => {
-        const service = new ProductOverridesService(
-          emFactory,
-          lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-          commandBus,
-          lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-        );
-        return {
-          async applyBulk(
-            productId: string,
-            input: { upserts: readonly CatalogProductValueOverrideUpsert[] },
-          ) {
-            await service.applyBulk(productId, { upserts: [...input.upserts], deletes: [] });
-          },
-        };
+        const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
+        const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+        const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
+        return createCatalogProductCommandPort({
+          admin: () => ctx.cradle<CatalogCradle>().catalogAdminService,
+          commandBus: () => commandBus,
+          importDeps: () => ({
+            membership,
+            listAttributes: () => attributes.listAll(),
+            urlKeys: () => urlKeys,
+          }),
+        });
       })
       .singleton(),
   );
+
+  ctx.di.providePort<CatalogAttributeCommandPort>(
+    'catalogAttributeCommandPort',
+    ctx
+      .asFunction(() =>
+        createCatalogAttributeCommandPort({ admin: () => ctx.cradle<CatalogCradle>().catalogAdminService }),
+      )
+      .singleton(),
+  );
+
+  // Deprecated since 0.113.0 (#1825): every write delegates to the two ports above.
+  ctx.di.providePort<CatalogProductWritePort>(
+    'catalogProductWritePort',
+    ctx
+      .asFunction(() =>
+        createCatalogProductWritePort({
+          products: () => lazyPort<CatalogProductCommandPort>(ctx, 'catalogProductCommandPort'),
+          attributes: () => lazyPort<CatalogAttributeCommandPort>(ctx, 'catalogAttributeCommandPort'),
+          attributeReads: () => ctx.cradle<CatalogCradle>().catalogAdminService,
+        }),
+      )
+      .singleton(),
+  );
+
+  // Feature 174 (T083) — `catalogProductValueOverrideWritePort` (feature 089) is retired: a
+  // connector's Channel and Channel × language values go through `catalogProductScopeWritePort` v2.
 
   /**
    * The value-key rename seam (`specs/134-paid-module-extraction/research.md`
@@ -755,11 +1022,25 @@ export function registerModule(ctx: ModuleContext): void {
     'catalogBulkImportPort',
     ctx
       .asFunction(
-        ({ commandBus }: CatalogCradle) =>
-          new CatalogBulkImportService(
+        ({ commandBus, emFactory, eventBus, catalogTableMaintenance }: CatalogCradle) => {
+          const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
+          const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
+          const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+          return new CatalogBulkImportService(
             commandBus,
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-          ),
+            membership,
+            {
+              emFactory,
+              eventBus,
+              // Feature 174 (T084) — each product row through the scoped import's planner and writers.
+              importDeps: { membership, listAttributes: () => attributes.listAll(), urlKeys: () => urlKeys },
+              // Issue #409 — a products import that wrote asks for the vacuum of the tables it rewrote.
+              requestTableMaintenance: () => catalogTableMaintenance.request(),
+            },
+            // Feature 172 (FR-041) — which keys are Page Builder content attributes.
+            attributes,
+          );
+        },
       )
       .singleton(),
   );
@@ -785,7 +1066,67 @@ export function registerModule(ctx: ModuleContext): void {
           new CatalogQuickSearchService(
             emFactory,
             lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
           ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 — the one way another module asks whether a product is
+   * available at (sales channel, language) to an audience, now
+   * (`specs/163-product-data-scopes/contracts/product-scopes.md` §3, FR-002).
+   * Consumers replace their own status, membership and audience tests with
+   * one call and keep their single not-found answer.
+   */
+  ctx.di.providePort<CatalogProductAvailabilityPort>(
+    'catalogProductAvailabilityPort',
+    ctx
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new ProductAvailabilityService(
+            emFactory,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 (R28) — the effective URL key per channel language of each
+   * product a channel carries, for whole-channel readers (`seo`'s sitemap). Every
+   * product URL those readers emit is then `productPath()` over this key.
+   */
+  ctx.di.providePort<CatalogProductUrlKeyReadPort>(
+    'catalogProductUrlKeyReadPort',
+    ctx
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new ProductUrlKeyReadService(
+            emFactory,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 174 (T083; `contracts/pim-locale-mapping.md` §4) — the scoped write of connectors, v2.
+   * Deprecated since 0.113.0 (#1825): `source` must be a module of the registry (R21), then the
+   * call is `catalogProductCommandPort.applyScopedValues` — one Command
+   * `product.scoped_values.import`, per-cell refusals, the integration allowlist (R13a), a URL key
+   * another product holds reported, never taken over (FR-093).
+   */
+  ctx.di.providePort<CatalogProductScopeWritePort>(
+    'catalogProductScopeWritePort',
+    ctx
+      .asFunction(() =>
+        createCatalogProductScopeWritePort({
+          products: () => lazyPort<CatalogProductCommandPort>(ctx, 'catalogProductCommandPort'),
+          isRegisteredModule: (moduleId) => effectiveState.presence(moduleId) !== undefined,
+        }),
       )
       .singleton(),
   );
@@ -828,13 +1169,13 @@ export function registerModule(ctx: ModuleContext): void {
     'catalogQueryPort',
     ctx
       .asFunction(
-        ({ emFactory }: CatalogCradle) =>
+        ({ emFactory, cursorSeal }: CatalogCradle) =>
           new CatalogQueryService(
             emFactory,
             undefined,
             undefined,
             lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-            lazyPort<ListingPricePort>(ctx, 'pricingService'),
+            lazyPort<ListingPriceDetailPort>(ctx, 'pricingService'),
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
@@ -844,6 +1185,7 @@ export function registerModule(ctx: ModuleContext): void {
             // switched off and both of these are handed to a singleton.
             lazyPort<ListingPriceOrderPort>(ctx, 'pricingService'),
             ctx.log,
+            cursorSeal,
           ),
       )
       .singleton(),
@@ -875,6 +1217,12 @@ export function registerModule(ctx: ModuleContext): void {
             // finding, in the same shape).
             lazyPort<CustomFieldDefinitionApplyApi>(ctx, 'customFieldDefinitionService'),
             copyWarehouseThresholds,
+            // No completeness gate on the published port (it is the admin routes' alone).
+            undefined,
+            // Feature 166 (FR-006) — a download file the caller may not see is not linked.
+            lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            // Feature 174 (FR-119) — a duplicate made through the port copies SEO as well.
+            copySeoProductMeta,
           ),
       )
       .singleton(),
@@ -890,6 +1238,10 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             commandBus,
             lazyPort<CatalogCradle['customFieldValueService']>(ctx, 'customFieldValueService'),
+            // No event bus: the Command Bus dispatches the category's event.
+            undefined,
+            // Feature 166 (FR-006) — a main image the caller may not see is not linked.
+            lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
           ),
       )
       .singleton(),
@@ -918,6 +1270,7 @@ export function registerModule(ctx: ModuleContext): void {
             emFactory,
             commandBus,
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
@@ -932,6 +1285,7 @@ export function registerModule(ctx: ModuleContext): void {
             emFactory,
             commandBus,
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
@@ -1000,7 +1354,13 @@ export function registerModule(ctx: ModuleContext): void {
    */
   ctx.onBoot(() => {
     const { assetReferenceRegistry, emFactory } = cradle();
-    registerCatalogAssetReferences(assetReferenceRegistry, emFactory);
+    // Feature 172 — the product-content descriptor labels a hit with the
+    // attribute's key, asked of this module's own attribute read model.
+    registerCatalogAssetReferences(
+      assetReferenceRegistry,
+      emFactory,
+      lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
+    );
   });
 
   /**
@@ -1040,6 +1400,10 @@ export function registerModule(ctx: ModuleContext): void {
       auditLogService: cradle().auditLogService,
       salesChannelMembership: cradle().salesChannelMembershipPort,
       redis: cradle().redis,
+      // Feature 163 (P-1 = A), issue #241 — the bus every mutation tool's writes are
+      // audited through. Read only when registered: a composition without a bus (the
+      // absent-owner harness) still boots, and no mutation tool is offered.
+      ...('commandBus' in cradle() ? { commandBus: cradle().commandBus } : {}),
     };
     const registry = cradle().promptActionToolRegistry;
     for (const tool of [
@@ -1098,8 +1462,71 @@ export function registerModule(ctx: ModuleContext): void {
     void cradle().catalogCategoryRevalidator.revalidate(['catalog:categories']);
   });
 
+  /**
+   * Feature 163 (T155 finding CACHE-1) — a product's storefront page follows its
+   * availability at once. Every committed write that can change whether or where a
+   * product is available announces `product.updated.v1` (status at any scope, window,
+   * audience, URL keys, restore, the bulk and import paths, the window sweep) or
+   * `product.archived.v1`; channel membership is the kernel's
+   * `sales_channels.membership_changed`. Next keeps only a `200`, so without this a
+   * product switched off went on showing. Coalesced and best-effort
+   * (`ProductPageRevalidation`); `ctx.subscribe` stops it with the module.
+   *
+   * Feature 172 (FR-035) — a saved content attribute value announces
+   * `product.content.updated.v1`, which joins the list: the next product page
+   * load shows the change, and nothing re-indexes.
+   */
+  for (const eventName of PRODUCT_PAGE_CHANGE_EVENTS) {
+    ctx.subscribe(
+      eventName,
+      productPageChangeHandler(() => cradle().catalogProductPageRevalidation),
+    );
+  }
+  ctx.subscribe('product.deleted.v1', (payload) => {
+    const productId = productIdOf(payload);
+    if (!productId) return;
+    const former = (payload as { formerUrlKeys?: unknown }).formerUrlKeys;
+    const formerKeys = Array.isArray(former) ? former.filter((key): key is string => typeof key === 'string') : [];
+    cradle().catalogProductPageRevalidation.productRemoved(productId, formerKeys);
+  });
+  ctx.subscribe('sales_channels.membership_changed', (payload) => {
+    const change = payload as { entityType?: unknown; entityId?: unknown };
+    if (change.entityType === 'product' && typeof change.entityId === 'string') {
+      cradle().catalogProductPageRevalidation.productChanged(change.entityId);
+    }
+  });
+
   ctx.routes(async (app) => {
     await cradle().catalog(app);
+
+    // Feature 163 (R9, FR-024) — the publication-window sweep's clock: a Job
+    // Scheduler and its consumer, where the host says this process consumes
+    // queues. `ctx.worker` stops the consumer with the module; the watermark
+    // lives on the process connection, beside nothing it could be mistaken for.
+    const c = cradle();
+    await startPublicationWindowSweep({
+      processRunsWorkers: c.processRunsWorkers,
+      moduleQueueRedis: c.moduleQueueRedis,
+      sweep: new PublicationWindowSweep(c.emFactory, c.redis, (event) =>
+        c.eventBus.emit('product.updated.v1', event),
+      ),
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
+
+    // Issue #409 — `VACUUM (ANALYZE)` of `products` / `product_variants` after
+    // an import, on a connection outside any transaction; same gating.
+    app.addHook('onClose', () => c.catalogTableMaintenance.close());
+    startTableMaintenanceWorker({
+      processRunsWorkers: c.processRunsWorkers,
+      moduleQueueRedis: c.moduleQueueRedis,
+      connection: () => c.emFactory().getConnection(),
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+    });
   });
 
   /**
@@ -1154,14 +1581,23 @@ export const entities = [
   BundleSlot,
   Category,
   GalleryItemLabel,
+  GalleryItemScopeOverride,
   GalleryItem,
+  GalleryRoleScopeOverride,
   GroupedItem,
   ProductAttachment,
+  ProductAttachmentScopeOverride,
   ProductAttribute,
+  ProductChannelLanguageScope,
+  ProductChannelScope,
+  ProductContentValue,
   ProductEditorPreference,
   ProductLink,
   ProductListSavedView,
   ProductPackagingUnit,
+  ProductPackagingUnitScopeOverride,
+  ProductUrlKey,
+  ProductUrlRedirect,
   ProductValueOverride,
   ProductVariant,
   Product,
@@ -1170,16 +1606,15 @@ export const entities = [
 /**
  * The catalogue read surface a host program needs, published **by name**.
  *
- * `@endora-commerce/demo-composition` hands a `CatalogProductReadService` to
- * `price_lists`' `DefaultPriceListMigrator`, and its attribute helper maps a legacy
- * attribute value type onto the unified custom-field model. That is a package an
+ * `@endora-commerce/demo-composition`'s attribute helper maps a legacy attribute
+ * value type onto the unified custom-field model. That is a package an
  * instance installs, so it may name this one by its published door and by nothing
  * else: a filesystem path would evaluate the file a second time, and in an instance
  * there is no source to name.
  *
  * D-168 bars an **entity class** from leaving by this door; a service and a pure
  * mapping function are not entities, and `inventory`'s `WarehouseChannelReconciler` /
- * `price_lists`' `DefaultPriceListMigrator` are the precedent for exactly this shape.
+ * `price_lists`' `seedDemoPriceBooks` are the precedent for exactly this shape.
  *
  * `CatalogQueryService` is published as a **type** for `src/composition.ts`, which
  * declares the cradle slot `promotions`, `quick_order` and `search` each resolve their
@@ -1210,3 +1645,9 @@ export const salesChannelBridges: ReadonlyArray<{
   { entityType: 'product', table: 'sales_channel_products', entityIdColumn: 'product_id' },
   { entityType: 'category', table: 'sales_channel_categories', entityIdColumn: 'category_id' },
 ];
+
+/** An event payload's `productId`, when it is a string (security review L1). */
+function productIdOf(payload: unknown): string | null {
+  const productId = (payload as { productId?: unknown } | null)?.productId;
+  return typeof productId === 'string' ? productId : null;
+}

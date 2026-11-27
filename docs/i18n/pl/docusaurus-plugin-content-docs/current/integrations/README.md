@@ -25,8 +25,9 @@ Platforma udostępnia trzy mechanizmy integracji, każdy należący do osobnego 
 
 ## Uwierzytelnianie kluczem API
 
-Utwórz klucz w **Panel administracyjny → API Keys → New Key**, wybierając zakresy, z których klucz
-może korzystać, i opcjonalnie **powiązanie z organizacją** (zobacz niżej). Pełny token bearer
+Utwórz klucz w **Panel administracyjny → Klucze API → Nowy klucz API**. Najpierw wybierz typ klucza —
+**Klucz platformowy** (niepowiązany) albo **Klucz organizacji** (powiązany, zobacz niżej) — a potem
+zakresy, z których klucz może korzystać; każdy typ oferuje tylko zakresy, które może mieć. Pełny token bearer
 (`sk_live_…`) jest pokazywany **tylko raz**; potem przechowywane są tylko jego cztery ostatnie znaki.
 Platforma przechowuje skrót SHA-256 tokenu, nigdy sam token.
 
@@ -58,7 +59,9 @@ synchronizacji katalogu, ceny hurtowe i idempotentne składanie zamówień opisu
 ### Zakresy
 
 Klucz dostaje jeden lub więcej zakresów z typowanego katalogu: `catalog:read`, `catalog:write`
-(tylko klucze niepowiązane), `orders:read`, `orders:write` (tylko klucze powiązane). Gdy żądanie
+(tylko klucze niepowiązane), `orders:read`, `orders:write` (tylko klucze powiązane) oraz
+`platform.api_description.read`, który pozwala integracji odczytać opis API pod
+`GET /api/v1/_openapi.json`. Gdy żądanie
 trafia na trasę chronioną przez `requireApiKey('catalog:write')`, platforma:
 
 1. Odnajduje wiersz `ApiKey` dla tokenu bearer według skrótu SHA-256.
@@ -90,7 +93,7 @@ aby można było odnaleźć wpisy w logach.
 
 ## Subskrypcja webhooków
 
-Utwórz subskrypcję webhooka w **Panel administracyjny → Webhooks → New Webhook** (albo przez
+Utwórz subskrypcję webhooka w **Panel administracyjny → Webhooki → Nowy webhook** (albo przez
 `POST /api/v1/admin/webhooks` z uprawnieniem administracyjnym `integrations:manage`). Platforma
 generuje dla każdej subskrypcji 64-znakowy szesnastkowy `secret`; dostajesz go w odpowiedzi na
 utworzenie **tylko ten jeden raz** — przechowuj go w menedżerze sekretów.
@@ -160,8 +163,10 @@ Wysyłki przetwarza kolejka BullMQ z wykładniczo rosnącym odstępem:
 - Do **8 prób** na wysyłkę.
 - Odstęp zaczyna się od **1 s** i podwaja przy każdym ponowieniu (1 s, 2 s, 4 s, …).
 - Każda próba ma limit czasu **10 s**.
-- Po ostatniej próbie wysyłka jest oznaczana jako `dead_lettered` w `webhook_deliveries`. Widok
-  „Failed Deliveries” w panelu administracyjnym pozwala ponowić ją na żądanie.
+- Po ostatniej próbie wysyłka jest oznaczana jako `dead_lettered` w `webhook_deliveries`. Lista
+  **Ostatnie dostarczenia** na ekranie Webhooki w panelu administracyjnym pozwala ponowić ją na żądanie.
+- Zakończone wysyłki są przechowywane przez `webhooks.delivery_retention_days` (domyślnie 365 dni),
+  a potem usuwane; usuniętej wysyłki nie można już ponowić.
 
 Odbiorcy muszą być **idempotentni**: usuwaj duplikaty według `X-Webhook-Event-Id`, aby powtórzona
 wysyłka nie zastosowała zmiany stanu dwa razy. Kolejność webhooków różnych typów zdarzeń nie jest

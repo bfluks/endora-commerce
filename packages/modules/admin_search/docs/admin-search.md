@@ -1,9 +1,9 @@
 ---
-title: admin_search
-description: Global search in the admin — find organizations, customers, orders, quote requests, sales opportunities, products and categories from the command palette, with configurable searchable fields
+title: Global search
+description: Global search in the admin — find organizations, customers, orders, quote requests, sales opportunities, products, categories, projects and tasks from the command palette, with configurable searchable fields
 ---
 
-# `admin_search`
+# Global search (`admin_search`)
 
 Global search lets an administrator find a record without first deciding which
 list holds it. Press **⌘K** (macOS) or **Ctrl+K**, or click the search field at
@@ -25,15 +25,17 @@ record types, in the order their groups appear:
 | Record type | Fields offered (searched by default in **bold**) | Opens |
 | --- | --- | --- |
 | Orders | **Order number**, **Organization name**, **Customer name or e-mail**, Billing company name, Billing tax ID | the order |
-| Quote Requests | **Quote Request number**, **Organization name**, **Customer name or e-mail**, Customer's note | the quote request |
-| Sales Opportunities | **Opportunity number**, **Title**, **Organization name**, Description | the opportunity |
+| Quote requests | **Quote request number**, **Organization name**, **Customer name or e-mail**, Customer's note | the quote request |
+| Sales opportunities | **Opportunity number**, **Title**, **Organization name**, Description | the opportunity |
 | Organizations | **Name**, **Tax ID**, Legal name | the organization |
 | Customers | **E-mail**, **Name** | the customer |
 | Products | **SKU**, **Name**, URL key (slug), Quick-search attributes | the product |
 | Categories | **Name**, **URL key (slug)** | the category tree, with the category highlighted |
+| Projects | **Project number**, **Title**, **Organization name** | the project |
+| Tasks | **Task number**, **Title** | the task |
 
 A record type takes part only while its module is switched on: switch the CRM
-off on **/platform/modules** and Sales Opportunities disappear from the results
+off on **/platform/modules** and sales opportunities disappear from the results
 and from the configuration screen; switch it back on and they return with the
 configuration they had.
 
@@ -64,15 +66,22 @@ Global search never shows a record its type's own admin list would hide from the
 same administrator:
 
 - A record type appears only for a role holding the permission its own list
-  requires — `orders:read` for Orders, `rfqs:handle` for Quote Requests,
-  `crm:read` for Sales Opportunities, `customers:read` (or `customers:manage`)
-  for Organizations, `customers:read` for Customers, and `catalog:read` for
-  Products and Categories.
+  requires — `orders:read` for Orders, `rfqs:handle` for quote requests,
+  `crm:read` for sales opportunities, `customers:read` (or `customers:manage`)
+  for Organizations, `customers:read` for Customers, `catalog:read` for
+  Products and Categories, `projects:read` for Projects and `tasks:read` for
+  Tasks.
 - A sales representative sees only the orders, quote requests, opportunities
-  and customers of the organizations assigned to them.
+  and customers of the organizations they reach: the ones assigned to them and
+  every organization no representative is assigned to (issue #305 — the one
+  reach rule of the `organizations` module).
+- Projects and tasks follow their own lists: a project or a task whose
+  organization the administrator does not reach is never found, and neither is
+  another administrator's draft or private task.
 - Organizations follow the Organizations list exactly: a sales representative
-  sees every organization that list shows them, with the organizations assigned
-  to them listed first.
+  sees every organization that list shows them — the same reach, never an
+  organization assigned to another representative — with the organizations
+  assigned to them listed first.
 
 ## The command palette
 
@@ -92,7 +101,7 @@ to a colleague — who sees only what they themselves may see.
 
 ## Configuring searchable fields
 
-Holders of the `admin_search:configure` permission open **System → Global
+Holders of the `admin_search:configure` permission open **Platform → Global
 search** (or *Configure global search* in the command palette). Each record
 type has a card with its offered fields, the defaults marked:
 
@@ -139,6 +148,6 @@ on, global search works with the configuration it had.
 Records are read live from each module's own tables, with the number of rows
 asked for kept small. At the reference volume — 100 000 orders, 50 000
 customers and products, 20 000 quote requests and opportunities, 10 000
-organizations and 2 000 categories — a search across all seven types answers
+organizations and 2 000 categories — a search across those seven types answers
 within a few hundred milliseconds. Should an installation outgrow that, the
 remedy is a search index on the slow module's columns, added by that module.

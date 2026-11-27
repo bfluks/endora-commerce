@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
-import type { ChannelMemberEntityType } from '@endora-commerce/contracts';
+import { z } from 'zod';
+import { supportedLanguageOf, type ChannelMemberEntityType, isUuidShape } from '@endora-commerce/contracts';
 import type {
   AddressServicePort,
   AdminI18nTranslatePort,
@@ -8,20 +9,31 @@ import type {
   AdminNotificationRecordPort,
   AdminTenantScopePort,
   AdminUserReadPort,
+  ConfigurationTypeRegistryPort,
+  CredentialsPort,
   CreditLimitReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
+  CustomerAccountCommandPort,
+  CustomerAccountMemberCommandPort,
   CustomerAccountMemberWritePort,
   CustomerAccountReadPort,
+  CustomerAccountRoleCommandPort,
   CustomerAuthPort,
   CustomerPasswordResetPort,
   CustomerRolePort,
+  CustomerSignInCompletionPort,
   DictionaryValidator,
   EmailDefaultsRegistryPort,
   EmailMailerPort,
-  OrganizationCartApprovalWritePort,
+  OrganizationCustomFieldWritePort,
   OrganizationDetailsPort,
+  OrganizationCommandPort,
+  OrganizationWritePort,
   OrganizationInheritancePort,
+  OrganizationPermissionPort,
   OrganizationRestrictionPort,
+  OrganizationRoleReadPort,
   OrganizationTaxProfilePort,
   PermissionReadPort,
   PersonalOrganizationPort,
@@ -31,11 +43,16 @@ import type {
   VatValidator,
   DictionaryReferenceRegistryPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type {
+  AuditPort,
+  EntityExtensionReads,
+  SalesChannelMembershipPort,
+  SchemaExtensionReads,
+} from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { effectiveState, lazyEntityExtensionReads, lazyPort } from '@endora-commerce/platform/kernel';
 import type { OrganizationReadPort } from '@endora-commerce/platform/kernel';
 import type {
   RequireAdminAnyFactory,
@@ -46,24 +63,36 @@ import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { ORGANIZATIONS_SETTING_CODES } from '../manifest.js';
 import {
   creditInheritanceModeSchema,
+  gusCredentialsRefSchema,
   moderationModeSchema,
   notificationRecipientsSchema,
+  registryLookupEnabledSchema,
+  registryLookupPlSourcesSchema,
 } from './schemas/settings.js';
 import { createAdminTenantScopePort } from './services/admin-tenant-scope.js';
+import { completeCustomerSignIn } from './routes.public.js';
 import { createOrganizationAdminSearchProvider } from './admin-search-provider.js';
 import { OrganizationAdminSearchService } from './services/organization-admin-search.service.js';
-import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
+import { assignedOrganizationIdsForRanking, withSystemScope } from '@endora-commerce/platform/tenancy';
 import { OrganizationContextService } from './services/organization-context-service.js';
 import {
   OrganizationDetailsService,
   toOrganizationRecord,
 } from './services/organization-details-port.js';
+import { OrganizationCustomFieldWriteService } from './services/organization-custom-field-write-port.js';
+import { OrganizationWriteService } from './services/organization-write-port.js';
 import { PersonalOrganizationService } from './services/personal-organization-service.js';
 import type { PersonalOrganizationProvisionApi } from '../ports/index.js';
 import { OrganizationRestrictionService } from './services/organization-restriction-service.js';
 import { OrganizationTreeService } from './services/organization-tree-service.js';
+import { TaxIdScopeService } from './services/tax-id-scope-service.js';
+import { OrganizationCommandService } from './services/organization-command-port.js';
+import { probeTaxIdScope } from './services/tax-id-scope-probe.js';
 import { OrganizationInheritanceService } from './services/organization-inheritance-service.js';
-import { OrganizationModerationService } from './services/organization-moderation-service.js';
+import {
+  OrganizationModerationService,
+  type ModerationStatusChange,
+} from './services/organization-moderation-service.js';
 import { OrganizationEffectivePriceListsService } from './services/organization-effective-pricelists-service.js';
 import { OrganizationTaxIdValidationService } from './services/organization-tax-id-validation-service.js';
 import {
@@ -71,20 +100,53 @@ import {
   type SalesRepAssignmentPort,
 } from './services/sales-rep-assignment-service.js';
 import { OrgRegistrationNotifier } from './services/org-registration-notifier.js';
-import { makeSetCartApprovalPolicyCommand } from './commands/set-cart-approval-policy.command.js';
+import type { OrganizationsTranslate } from './services/organizations-prose.js';
 import { Organization } from './entities/organization.entity.js';
+import { OrganizationRole } from './entities/organization-role.entity.js';
+import {
+  OrganizationRoleCache,
+  type CachedOrganizationRoles,
+  type OrganizationRolePublisher,
+  type OrganizationRoleSubscriber,
+} from './services/organization-role-cache.js';
+import {
+  OrganizationRoleCatalogue,
+  type OrganizationPermissionManifestEntry,
+} from './services/organization-role-catalogue.js';
+import { OrganizationRolePermissionService } from './services/organization-role-permission-port.js';
+import {
+  OrganizationRoleService,
+  predefinedRoleName,
+  translatePermissionText,
+  type ModuleTranslate,
+} from './services/organization-role-service.js';
+import { predefinedRoleIdOn } from './services/organization-role-store.js';
 import { ViesClient } from './integrations/vies-client.js';
 import { MinisterstwoFinansowClient } from './integrations/ministerstwo-finansow-client.js';
-import type { OrganizationEventBus } from './services/registration-service.js';
+import { GusBirClient } from './integrations/gus-bir-client.js';
+import type { GusCredential, OrganizationsRegistryClients } from './registry-lookup/company-registry-port.js';
+import { MfRegistryAdapter, ViesRegistryAdapter } from './registry-lookup/registry-adapters.js';
+import { RegistryLookupStore, type RegistryLookupRedis } from './registry-lookup/registry-lookup-store.js';
+import { RegistryLookupService } from './registry-lookup/registry-lookup-service.js';
+import {
+  ORGANIZATIONS_GUS_CREDENTIAL_TYPE,
+  gusBirConfigurationType,
+} from './registry-lookup/gus-credential.type.js';
+import { GUS_REQUEST_TIMEOUT_MS, GUS_TOTAL_TIMEOUT_MS } from './registry-lookup/limits.js';
 import { organizationsModule, type OrganizationsModuleOptions } from './plugin.js';
 import { registerOrganizationsSalesRepRoutes } from './routes.sales-reps.js';
+import { registerRegistryLookupRoutes } from './routes.registry-lookup.js';
+import { registrationOptionsRevalidation } from './registry-lookup/registration-options-revalidation.js';
+import { StorefrontRevalidator } from '@endora-commerce/platform/http';
 import {
   EMAIL_VERIFICATION_DEFAULT,
   NEW_ORG_REGISTRATION_DEFAULT,
   ORGANIZATION_APPROVED_DEFAULT,
   ORGANIZATION_INVITATION_DEFAULT,
   ORGANIZATION_REJECTED_DEFAULT,
+  PASSWORD_RESET_DEFAULT,
 } from './email-templates/transactional-defaults.js';
+import { PASSWORD_RESET_EMAIL_CODE } from './services/password-reset-email.js';
 import { registerOrganizationCountryReferences } from './services/organization-country-reference.js';
 import { EmailVerificationToken } from './entities/email-verification-token.entity.js';
 import { OrganizationDeliveryMethodLink } from './entities/organization-delivery-method-link.entity.js';
@@ -92,6 +154,7 @@ import { OrganizationInvitation } from './entities/organization-invitation.entit
 import { OrganizationPaymentMethodLink } from './entities/organization-payment-method-link.entity.js';
 import { OrganizationSalesRepAssignment } from './entities/organization-sales-rep-assignment.entity.js';
 import { OrganizationTaxIdValidation } from './entities/organization-tax-id-validation.entity.js';
+import { OrganizationTaxIdPolicy } from './entities/organization-tax-id-policy.entity.js';
 import { OrganizationWarehouseLink } from './entities/organization-warehouse-link.entity.js';
 
 /**
@@ -219,6 +282,14 @@ export interface OrganizationsCradle {
   readonly customerAccountMemberWritePort: CustomerAccountMemberWritePort;
   readonly addressService: AddressServicePort;
   readonly customFieldValueService: CustomFieldValuePort;
+  /**
+   * `specs/178-extensible-columns/` FR-051 — the platform's extension-attribute
+   * reader, registered by the composition root beside `effectiveState`; read at
+   * the point of use, like every kernel name this module does not capture.
+   */
+  readonly schemaExtensionReads: SchemaExtensionReads;
+  /** `specs/187-side-table-extensions/` FR-054 — the side-table reads, kernel-registered like the line above. */
+  readonly entityExtensionReads: EntityExtensionReads;
   readonly dictionaryValidator: DictionaryValidator;
   readonly emailMailer: EmailMailerPort;
   readonly adminNotificationRecordPort: AdminNotificationRecordPort;
@@ -262,12 +333,26 @@ export interface OrganizationsCradle {
     readonly vies: VatValidator;
     readonly mfPl: VatValidator;
   };
+  /**
+   * Feature 173 — contribution point: the three registry clients the
+   * registration company lookup composes. Production registers the real ones,
+   * sharing the White List and VIES client **instances** with
+   * `organizationsTaxIdClients`, so one throttle stands in front of each
+   * registry's per-IP limit; the harness contributes counting fakes, because no
+   * test may open a socket to GUS, the White List or VIES.
+   */
+  readonly organizationsRegistryClients: OrganizationsRegistryClients;
+  /** Feature 173 — the lookup's Redis store (answer cache, tickets, budgets) and its service. */
+  readonly organizationsRegistryLookupStore: RegistryLookupStore;
+  readonly organizationsRegistryLookupService: RegistryLookupService;
   readonly organizationReadPort: OrganizationReadPort;
   readonly organizationRestrictionPort: OrganizationRestrictionService;
   readonly organizationTreeService: OrganizationTreeService;
   /** Owned by `admin_roles`: whether this rep holds the roll-up capability. */
   readonly permissionService: {
     hasPermission(adminUserId: string, permission: string): Promise<boolean>;
+    /** Issue #461 — `hasPermission` for many administrators: the ids it answers yes for. */
+    holdersOf(adminUserIds: readonly string[], permission: string): Promise<Set<string>>;
   };
   /**
    * Which organizations a sales-rep admin may see, subtree-expanded when the
@@ -278,6 +363,19 @@ export interface OrganizationsCradle {
   readonly organizationModerationService: OrganizationModerationService;
   readonly organizationRegistrationNotifier: OrgRegistrationNotifier;
   readonly organizations: ReturnType<typeof organizationsModule>;
+  /**
+   * Feature 170 (`specs/170-organization-roles/` WP-02a, research R-16). The
+   * composition's two Redis connections, typed by the halves the role cache
+   * uses, and the resolved manifest registry the permission catalogue reads —
+   * core manifests plus the deployment's overlay modules, a host input as it is
+   * for `admin_roles`' operator catalogue.
+   */
+  readonly redis: OrganizationRolePublisher & RegistryLookupRedis;
+  readonly redisSubscriber: OrganizationRoleSubscriber;
+  readonly resolvedModuleRegistry: readonly OrganizationPermissionManifestEntry[];
+  readonly organizationRoleCatalogue: OrganizationRoleCatalogue;
+  readonly organizationRoleCache: OrganizationRoleCache;
+  readonly organizationRoleService: OrganizationRoleService;
 }
 
 export function registerModule(ctx: ModuleContext): void {
@@ -306,6 +404,15 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   const cradle = (): OrganizationsCradle => ctx.cradle<OrganizationsCradle>();
+  // This module's bundle, for the prose its backend composes in a language it
+  // can resolve (issues #94, #95). Resolved per call, so the gate stays live.
+  const organizationsTranslate: OrganizationsTranslate = (key, language, params) =>
+    lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate(
+      'organizations',
+      key,
+      language,
+      params,
+    );
 
   /**
    * All three `organizations.*` settings are **platform-wide**: whether a new
@@ -365,13 +472,270 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
   );
 
+  /**
+   * Feature 170 — organization roles (`specs/170-organization-roles/` WP-02a;
+   * `contracts/organization-permission-port.md`; research R-15, R-16, R-20).
+   *
+   * Another module's bundle, for the labels of the organization permissions it
+   * declares (R-31). Resolved per call, so the gate stays live.
+   */
+  const moduleTranslate: ModuleTranslate = (moduleId, key, language) =>
+    lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate(moduleId, key, language);
+
+  /**
+   * The permission port's implementation. Both port names below are this one
+   * class over the shared cache; it holds no state of its own.
+   *
+   * The account fallback answers for a subject whose actor carries no role id
+   * — a service judging somebody other than the requester (a cascade's
+   * recipients), or an actor resolved without it: the account's own
+   * `organizationRoleId`, read through `customer_accounts`' port (research
+   * R-15; WP-02b, T046). `null` when the account is not a live member of the
+   * subject's Organization, which the port answers by failing closed.
+   */
+  const permissionService = ({
+    organizationRoleCache,
+    organizationRoleCatalogue,
+  }: OrganizationsCradle): OrganizationRolePermissionService =>
+    new OrganizationRolePermissionService({
+      cache: organizationRoleCache,
+      catalogue: organizationRoleCatalogue,
+      resolveAccountRoleId: async (subject) => {
+        if (!subject.organizationId) return null;
+        const account = await lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort').findInOrganization(
+          subject.customerAccountId,
+          subject.organizationId,
+          { activeOnly: true },
+        );
+        return account?.organizationRoleId ?? null;
+      },
+      permissionLabel: (code, language) =>
+        translatePermissionText(
+          moduleTranslate,
+          organizationRoleCatalogue,
+          code,
+          'label',
+          supportedLanguageOf(language),
+        ),
+      // WP-03 — the role as the session views and the impersonation answer name it (FR-008).
+      predefinedRoleName: (kind, language) => predefinedRoleName(moduleTranslate, kind, supportedLanguageOf(language)),
+    });
+
+  ctx.di.register({
+    organizationRoleCatalogue: ctx
+      .asFunction(
+        ({ resolvedModuleRegistry }: OrganizationsCradle) =>
+          new OrganizationRoleCatalogue({
+            manifests: () => resolvedModuleRegistry,
+            // Both axes, read at call time: a module flip needs no cache drop.
+            isModulePresent: (moduleId) => effectiveState.isPresent(moduleId),
+          }),
+      )
+      .singleton(),
+
+    organizationRoleCache: ctx
+      .asFunction(
+        ({ emFactory, redis }: OrganizationsCradle) =>
+          new OrganizationRoleCache({
+            publisher: redis,
+            // The only read of the roles outside a request's own scope: keyed by
+            // the Organization the caller already resolved, and needed for a
+            // subject the request does not scope to (a cascade's recipients).
+            loader: (organizationId) =>
+              withSystemScope("organization roles: the role cache reads one Organization's roles", async () => {
+                const rows = await emFactory().find(OrganizationRole, { organizationId });
+                const roles: CachedOrganizationRoles = new Map(
+                  rows.map((row) => [
+                    row.id,
+                    {
+                      id: row.id,
+                      kind: row.kind,
+                      name: row.name ?? null,
+                      permissions: new Set(row.permissions),
+                      memberDefaultsOffered: new Set(row.memberDefaultsOffered),
+                    },
+                  ]),
+                );
+                return roles;
+              }),
+          }),
+      )
+      .singleton(),
+
+    organizationRoleService: ctx
+      .asFunction(
+        (cradleValue: OrganizationsCradle) =>
+          new OrganizationRoleService({
+            emFactory: cradleValue.emFactory,
+            commandBus: cradleValue.commandBus,
+            cache: cradleValue.organizationRoleCache,
+            catalogue: cradleValue.organizationRoleCatalogue,
+            permissions: permissionService(cradleValue),
+            customerAccountRead: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            // WP-02b — a held role's holders move as child Commands of its
+            // delete (research R-22); resolved per call, never captured.
+            customerAccountRoles: lazyPort<CustomerAccountRoleCommandPort>(ctx, 'customerAccountRoleCommandPort'),
+            translate: moduleTranslate,
+          }),
+      )
+      .singleton(),
+  });
+
+  ctx.di.providePort<OrganizationPermissionPort>(
+    'organizationPermissionPort',
+    ctx.asFunction(permissionService).singleton(),
+  );
+  ctx.di.providePort<OrganizationRoleReadPort>(
+    'organizationRoleReadPort',
+    ctx.asFunction(permissionService).singleton(),
+  );
+  /**
+   * Issue #368 — the post-sign-in step for a route that establishes a customer
+   * session itself: `mfa`'s second-step verify and enforced-enrolment
+   * completion, and (issue #1188) its federated callback, which also names the
+   * channel the sign-in was started on. The same function the password sign-in
+   * runs, over the same contributed hook, read at call time; the account's
+   * organization is looked up here because those routes know only the account.
+   */
+  ctx.di.providePort<CustomerSignInCompletionPort>(
+    'customerSignInCompletionPort',
+    ctx
+      .asFunction(
+        (): CustomerSignInCompletionPort => ({
+          complete: async ({ customerAccountId, cookies, log, salesChannelId }) => {
+            const account = await lazyPort<CustomerAccountReadPort>(
+              ctx,
+              'customerAccountReadPort',
+            ).findById(customerAccountId);
+            if (!account) return { cartMerge: null, clearAnonymousCartCookie: false };
+            return completeCustomerSignIn((input) => cradle().organizationsLoginHook(input), {
+              customerAccountId,
+              organizationId: account.organizationId ?? null,
+              cookies,
+              log,
+              salesChannelId: salesChannelId ?? null,
+            });
+          },
+        }),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Every composed process drops its role-cache entry when another announces a
+   * role change (R-16). On the composition's one subscriber connection, as
+   * `custom_fields` does; this module is non-deactivatable, so the hook needs
+   * no presence probe (`specs/conventions/module-activation.md` item 3).
+   */
+  ctx.onBoot(async () => {
+    const { organizationRoleCache, redisSubscriber } = ctx.cradle<OrganizationsCradle>();
+    await organizationRoleCache.start(redisSubscriber);
+  });
+
+  /**
+   * `specs/177-tax-id-scope/` (`contracts/tax-id-scope.md` §7) — say so at boot
+   * when the stored tax-ID scope and the database constraint disagree. Logged,
+   * never fatal; no presence probe, as above (non-deactivatable module).
+   */
+  ctx.onBoot(async () => {
+    const { emFactory } = ctx.cradle<OrganizationsCradle>();
+    await probeTaxIdScope(new TaxIdScopeService(emFactory), ctx.log);
+  });
+
+  /**
+   * Feature 173 — one White List client and one VIES client per composition,
+   * shared by the admin "Validate now" (`organizationsTaxIdClients`) and the
+   * registration lookup (`organizationsRegistryClients`): two instances would
+   * be two throttles against one per-IP limit (research R-2).
+   */
+  let sharedRegistryHttpClients: { vies: ViesClient; mfPl: MinisterstwoFinansowClient } | undefined;
+  const registryHttpClients = (): { vies: ViesClient; mfPl: MinisterstwoFinansowClient } =>
+    (sharedRegistryHttpClients ??= { vies: new ViesClient(), mfPl: new MinisterstwoFinansowClient() });
+
+  /**
+   * The GUS client's one log line (a refused key, once an hour) goes to the
+   * Fastify logger once the app exists; before that, nowhere. Never the key or
+   * the session id — the client does not hand either to a logger.
+   */
+  const registryLogger: { current: { warn(obj: object, msg: string): void; info(obj: object, msg: string): void } | null } = {
+    current: null,
+  };
+  const delegatingLogger = {
+    warn: (obj: object, msg: string) => registryLogger.current?.warn(obj, msg),
+    info: (obj: object, msg: string) => registryLogger.current?.info(obj, msg),
+  };
+
+  /**
+   * Feature 173 — the GUS credential, resolved per lookup and only when the
+   * Polish-sources mode includes GUS (research R-12; the `cms` translation
+   * precedent). Every step fails closed to "not configured": an unreadable
+   * setting, an empty reference, `credentials` switched off, a configuration
+   * that does not resolve or is of another type, a value that is not a key and
+   * an environment.
+   */
+  const resolveGusCredential = async (): Promise<GusCredential | null> => {
+    const code = await readSetting<string>(ORGANIZATIONS_SETTING_CODES.GUS_CREDENTIALS, gusCredentialsRefSchema, '');
+    if (code.trim() === '') return null;
+    if (!effectiveState.isPresent('credentials')) return null;
+    try {
+      const resolved = await lazyPort<CredentialsPort>(ctx, 'credentialsService').resolve(code);
+      if (resolved.status !== 'ok' || resolved.typeCode !== ORGANIZATIONS_GUS_CREDENTIAL_TYPE) return null;
+      const apiKey = resolved.values['apiKey'];
+      const environment = resolved.values['environment'];
+      if (typeof apiKey !== 'string' || apiKey.trim() === '') return null;
+      if (environment !== 'production' && environment !== 'test') return null;
+      return { apiKey: apiKey.trim(), environment };
+    } catch {
+      return null;
+    }
+  };
+
+  /** The on/off switch (OD-2), read per request and fail-closed: off on any error. */
+  const readRegistryLookupEnabled = (): Promise<boolean> =>
+    readSetting<boolean>(ORGANIZATIONS_SETTING_CODES.REGISTRY_LOOKUP_ENABLED, registryLookupEnabledSchema, false);
+
   ctx.di.register({
     // Production contributes nothing and reaches the real registries.
     organizationsTaxIdClients: ctx
-      .asFunction((): OrganizationsCradle['organizationsTaxIdClients'] => ({
-        vies: new ViesClient(),
-        mfPl: new MinisterstwoFinansowClient(),
-      }))
+      .asFunction((): OrganizationsCradle['organizationsTaxIdClients'] => registryHttpClients())
+      .singleton(),
+
+    organizationsRegistryClients: ctx
+      .asFunction((): OrganizationsRegistryClients => {
+        const http = registryHttpClients();
+        return {
+          gusPl: new GusBirClient({
+            requestTimeoutMs: GUS_REQUEST_TIMEOUT_MS,
+            totalTimeoutMs: GUS_TOTAL_TIMEOUT_MS,
+            logger: delegatingLogger,
+          }),
+          mfPl: new MfRegistryAdapter(http.mfPl),
+          vies: new ViesRegistryAdapter(http.vies),
+        };
+      })
+      .singleton(),
+
+    organizationsRegistryLookupStore: ctx
+      .asFunction(({ redis }: OrganizationsCradle) => new RegistryLookupStore(redis))
+      .singleton(),
+
+    organizationsRegistryLookupService: ctx
+      .asFunction(
+        ({ organizationsRegistryLookupStore }: OrganizationsCradle) =>
+          new RegistryLookupService({
+            // Read per lookup, so a composition's contribution is what runs.
+            clients: () => cradle().organizationsRegistryClients,
+            store: organizationsRegistryLookupStore,
+            readPlSources: () =>
+              readSetting<string>(
+                ORGANIZATIONS_SETTING_CODES.REGISTRY_LOOKUP_PL_SOURCES,
+                registryLookupPlSourcesSchema,
+                'gus_mf',
+              ),
+            resolveGusCredential,
+            logger: delegatingLogger,
+          }),
+      )
       .singleton(),
 
     // Default: a login does nothing beyond logging in.
@@ -381,11 +745,14 @@ export function registerModule(ctx: ModuleContext): void {
 
     organizationModerationService: ctx
       .asFunction(
-        ({ emFactory, auditLogService, eventBus }: OrganizationsCradle) =>
+        ({ emFactory, commandBus }: OrganizationsCradle) =>
           new OrganizationModerationService(
             emFactory,
-            auditLogService,
-            eventBus as unknown as OrganizationEventBus,
+            // The four transitions are Commands (`specs/186-aggregate-ports/`
+            // T026): the bus records the audit entry in the write's
+            // transaction and dispatches `organization.status_changed.v1` on
+            // the platform event bus once, on commit.
+            commandBus,
             // Every one of these three is another module's gated service and is
             // *stored* by the constructor, so a plain cradle read would freeze
             // a transient gate inside a singleton — it would keep answering
@@ -430,6 +797,13 @@ export function registerModule(ctx: ModuleContext): void {
                 [],
               ),
             templateEmail: lazyPort<TemplateEmailPort>(ctx, 'templateEmailPort'),
+            // Issue #94 — the fallback e-mail is written in the language the
+            // template path sends in: the system-default channel's.
+            translate: organizationsTranslate,
+            resolveLanguage: async () =>
+              supportedLanguageOf(
+                (await cradle().salesChannelResolutionPort.getSystemDefault()).defaultLanguage,
+              ),
           }),
       )
       .singleton(),
@@ -438,6 +812,7 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         ({ emFactory, eventBus, commandBus, auditLogService }: OrganizationsCradle) =>
           organizationsModule({
+            translate: organizationsTranslate,
             emFactory,
             eventBus,
             commandBus,
@@ -472,14 +847,53 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'customerAccountMemberWritePort',
             ),
+            // `specs/176-command-hooks-outbox/` FR-002 — registration's first
+            // account, a child Command of `organization.register`.
+            customerAccountCommands: lazyPort<CustomerAccountMemberCommandPort>(
+              ctx,
+              'customerAccountMemberCommandPort',
+            ),
+            // `specs/186-aggregate-ports/` US3 (issue #1822) — the operator's
+            // member panel writes through the CustomerAccount aggregate port.
+            customerAccountCommandPort: lazyPort<CustomerAccountCommandPort>(ctx, 'customerAccountCommandPort'),
             customFieldValues: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+            // Issue #1903 — the admin list's custom-field filters
+            // (`specs/157-custom-fields-list-filters/`).
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
+            // `specs/178-extensible-columns/` FR-051 — `?extensions=` on the
+            // admin reads; resolved per call from the kernel registration.
+            schemaExtensionReads: {
+              attach: (em, host, records, requested) =>
+                cradle().schemaExtensionReads.attach(em, host, records, requested),
+            },
             // Passed for the first time by any composition — see the note above
             // on `validateCountry`.
             dictionaryValidator: lazyPort<DictionaryValidator>(ctx, 'dictionaryValidator'),
             mailer: lazyPort<EmailMailerPort>(ctx, 'emailMailer'),
             templateEmail: lazyPort<TemplateEmailPort>(ctx, 'templateEmailPort'),
+            // Feature 154 — kernel-provided; binds a registered Organization to
+            // the channel of the store it registered on (the system default
+            // without one) in its creating step, and backs the admin *Sales
+            // channels* endpoints and the admin create.
+            salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
+              ctx,
+              'salesChannelMembershipPort',
+            ),
             storefrontBaseUrl: cradle().storefrontBaseUrl,
+            // Issue #1371 — the storefront the self-service password-reset link
+            // opens: the request's channel's. Read at call time; an absent
+            // `sales_channels` reads as "not configured", and the base URL
+            // above is used.
+            readChannelStorefrontUrl: (salesChannelId) =>
+              cradle().settingsReadPort.get('sales_channels.storefront_url', salesChannelId, z.string()),
             exposeTestProbe: cradle().organizationsExposeTestProbe,
+            // Feature 173 — read per registration; the store is this module's own.
+            registryLookup: {
+              isEnabled: readRegistryLookupEnabled,
+              readTicket: (lookupId) => cradle().organizationsRegistryLookupStore.readTicket(lookupId),
+              deleteTicket: (lookupId) => cradle().organizationsRegistryLookupStore.deleteTicket(lookupId),
+              logger: delegatingLogger,
+            },
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireAdminAny: (permissions) => async (req, reply) =>
@@ -488,6 +902,20 @@ export function registerModule(ctx: ModuleContext): void {
             resolveCustomerContext: (req: FastifyRequest) =>
               cradle().customerContextResolver(req),
             onLogin: (input) => cradle().organizationsLoginHook(input),
+            roleService: cradle().organizationRoleService,
+            roleCache: cradle().organizationRoleCache,
+            organizationPermissions: () =>
+              lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+            // WP-03 — the role every member response names, and the member
+            // role Command `customer_accounts` publishes (research R-22).
+            organizationRoles: lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort'),
+            customerAccountRoles: lazyPort<CustomerAccountRoleCommandPort>(ctx, 'customerAccountRoleCommandPort'),
+            // #667 — the invitation e-mail's role label is written in the
+            // language the template path sends in: the system-default channel's.
+            resolveEmailLanguage: async () =>
+              supportedLanguageOf(
+                (await cradle().salesChannelResolutionPort.getSystemDefault()).defaultLanguage,
+              ),
             // Registered unconditionally. Before T138 each of these four was an
             // optional argument, and an omitted one silently removed a route
             // surface: no `restrictionService` meant no storefront preflight,
@@ -495,23 +923,21 @@ export function registerModule(ctx: ModuleContext): void {
             // Which endpoints a deployment serves is not a function of which
             // arguments a root remembered to pass.
             moderationService: cradle().organizationModerationService,
+            // Issue #698 — the one roll-up-aware instance (#108), never a second.
+            salesRepScope: lazyPort<SalesRepAssignmentPort>(ctx, 'organizationSalesRepScopePort'),
             restrictionService: lazyPort<OrganizationsCradle['organizationRestrictionPort']>(
               ctx,
               'organizationRestrictionPort',
             ),
             effectivePriceListsService: new OrganizationEffectivePriceListsService({
               emFactory,
-              // D-48 — this was `?? 'default'`, a channel *code* landing in
-              // `ResolutionContext.salesChannelId`, which the price-list
-              // evaluator compares against channel **uuids**. On the fallback
-              // branch every `salesChannel` criterion therefore evaluated false
-              // and the panel reported channel-scoped lists as not applying.
-              // The branch cannot be taken, so the fallback goes with it.
-              resolveDefaultSalesChannelId: async () =>
-                (await cradle().salesChannelResolutionPort.getSystemDefault()).id,
-              // Feature 075, Phase C — `price_lists`' own `listActive`, where
-              // this service used to run `em.find(PriceList, …)` against that
-              // module's table and spell the status filter itself.
+              // Feature 160 — the chain pricing reads (this module's own
+              // inheritance service), passed to `listForOrganization`.
+              resolveOrgChain: (organizationId) =>
+                cradle().organizationInheritancePort.priceListOrgChain(organizationId),
+              // Feature 075, Phase C; feature 160 — `price_lists`' own answer
+              // (`listForOrganization`), where this service used to evaluate the
+              // old Application rule itself.
               priceListRead: lazyPort<PriceListReadPort>(ctx, 'priceListReadPort'),
             }),
             taxIdValidationService: new OrganizationTaxIdValidationService({
@@ -545,10 +971,72 @@ export function registerModule(ctx: ModuleContext): void {
    * reason. Eleven modules read the row itself, and between them they touch
    * nearly every column; that is this port.
    */
+  /**
+   * `specs/186-aggregate-ports/` US1 (issue #1821, D-293) — the Organization
+   * aggregate's write port, for server code (an ERP, an overlay, a policy):
+   * each method runs the Command the admin route for the operation runs. The
+   * conversion and the tax-ID correction were its first two methods
+   * (`specs/177-tax-id-scope/`). The narrow `organizationWritePort` and
+   * `organizationCustomFieldWritePort` below delegate to it.
+   */
+  ctx.di.providePort<OrganizationCommandPort>(
+    'organizationCommandPort',
+    ctx.asFunction(({ commandBus, organizationRoleCache }: OrganizationsCradle) => organizationCommandServiceFor(ctx, commandBus, organizationRoleCache)).singleton(),
+  );
+
   ctx.di.providePort<OrganizationDetailsPort>(
     'organizationDetailsPort',
     ctx
-      .asFunction(({ emFactory }: OrganizationsCradle) => new OrganizationDetailsService(emFactory))
+      .asFunction(
+        ({ emFactory }: OrganizationsCradle) =>
+          // `specs/187-side-table-extensions/` FR-058 — `include` on the four
+          // record reads; the kernel's `entityExtensionReads` is resolved only
+          // for a read that names one.
+          new OrganizationDetailsService(
+            emFactory,
+            lazyEntityExtensionReads(() => cradle().entityExtensionReads),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * The server-side custom-field write — for a subscriber on
+   * `organization.registered.v1`, an overlay or an integration worker, which
+   * otherwise had the admin HTTP API or a native UPDATE of this module's table.
+   * A port of its own beside the read model above, which stays read-only; the
+   * semantics (the caller's merge and validation, one Command, the ambient
+   * actor) are on `OrganizationCustomFieldWritePort` in the contracts.
+   */
+  ctx.di.providePort<OrganizationCustomFieldWritePort>(
+    'organizationCustomFieldWritePort',
+    ctx
+      // Deprecated since 0.113.0: delegates to the aggregate port (186 T031).
+      .asFunction(() => new OrganizationCustomFieldWriteService(lazyPort<OrganizationCommandPort>(ctx, 'organizationCommandPort')))
+      .singleton(),
+  );
+
+  /**
+   * Issue #1029 — find, create and update an Organization's identity and
+   * contact fields from another module (an ERP or CRM connector), which
+   * otherwise had the admin HTTP API or a native write to this module's table.
+   * A port of its own beside the read model above, which stays read-only; the
+   * semantics (two Commands, the ambient actor, typed refusals) are on
+   * `OrganizationWritePort` in the contracts.
+   */
+  ctx.di.providePort<OrganizationWritePort>(
+    'organizationWritePort',
+    ctx
+      .asFunction(
+        ({ emFactory }: OrganizationsCradle) =>
+          new OrganizationWriteService({
+            // Deprecated since 0.113.0: `create` and `update` delegate to the
+            // aggregate port (186 T031).
+            commands: lazyPort<OrganizationCommandPort>(ctx, 'organizationCommandPort'),
+            // The read model's own tax-ID lookup: one answer for both ports.
+            lookup: new OrganizationDetailsService(emFactory),
+          }),
+      )
       .singleton(),
   );
 
@@ -576,18 +1064,28 @@ export function registerModule(ctx: ModuleContext): void {
               ),
             },
             auditLogService,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           );
           return {
             ensureForCustomerAccount: async (customerAccountId) =>
               toOrganizationRecord(await service.ensureForCustomerAccountId(customerAccountId)),
-            provisionPersonalOrganization: async (customerAccountId) =>
-              toOrganizationRecord(
-                await service.provisionPersonalOrganizationFor(customerAccountId),
-              ),
+            // The destination's Administrator travels with the answer: the
+            // operator's detach writes it with the Organization (owner ruling
+            // PR-3, research R-34).
+            provisionPersonalOrganization: async (customerAccountId) => {
+              const org = await service.provisionPersonalOrganizationFor(customerAccountId);
+              return {
+                ...toOrganizationRecord(org),
+                administratorRoleId: await predefinedRoleIdOn(emFactory(), org.id, 'administrator'),
+              };
+            },
             anonymizeIfOrphaned: async (customerAccountId) => {
               const org = await service.anonymizeIfOrphaned(customerAccountId);
               return org ? toOrganizationRecord(org) : null;
             },
+            // Issue #923 — what the retention sweep finishes besides the due accounts.
+            listIncompletelyScrubbed: () => service.listIncompletelyScrubbed(),
+            hasIncompletelyScrubbed: () => service.hasIncompletelyScrubbed(),
           };
         },
       )
@@ -623,41 +1121,20 @@ export function registerModule(ctx: ModuleContext): void {
               ),
             },
             auditLogService,
+            // Feature 154 — the personal Organization is bound to the
+            // registering store's channel (the system default without one) in
+            // the provisioning transaction.
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           );
           return {
+            // Read on the caller's `em`: the Organization and its roles exist
+            // only inside the caller's still-open transaction (research R-34).
             provisionFor: async (em, input) => {
               const org = await service.provisionFor(em, input);
-              return { id: org.id };
+              return { id: org.id, administratorRoleId: await predefinedRoleIdOn(em, org.id, 'administrator') };
             },
           };
         },
-      )
-      .singleton(),
-  );
-
-  /**
-   * Issue #175 — the cart-approval policy write.
-   *
-   * `carts` drives both surfaces that flip `requires_cart_approval` but the
-   * column is this module's, and it was writing it by holding this module's
-   * entity — the last entry in that module's cross-module import ledger. D-78
-   * step 1 puts the operation with the owner, and publishing it settled the
-   * question the direct write had been ducking: the flip had no audit row on
-   * this side, and Constitution XIII says it must have one. Hence a Command,
-   * whose actor the bus derives from the caller's ambient context.
-   *
-   * The cascade over `carts`' own rows stays with `carts`, keyed off `changed`.
-   */
-  ctx.di.providePort<OrganizationCartApprovalWritePort>(
-    'organizationCartApprovalWritePort',
-    ctx
-      .asFunction(
-        ({ commandBus }: OrganizationsCradle): OrganizationCartApprovalWritePort => ({
-          setCartApprovalPolicy: (organizationId, requiresCartApproval) =>
-            commandBus.run(
-              makeSetCartApprovalPolicyCommand({ organizationId, requiresCartApproval }),
-            ),
-        }),
       )
       .singleton(),
   );
@@ -666,8 +1143,8 @@ export function registerModule(ctx: ModuleContext): void {
     'organizationRestrictionPort',
     ctx
       .asFunction(
-        ({ emFactory, auditLogService }: OrganizationsCradle) =>
-          new OrganizationRestrictionService(emFactory, auditLogService),
+        // The two allow-list writes are Commands (`specs/186-aggregate-ports/` T027).
+        ({ emFactory, commandBus }: OrganizationsCradle) => new OrganizationRestrictionService(emFactory, commandBus),
       )
       .singleton(),
   );
@@ -702,6 +1179,7 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         ({ emFactory }: OrganizationsCradle): OrganizationTaxProfilePort => ({
           taxProfileOf: async (organizationId: string) => {
+            if (!isUuidShape(organizationId)) return null;
             const org = await emFactory().findOne(Organization, { id: organizationId });
             if (!org) return null;
             return { vatStatus: org.vatStatus, country: org.registeredAddress?.country ?? null };
@@ -764,24 +1242,15 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort(
     'organizationSalesRepScopePort',
     ctx
-      .asFunction(({ emFactory, auditLogService }: OrganizationsCradle): SalesRepAssignmentPort => {
-        const assignments = new SalesRepAssignmentService(emFactory, auditLogService, {
-          treeService: lazyPort<OrganizationTreeService>(ctx, 'organizationTreeService'),
-          hasRollupCapability: (adminUserId: string) =>
-            // `organizations:rollup` is a core `PERMISSION_CATALOGUE` code
-            // rather than another module's private string, so naming it here
-            // crosses no boundary — the same call `quote_requests` makes.
-            lazyPort<OrganizationsCradle['permissionService']>(
-              ctx,
-              'permissionService',
-            ).hasPermission(adminUserId, 'organizations:rollup'),
-        });
+      .asFunction(({ emFactory, commandBus }: OrganizationsCradle): SalesRepAssignmentPort => {
+        const assignments = salesRepAssignmentServiceFor(ctx, emFactory, commandBus);
         return {
           canSeeOrganization: (adminUserId, organizationId) =>
             assignments.canSeeOrganization(adminUserId, organizationId),
           listAssignedOrganizationIds: (adminUserId) =>
             assignments.listAssignedOrganizationIds(adminUserId),
           listForOrganization: (organizationId) => assignments.listForOrganization(organizationId),
+          listOrganizationIdsWithAssignments: () => assignments.listOrganizationIdsWithAssignments(),
           assign: (input) => assignments.assign(input),
           unassign: (input) => assignments.unassign(input),
         };
@@ -814,10 +1283,13 @@ export function registerModule(ctx: ModuleContext): void {
     'adminTenantScopePort',
     ctx
       .asFunction(
-        (): AdminTenantScopePort =>
+        ({ emFactory, commandBus }: OrganizationsCradle): AdminTenantScopePort =>
           createAdminTenantScopePort(
             lazyPort<PermissionReadPort>(ctx, 'permissionService'),
-            lazyPort<SalesRepAssignmentPort>(ctx, 'organizationSalesRepScopePort'),
+            // Issue #305 — the reach in one statement, from the same
+            // service, built by the same function, as the visibility port:
+            // the rule has one implementation, roll-up deps included (#108).
+            salesRepAssignmentServiceFor(ctx, emFactory, commandBus),
           ),
       )
       .singleton(),
@@ -825,6 +1297,42 @@ export function registerModule(ctx: ModuleContext): void {
 
   ctx.routes(async (app) => {
     await cradle().organizations(app);
+  });
+
+  /**
+   * Feature 173 — the registration company lookup's two anonymous endpoints,
+   * always registered; the switch is read per request (research R-16).
+   */
+  /**
+   * Feature 173 — a change of the switch or the GUS credential drops the
+   * storefront's cached registration options at once rather than after their
+   * 300 s TTL (research R-11). `ctx.subscribe`, so it stops with the module;
+   * the revalidator is a no-op where `STOREFRONT_BASE_URL` / `REVALIDATE_SECRET`
+   * are unset (the `google_tag_manager` shape).
+   */
+  const registrationOptionsRevalidator = new StorefrontRevalidator({
+    baseUrl: process.env['STOREFRONT_BASE_URL'],
+    secret: process.env['REVALIDATE_SECRET'],
+  });
+  ctx.subscribe('settings.value_changed', registrationOptionsRevalidation(registrationOptionsRevalidator));
+
+  ctx.routes(async (app) => {
+    registryLogger.current = app.log;
+    registrationOptionsRevalidator.setLogger(app.log);
+    await registerRegistryLookupRoutes(app, {
+      isEnabled: readRegistryLookupEnabled,
+      lookupService: () => cradle().organizationsRegistryLookupService,
+    });
+  });
+
+  /**
+   * Feature 173 — the GUS REGON credential type this module owns, pushed into
+   * `credentials`' registry. A **contribution** hook and deliberately unprobed
+   * (the `product_feeds` shape, `specs/conventions/module-activation.md` item
+   * 3): an inert descriptor into a registry the host filters by owner presence.
+   */
+  ctx.onBoot(() => {
+    lazyPort<ConfigurationTypeRegistryPort>(ctx, 'configurationTypeRegistry').register(gusBirConfigurationType);
   });
 
   /**
@@ -854,6 +1362,7 @@ export function registerModule(ctx: ModuleContext): void {
         'organizationSalesRepScopePort',
       ),
       adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+      commandBus: cradle().commandBus,
     });
   });
 
@@ -867,6 +1376,15 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.subscribe('organization.registered.v1', async (payload) => {
     const { organizationId } = payload as unknown as { organizationId: string };
     await cradle().organizationModerationService.handleNewlyRegistered(organizationId);
+  });
+  // `specs/186-aggregate-ports/` research R-16.4 — the customer's approval or
+  // rejection notice, after the transition committed, whichever path ran it: an
+  // admin route, `organizationCommandPort`, the auto-approval, or a child
+  // Command (`specs/188-policy-points/`). Best effort; it never throws.
+  ctx.subscribe('organization.status_changed.v1', async (payload) => {
+    await cradle().organizationModerationService.notifyStatusChanged(
+      payload as unknown as ModerationStatusChange,
+    );
   });
 
   /**
@@ -890,6 +1408,7 @@ export function registerModule(ctx: ModuleContext): void {
     defaults.register('new_org_registration', NEW_ORG_REGISTRATION_DEFAULT, 'organizations');
     defaults.register('organization_approved', ORGANIZATION_APPROVED_DEFAULT, 'organizations');
     defaults.register('organization_rejected', ORGANIZATION_REJECTED_DEFAULT, 'organizations');
+    defaults.register(PASSWORD_RESET_EMAIL_CODE, PASSWORD_RESET_DEFAULT, 'organizations');
   });
 
 
@@ -917,22 +1436,81 @@ export function registerModule(ctx: ModuleContext): void {
    * pushes an inert provider into `admin_search`'s ungated registry and does
    * nothing else, so it carries no presence probe (D-67/D-68).
    *
-   * The rows are the Organizations list's; the request's scope only ranks them
-   * (owner answer to spec Q2): a scoped admin's allowed set — their assigned
-   * organizations — comes first.
+   * The rows are the Organizations list's, which narrow to the reach rule
+   * (issue #305, superseding the owner's answer to spec Q2); a sales
+   * representative's assigned organizations come first (FR-015a).
    */
   ctx.onBoot(() => {
     const i18n = lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService');
     const service = new OrganizationAdminSearchService(() => ctx.cradle<OrganizationsCradle>().emFactory());
     lazyPort<AdminSearchProviderRegistryPort>(ctx, 'adminSearchProviderRegistry').register(
       createOrganizationAdminSearchProvider({
-        search: (query) => {
-          const constraint = orgConstraintFor();
-          return service.search(query, constraint.kind === 'set' ? constraint.organizationIds : null);
-        },
+        // Issue #305 — the rows narrow to the reach rule inside the service
+        // (`orgScopeWhere('id')`); the assignments only rank them.
+        search: async (query) => service.search(query, await assignedOrganizationIdsForRanking()),
         translate: (key, language) => i18n.translate('organizations', key, language),
       }),
     );
+  });
+}
+
+/**
+ * `organizationCommandPort`'s construction (`specs/186-aggregate-ports/` US1).
+ * Every other module's port is resolved per call through `lazyPort`, so the
+ * gates stay live inside this singleton; this module's own services are read
+ * from the cradle per call, as they are built after the port's registration.
+ */
+function organizationCommandServiceFor(
+  ctx: ModuleContext,
+  commandBus: OrganizationsCradle['commandBus'],
+  roleCache: OrganizationsCradle['organizationRoleCache'],
+): OrganizationCommandService {
+  const cradle = () => ctx.cradle<OrganizationsCradle>();
+  return new OrganizationCommandService({
+    commandBus,
+    accounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+    roleCache,
+    aggregate: {
+      emFactory: () => cradle().emFactory(),
+      membership: lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+      dictionaryValidator: lazyPort<DictionaryValidator>(ctx, 'dictionaryValidator'),
+      // As the admin create and the parent route pass it (`routes.admin.ts`).
+      tree: lazyPort<OrganizationTreeService>(ctx, 'organizationTreeService'),
+      customFieldValues: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+      moderation: () => cradle().organizationModerationService,
+      restrictions: () => cradle().organizationRestrictionPort,
+      adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+    },
+  });
+}
+
+/**
+ * The one construction of `SalesRepAssignmentService` (issue #108, #305): the
+ * roll-up deps are not optional at this seam, so no port built over the
+ * service can apply the flat rule by omission.
+ */
+function salesRepAssignmentServiceFor(
+  ctx: ModuleContext,
+  emFactory: OrganizationsCradle['emFactory'],
+  // `organization.sales_rep_assign` / `_unassign` run on it (`specs/186-aggregate-ports/` R-16.7).
+  commandBus: OrganizationsCradle['commandBus'],
+): SalesRepAssignmentService {
+  return new SalesRepAssignmentService(emFactory, commandBus, {
+    treeService: lazyPort<OrganizationTreeService>(ctx, 'organizationTreeService'),
+    hasRollupCapability: (adminUserId: string) =>
+      // `organizations:rollup` is a core `PERMISSION_CATALOGUE` code
+      // rather than another module's private string, so naming it here
+      // crosses no boundary — the same call `quote_requests` makes.
+      lazyPort<OrganizationsCradle['permissionService']>(
+        ctx,
+        'permissionService',
+      ).hasPermission(adminUserId, 'organizations:rollup'),
+    hasRollupCapabilities: (adminUserIds: readonly string[]) =>
+      lazyPort<OrganizationsCradle['permissionService']>(ctx, 'permissionService').holdersOf(
+        adminUserIds,
+        'organizations:rollup',
+      ),
+    warn: (fields, message) => ctx.log.warn(fields, message),
   });
 }
 
@@ -956,10 +1534,12 @@ export const entities = [
   OrganizationDeliveryMethodLink,
   OrganizationInvitation,
   OrganizationPaymentMethodLink,
+  OrganizationRole,
   OrganizationSalesRepAssignment,
   OrganizationTaxIdValidation,
   OrganizationWarehouseLink,
   Organization,
+  OrganizationTaxIdPolicy,
 ];
 
 /**

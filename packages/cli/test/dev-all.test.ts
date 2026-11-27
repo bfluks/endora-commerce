@@ -36,7 +36,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -302,7 +302,14 @@ describe('planDev — the layers it starts are the ones this tree has', () => {
 // FR-060 — the supervisor, over real processes
 // ---------------------------------------------------------------------------
 
-describe('superviseDev — one foreground, one stop, and the failing layer named', () => {
+// These spawn real processes and wait on them through `eventually()`, whose own
+// budget is 10 s per call — so the test's must be wider than vitest's default
+// 10 s, or a slow runner times the test out before the assertion can say what
+// did not hold (issue #579).
+describe(
+  'superviseDev — one foreground, one stop, and the failing layer named',
+  { timeout: 30_000 },
+  () => {
   it('a failure in one stops the others, names which, and exits with its code', async () => {
     const dir = temp('dev-run-');
     const pids = join(dir, 'pids');
@@ -415,6 +422,48 @@ describe('superviseDev — one foreground, one stop, and the failing layer named
     expect(await eventually(() => !alive(Number(readFileSync(pidFile, 'utf8'))))).toBe(true);
   });
 
+  // Issue #952: on CI, `endora dev`'s failing case sometimes took start-up
+  // plus the full 10 s grace — a layer survived the group SIGTERM. A process
+  // that joins the group *after* the signal was sent never receives it, and
+  // the layer's pipe stays open until the forced stop. The layer here is that
+  // race made deterministic: it answers the polite stop by starting a child,
+  // as `pnpm run` does when the signal lands before it has spawned the script.
+  it('a child started after the polite stop is stopped politely too, well before the grace runs out', async () => {
+    if (process.platform === 'win32') return;
+    const dir = temp('dev-run-');
+    const ready = join(dir, 'ready');
+    const latePid = join(dir, 'late.pid');
+    const controller = new AbortController();
+    const running = superviseDev(
+      [
+        nodeProcess(
+          'api',
+          dir,
+          `const { spawn } = require('child_process');` +
+            ` process.once('SIGTERM', () => {` +
+            ` const child = spawn(process.execPath, ['-e', ${JSON.stringify(RUN_FOREVER)}], { stdio: 'inherit' });` +
+            // Its pid is written by the parent, at once, so the case does not
+            // depend on how fast the child starts.
+            ` require('fs').writeFileSync(${JSON.stringify(latePid)}, String(child.pid));` +
+            ` child.on('exit', () => process.exit(0)); });` +
+            ` require('fs').writeFileSync(${JSON.stringify(ready)}, ''); ${RUN_FOREVER}`,
+        ),
+      ],
+      { write: () => undefined, signal: controller.signal, graceMs: 10_000 },
+    );
+    expect(await eventually(() => existsSync(ready))).toBe(true);
+    const stoppedAt = Date.now();
+    controller.abort();
+    expect(await running).toBe(0);
+    const elapsed = Date.now() - stoppedAt;
+    expect(existsSync(latePid), 'the layer never started its late child').toBe(true);
+    expect(elapsed, 'the late child waited for the forced stop').toBeLessThan(3_000);
+    // Polled: its parent may have gone first, and an orphan is a zombie until
+    // init reaps it, which `kill(pid, 0)` still reports as alive.
+    const pid = Number(readFileSync(latePid, 'utf8'));
+    expect(await eventually(() => !alive(pid)), 'the late child survived').toBe(true);
+  });
+
   it('a layer that ends on its own is a stop too — a server that returned is not running', async () => {
     const dir = temp('dev-run-');
     const lines: string[] = [];
@@ -436,7 +485,8 @@ describe('superviseDev — one foreground, one stop, and the failing layer named
     expect(lines).toContain('[api] listening');
     expect(lines).toContain('[api] warned');
   });
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // The argv layer — `endora dev`
@@ -455,6 +505,58 @@ describe('`endora dev` — the verb `dev:all` runs', () => {
     expect(result.stderr).toContain('package.json');
   });
 
+  it('starts without loading the TypeScript compiler — the supervisor never parses source', () => {
+    // Issue #250: `endora dev` imported every verb's module before dispatching,
+    // and `check`'s rules import `typescript` — about two seconds of CPU before
+    // the first layer was spawned, on every `dev:all`, for a compiler the
+    // supervisor never calls. Under a loaded runner that start-up alone took the
+    // case below past its timeout. Asserted on what is loaded, not on how long
+    // it took, so the answer does not depend on the machine.
+    const root = temp('dev-cli-');
+    const loaded = join(root, 'loaded.txt');
+    const hook = join(root, 'record-typescript.mjs');
+    writeFileSync(
+      hook,
+      `import { registerHooks } from 'node:module';\n` +
+        `import { appendFileSync } from 'node:fs';\n` +
+        `registerHooks({ resolve(specifier, context, next) {\n` +
+        `  const resolved = next(specifier, context);\n` +
+        `  if (/[\\\\/]node_modules[\\\\/]typescript[\\\\/]/.test(resolved.url)) {\n` +
+        `    appendFileSync(${JSON.stringify(loaded)}, resolved.url + '\\n');\n` +
+        `  }\n` +
+        `  return resolved;\n` +
+        `} });\n`,
+      'utf8',
+    );
+    const result = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(hook).href, ENDORA, 'dev'],
+      { cwd: root, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000 },
+    );
+    expect(result.status, result.stderr).toBe(2);
+    expect(existsSync(loaded) ? readFileSync(loaded, 'utf8') : '').toBe('');
+  });
+
+  // **The verb's own worst case, not a unit case's** (issue #250). When the
+  // API fails, the supervisor stops the admin layer politely and forces it
+  // once `superviseDev`'s grace is up, which `endora dev` leaves at its 10 s
+  // default, so this case's legitimate upper bound is the chain's start-up
+  // **plus ten seconds** — and the package's 10 s `testTimeout` sat below the
+  // grace alone. On CI the case took 1.5 s when the polite stop landed, and
+  // 11.4 s and 11.6 s in the two red runs (42428845134, 42432426923), while
+  // the two `spawnSync` cases just before it in those same runs took 45-102 ms:
+  // the runner was not slow, and 1.5 s plus the grace is what the forced stop
+  // costs. Locally the case takes 0.36 s idle and 1.4-4.6 s under 32 CPU
+  // burners (110 runs, none forced), so the race that leaves the admin layer
+  // up past the polite stop is CI's to show, not this machine's. Issue #952
+  // took the likeliest cause away — a process joining the group after the one
+  // SIGTERM, now reached by the supervisor's repeated polite stop, which has
+  // its own case above — but it was inferred, not reproduced, so the forced
+  // stop stays a legitimate path for this case. Whether the stop was polite or
+  // forced is not this case's subject — the grace has its own case above — so
+  // its budget is the bound it already set for the process: `spawnSync`'s 60 s.
+  const SPAWN_BUDGET_MS = 60_000;
+
   it('a layer that fails takes the others down and the verb exits with its code', () => {
     const root = temp('dev-cli-');
     // Scripts that stand in for the three layers: the API fails at once, the
@@ -468,12 +570,12 @@ describe('`endora dev` — the verb `dev:all` runs', () => {
       cwd: instance,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 60_000,
+      timeout: SPAWN_BUDGET_MS,
     });
     expect(result.status).toBe(4);
     expect(`${result.stdout}${result.stderr}`).toContain('[api]');
     expect(`${result.stdout}${result.stderr}`).toMatch(/api exited with code 4/);
-  });
+  }, SPAWN_BUDGET_MS);
 });
 
 /**

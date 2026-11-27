@@ -38,8 +38,13 @@ potrzebuje osobnego grafu usług. Rolę procesu wybiera zmienna środowiskowa `B
 Na jednym serwerze VPS uruchom tylko proces API — workery działają w nim:
 
 ```bash
-pnpm --filter backend run start      # production (built)
-pnpm --filter backend run dev        # development (tsx watch)
+# W katalogu głównym instancji:
+pnpm run start      # production (built)
+pnpm run dev        # development (watch)
+
+# W klonie repozytorium Endora Commerce:
+pnpm --filter backend run start
+pnpm --filter backend run dev
 ```
 
 Przy niewielkim obciążeniu ta zasada na to pozwala: worker pozostaje *osobnym punktem wejścia*, ale
@@ -51,13 +56,23 @@ Gdy masowe edycje, importy albo ponowne indeksowanie zaczynają spowalniać obs�
 workery do osobnych procesów:
 
 ```bash
+# W katalogu głównym instancji.
 # Warstwa web — tylko HTTP, bez konsumentów in-process.
-BACKEND_ROLE=api pnpm --filter backend run start
+BACKEND_ROLE=api pnpm run start
 
 # Warstwa worker — tylko konsumenci, bez listenera HTTP.
+pnpm run worker
+
+# W klonie repozytorium Endora Commerce:
+BACKEND_ROLE=api pnpm --filter backend run start
 pnpm --filter backend run worker          # production (built)
 pnpm --filter backend run worker:dev      # development (tsx watch)
 ```
+
+Instancja nie ma workera w trybie obserwowania zmian: `pnpm run dev` uruchamia API razem z
+workerami, a tego potrzebuje komputer deweloperski. Instancja utworzona, zanim jej katalog główny
+zadeklarował `worker`, nie ma `pnpm run worker`; tam to samo polecenie to
+`pnpm -C backend run worker`.
 
 Warstwę workerów skaluj **poziomo**, uruchamiając więcej procesów (albo kontenerów) workera.
 Atomowe pobieranie zadań w BullMQ gwarantuje, że każde zadanie wykona dokładnie jeden z nich;
@@ -84,7 +99,7 @@ kolejki:
   (50 produktów). Żądanie z panelu zapisuje wiersz `BulkOperation` ze statusem `pending`, dodaje jego
   identyfikator do kolejki i od razu zwraca `202`.
 - **`search_reindex`** — pełne ponowne indeksowanie Meilisearch (odpowiednik polecenia
-  `pnpm search:reindex`), dodawane do kolejki automatycznie po zmianie flagi `searchable` atrybutu.
+  `pnpm run cli search reindex`), dodawane do kolejki automatycznie po zmianie flagi `searchable` atrybutu.
 
 Konsument przejmuje wiersz, zmieniając `pending → running` warunkowym UPDATE (atomowe przejęcie),
 wykonuje handler i na bieżąco zapisuje postęp, a na końcu status `completed` / `failed`. Po
@@ -104,6 +119,101 @@ wykładniczo rosnącym odstępem; ostateczna porażka trafia do kolejki nieudany
 ponowić w widoku panelu **Webhooks → Deliveries**. Kontrakt wysyłki i zasady ponawiania opisuje
 moduł [webhooks](../modules/webhooks.md).
 
+### Odświeżanie powierzchni cen — `price_lists.surface`
+
+Utrzymuje aktualne ceny, według których są porządkowane listy produktów **sortowane i filtrowane
+według ceny**. Takich list nie da się uporządkować z indeksu wyszukiwania — każdy kupujący może mieć
+własne ceny — więc moduł `price_lists` wylicza z wyprzedzeniem cenę każdego produktu dla każdej
+grupy kupujących, którzy mają te same cenniki (*profil cenowy*). Każda zatwierdzona zmiana ceny —
+cennik, jego wiersze, kanały lub odbiorcy, ceny bazowe, zmiana stanu przez opisaną niżej aktualizację
+statusów, zmiana produktu, kategorii lub atrybutu, zmiana kanału sprzedaży — oznacza to, co może
+przesunąć: produkty, których dotyczy, w profilach, do których sięga, albo całe profile, gdy dotyczy
+każdego ich produktu (zmiana kanału sprzedaży, linia dla wszystkich produktów albo tylko dla
+wartości atrybutu, ponad 10 000 produktów naraz). Potem dodaje do kolejki **jedno scalone zadanie**
+(ze stałym identyfikatorem, więc seria zapisów kosztuje jedno zadanie; trzy próby z wykładniczo
+rosnącym odstępem).
+
+Każdy przebieg konsumenta buduje w całości profile nigdy niezbudowane i oznaczone w całości, a w
+pozostałych ponownie wycenia tylko oznaczone produkty, profile dla wszystkich przed profilami
+kupujących, i podmienia każdą zmianę w jednej transakcji. Przebiegi powtarzają się, dopóki zapisy
+dodają znaczniki, więc zmianę wprowadzoną w trakcie przebiegu obsłuży następny. Żądanie nigdy na
+niego nie czeka: oznaczony profil nadal podaje poprzedni porządek, a ceny na kartach produktów są
+zawsze wyliczane na bieżąco, więc po zmianie opóźnia się tylko **porządek** listy sortowanej według
+ceny — o czas obsługi przez konsumenta, w pomiarach platformy około pół sekundy dla pojedynczej
+zmiany i poniżej około półtorej minuty, przy około 200 profilach, dla zmiany, która przebudowuje
+w całości wiele profili (85 s przy 202 profilach na 50 000 produktów, zgłoszenie #416). Zadanie jest
+idempotentne (odświeżenie liczy wszystko od źródła), więc ponowna próba albo druga instancja workera
+niczego nie psuje.
+
+**Jeśli żaden worker nie obsługuje tej kolejki** — warstwa procesów bez konsumentów albo brak
+Redis — profile nigdy nie powstają: listy sortowane według ceny są wtedy porządkowane na podstawie
+bieżącej wyceny, gdy są zawężone do najwyżej 5 000 produktów (kategoria, wyszukiwanie), a w
+przeciwnym razie podawane w domyślnym porządku katalogu, z poprawnymi cenami na kartach. Uruchamiaj
+workera wszędzie tam, gdzie sortowanie według ceny ma znaczenie.
+
+### Porządkowanie tabel po zapisach masowych — `catalog.table-maintenance`, `price_lists.table-maintenance`
+
+Zaraz po zapisie masowym Postgres nie ma aktualnych statystyk ani mapy widoczności dla zapisanych
+wierszy, dopóki nie przejdzie po nich autovacuum — a przy zapisie poniżej progu autovacuum to
+przejście może nie nastąpić. Do tego czasu odczyty panelu oparte na samych indeksach (uporządkowany
+przegląd listy produktów, linie i wyszukiwanie cennika) czytają każdy wiersz z tabeli, co przy
+katalogu 50 000 produktów kosztuje najszersze wyszukiwania około 25 ms każde (zgłoszenie #409).
+Dlatego każdy moduł prosi o `VACUUM (ANALYZE)` własnych tabel, gdy zatwierdzi się ich zapis masowy:
+`catalog` dla `products` i `product_variants` po imporcie produktów (*Import / Eksport*,
+`catalogBulkImportPort`), a `price_lists` dla `price_list_matrix_entries` i
+`price_list_product_lines` po paczce wierszy cennika (zapis w edytorze, import CSV), zapisie cen
+bazowych (import cen z PIM) i duplikacji cennika. `VACUUM` nie może działać wewnątrz transakcji,
+więc jest zadaniem w kolejce, nigdy częścią zapisu.
+
+Każda prośba to zadanie **opóźnione o minutę i deduplikowane po tabeli**: każdy zapis w czasie
+oczekiwania zostaje wchłonięty (vacuum i tak wykona się po nim), a zapis w trakcie jego działania
+zostawia dokładnie jedno kolejne zadanie. Jeden konsument na moduł wykonuje je pojedynczo;
+nieudane zadanie jest logowane, ponawiane raz i porzucane. **Jeśli żaden worker nie obsługuje tych
+kolejek**, nic się nie psuje — autovacuum pozostaje zabezpieczeniem, a powyższe odczyty są wolniejsze
+do jego pierwszego przejścia.
+
+### Kolejka dostarczeń — `command_outbox.drain`
+
+Dostarcza zapisy odbiorcom `afterCommit`, których zainstalowane moduły rejestrują na zapisie innego
+modułu — na przykład powiadomienie ERP o rejestracji organizacji. Dostarczenie do każdego odbiorcy to wiersz
+zapisany w tej samej transakcji co zapis, więc zatwierdzony zapis nigdy go nie gubi. Harmonogram
+zadań opróżnia wiersze co 10 sekund, a zapis, który utworzył wiersze, od razu budzi opróżnianie.
+Nieudane dostarczenie jest ponawiane z rosnącym odstępem, do 10 prób, a potem staje się
+**martwe**; odbiorca może też od razu zrezygnować z dostarczenia.
+
+Martwe dostarczenia widać w panelu w **Platforma → Hooki modułów → Kolejka dostarczeń**
+(`platform.command_outbox.read`), z odbiorcą, liczbą prób i kodem błędu — nigdy z danymi, które
+niosło dostarczenie. Administrator z uprawnieniem `platform.command_outbox.manage` może je tam
+ponowić, a ponowienie trafia do dziennika audytu. Dostarczenie, którego moduł odbiorcy jest
+wyłączony, czeka, nie zużywając próby, aż moduł zostanie ponownie włączony. Dostarczone wiersze są
+usuwane po 7 dniach, martwe po 90. Kontrakt dostarczania opisuje
+[Command Bus](../architecture/command-bus.md#aftercommit-outbox).
+
+**Jeśli żaden worker nie obsługuje tej kolejki**, nic nie ginie: wiersze czekają w bazie danych
+i zostaną dostarczone, gdy worker zacznie działać.
+
+### Wyszukiwanie porzuconych koszyków — `carts.abandonment.sweep`
+
+Oznacza jako porzucone koszyki aktywne, bezczynne dłużej niż `carts.abandonment.inactivity_minutes`
+(i wysyła powiadomienie o porzuceniu, jeśli wdrożenie je dostarcza), oraz usuwa koszyki robocze
+pozostawione przez składanie zamówienia, które się nie zakończyło. Harmonogram zadań uruchamia je co
+15 minut. Każde uruchomienie najpierw sprawdza, czy jakiś koszyk na to czeka, i wykonuje przebieg
+tylko wtedy, gdy taki jest, więc bezczynna instancja nie wykonuje pracy i nie zapisuje z tego powodu
+wiersza audytu. Przebieg przetwarza koszyki porcjami po 500 i zatwierdza zmiany statusu każdej porcji
+razem z wierszami audytu, więc przerwany przebieg zostawia całe porcje, a nie częściowe; resztę
+bierze następne uruchomienie. Przebiegi są idempotentne, więc druga instancja workera niczego nie
+psuje. Gdy moduł `carts` jest niedostępny na platformie, żadne uruchomienie się nie odbywa.
+
+Jeden przebieg ręcznie uruchamia polecenie `pnpm run cli carts abandonment-sweep` w katalogu głównym
+instancji (`pnpm --filter backend run cart:abandonment-sweep` w klonie repozytorium Endora
+Commerce). Polecenie przed jakąkolwiek czynnością sprawdza obecność modułu w `module_registrations` i
+kończy się niezerowym kodem z `MODULE_DISABLED`, gdy moduł `carts` nie jest zainstalowany we
+wdrożeniu.
+
+**Jeśli żaden worker nie obsługuje tej kolejki**, koszyki nie są oznaczane jako porzucone, a
+osierocone koszyki robocze zostają w bazie danych — bez szkody, bo nic ich nie czyta — dopóki worker
+nie zacznie działać albo polecenie nie zostanie uruchomione ręcznie.
+
 ## Inne zadania w tle (jeszcze nie na wspólnej kolejce)
 
 Kilka zadań okresowych i porządkowych nadal działa jako timery w procesie albo skrypty uruchamiane
@@ -112,22 +222,18 @@ samego modelu workerów; do tego czasu dokumentuj je i obsługuj tak:
 
 | Zadanie | Jak działa dziś | Uruchomienie |
 | --- | --- | --- |
-| Wyszukiwanie porzuconych koszyków | Skrypt uruchamiany ręcznie lub przez cron | `pnpm --filter backend run cart:abandonment-sweep` |
-| Pełne ponowne indeksowanie wyszukiwarki | Polecenie uruchamiane ręcznie | `pnpm --filter backend run search:reindex` |
-| Aktualizacja statusów cenników | `setInterval` w procesie (co 5 min) | startuje razem z procesem API |
+| Pełne ponowne indeksowanie wyszukiwarki | Polecenie uruchamiane ręcznie | `pnpm run cli search reindex` |
+| Aktualizacja statusów cenników (przenosi cenniki *Zaplanowane* do *Aktywnych*, a *Aktywne* do *Wygasłych* na potrzeby widoku w panelu; ceny i tak stosują daty cennika dokładnie w ich chwili) | `setInterval` w procesie (co 5 min) | startuje razem z procesem API |
 | Wygasanie zapytań ofertowych | Metoda usługi wywoływana według harmonogramu | `RfqExpiryWorker.sweep()` |
+
+Polecenie uruchamia się w katalogu głównym instancji. W klonie repozytorium Endora Commerce ma
+postać `pnpm --filter backend run search:reindex`.
 
 :::note
 Opisane wyżej zadania oparte na `setInterval` w procesie to starszy wzorzec, który zastępuje zasada
 o skalowalnych konsumentach kolejek. Nowa praca asynchroniczna MUSI korzystać z trwałej kolejki i
 opisanego tu modelu osobnego workera, a nigdy z timera w procesie obsługującym żądania.
 :::
-
-Wyszukiwanie porzuconych koszyków przed jakąkolwiek czynnością sprawdza obecność modułu w
-`module_registrations` i kończy się niezerowym kodem z `MODULE_DISABLED`, gdy moduł `carts` nie jest
-zainstalowany we wdrożeniu — to ta sama odpowiedź, jaką dałaby trasa HTTP, tylko dla punktu wejścia
-bez trasy, którą można by zablokować. Przetwarza koszyki porcjami po 500 i zatwierdza zmiany statusu
-każdej porcji razem z wierszami audytu, więc przerwany przebieg zostawia całe porcje, a nie częściowe.
 
 ## Monitorowanie i rozwiązywanie problemów
 

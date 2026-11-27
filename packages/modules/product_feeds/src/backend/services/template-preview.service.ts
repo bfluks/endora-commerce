@@ -7,6 +7,7 @@ import {
   type FeedTemplatePreviewRequest,
   type CatalogProductReadPort,
   type TaxonomyProviderCode,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
@@ -139,12 +140,15 @@ export class TemplatePreviewService {
       // whether the source itself produced the value, and once as configured.
       // That is what lets the editor show "Empty — will send \"New\"" instead
       // of a value the operator cannot account for (ux-design §3.4).
+      // `templateFields`: whether a sub-cent price is published as a pack is
+      // the whole template's answer, not one field's (issue #430).
       const withoutFallback = this.deps.resolver.resolve({
         fields: [{ ...field, fallbackValue: null }],
+        templateFields: fields,
         item,
         context,
       });
-      const asConfigured = this.deps.resolver.resolve({ fields: [field], item, context });
+      const asConfigured = this.deps.resolver.resolve({ fields: [field], templateFields: fields, item, context });
 
       const emitted = asConfigured.fields[0]?.value ?? null;
       const resolvedFrom: PreviewFieldResult['resolvedFrom'] =
@@ -200,6 +204,7 @@ export class TemplatePreviewService {
     }
     const explicitId = request.context.salesChannelId ?? feed?.salesChannelId ?? null;
     if (explicitId) {
+      if (!isUuidShape(explicitId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sales channel not found.');
       const channel = await em.findOne(SalesChannel, { id: explicitId });
       if (!channel) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sales channel not found.');
       return channel;
@@ -252,6 +257,11 @@ export class TemplatePreviewService {
       pricePresentation,
       taxCountry,
       storefrontOrigin: await this.deps.storefrontOriginFor(channel.id),
+      channelUrl: {
+        languages: channel.languages,
+        defaultLanguage: channel.defaultLanguage,
+        prefixDefaultLanguage: channel.prefixDefaultLanguage,
+      },
       salesChannelId: channel.id,
       priceListId,
     };
@@ -262,6 +272,7 @@ export class TemplatePreviewService {
   ): Promise<Map<string, string>> {
     if (!baseTemplateId) return new Map();
     const em = this.deps.emFactory();
+    if (!isUuidShape(baseTemplateId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
     const template = await em.findOne(FeedTemplate, { id: baseTemplateId, deletedAt: null });
     if (!template) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
     const fields = await em.find(FeedTemplateField, { feedTemplateId: baseTemplateId });

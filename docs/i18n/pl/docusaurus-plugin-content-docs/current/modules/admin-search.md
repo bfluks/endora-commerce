@@ -1,9 +1,9 @@
 ---
-title: admin_search
-description: Wyszukiwanie globalne w panelu administracyjnym — znajdowanie organizacji, klientów, zamówień, zapytań ofertowych, szans sprzedażowych, produktów i kategorii z palety poleceń, z konfigurowalnymi polami wyszukiwania
+title: Wyszukiwanie globalne
+description: Wyszukiwanie globalne w panelu administracyjnym — znajdowanie organizacji, klientów, zamówień, zapytań ofertowych, szans sprzedażowych, produktów, kategorii, projektów i zadań z palety poleceń, z konfigurowalnymi polami wyszukiwania
 ---
 
-# `admin_search`
+# Wyszukiwanie globalne (`admin_search`)
 
 Wyszukiwanie globalne pozwala administratorowi znaleźć rekord bez wcześniejszego
 ustalania, na której liście się on znajduje. Naciśnij **⌘K** (macOS) lub
@@ -32,6 +32,8 @@ zapisaniu. Typy rekordów, w kolejności, w jakiej pojawiają się ich grupy:
 | Klienci | **E-mail**, **Imię i nazwisko** | klienta |
 | Produkty | **SKU**, **Nazwa**, Klucz URL (slug), Atrybuty szybkiego wyszukiwania | produkt |
 | Kategorie | **Nazwa**, **Klucz URL (slug)** | drzewo kategorii z wyróżnioną kategorią |
+| Projekty | **Numer projektu**, **Tytuł**, **Nazwa organizacji** | projekt |
+| Zadania | **Numer zadania**, **Tytuł** | zadanie |
 
 Typ rekordu bierze udział w wyszukiwaniu tylko wtedy, gdy jego moduł jest
 włączony: po wyłączeniu CRM na **/platform/modules** szanse sprzedażowe znikają z
@@ -52,8 +54,8 @@ Jak dopasowywany jest tekst:
   znajduje ten rekord niezależnie od konfiguracji pól.
 - Wersje robocze, rekordy nieaktywne i zablokowane oraz anulowane zamówienia są
   znajdowane i pokazują swój status. Rekordy usunięte, zanonimizowani klienci i
-  organizacje prywatne (B2C) nie są znajdowane; osoby stojące za organizacjami
-  prywatnymi można znaleźć jako klientów.
+  organizacje osobiste (B2C) nie są znajdowane; osoby stojące za organizacjami
+  osobistymi można znaleźć jako klientów.
 - Nazwy produktów i kategorii są dopasowywane we wszystkich językach i
   wyświetlane w języku administratora.
 
@@ -68,12 +70,19 @@ panelu ukryłaby przed tym samym administratorem:
 - Typ rekordu pojawia się tylko dla roli, która ma uprawnienie wymagane przez
   jego listę — `orders:read` dla zamówień, `rfqs:handle` dla zapytań
   ofertowych, `crm:read` dla szans sprzedażowych, `customers:read` (lub
-  `customers:manage`) dla organizacji, `customers:read` dla klientów oraz
-  `catalog:read` dla produktów i kategorii.
+  `customers:manage`) dla organizacji, `customers:read` dla klientów,
+  `catalog:read` dla produktów i kategorii, `projects:read` dla projektów oraz
+  `tasks:read` dla zadań.
 - Przedstawiciel handlowy widzi tylko zamówienia, zapytania ofertowe, szanse
-  sprzedażowe i klientów organizacji, które zostały mu przypisane.
+  sprzedażowe i klientów organizacji ze swojego zasięgu: przypisanych mu oraz
+  każdej organizacji, do której nie przypisano żadnego przedstawiciela
+  (zgłoszenie #305 — jedna reguła zasięgu modułu `organizations`).
+- Projekty i zadania są widoczne tak jak na ich własnych listach: projekt lub
+  zadanie organizacji spoza zasięgu administratora nie jest znajdowane, podobnie
+  jak szkic lub zadanie prywatne innego administratora.
 - Organizacje są widoczne dokładnie tak jak na liście organizacji:
-  przedstawiciel handlowy widzi każdą organizację, którą pokazuje mu ta lista, a
+  przedstawiciel handlowy widzi każdą organizację, którą pokazuje mu ta lista —
+  ten sam zasięg, nigdy organizacji przypisanej innemu przedstawicielowi — a
   przypisane mu organizacje są wyświetlane na początku.
 
 ## Paleta poleceń
@@ -94,7 +103,7 @@ współpracownikowi — który zobaczy tylko to, co sam może zobaczyć.
 
 ## Konfiguracja pól wyszukiwania
 
-Użytkownicy z uprawnieniem `admin_search:configure` otwierają **System →
+Użytkownicy z uprawnieniem `admin_search:configure` otwierają **Platforma →
 Wyszukiwanie globalne** (albo *Konfiguruj wyszukiwanie globalne* w palecie
 poleceń). Każdy typ rekordu ma kartę z dostępnymi polami, a pola domyślne są
 oznaczone:
@@ -144,7 +153,7 @@ działa z dotychczasową konfiguracją.
 Rekordy są odczytywane na bieżąco z tabel poszczególnych modułów, a liczba
 pobieranych wierszy jest niewielka. Przy wolumenie referencyjnym — 100 000
 zamówień, 50 000 klientów i produktów, 20 000 zapytań ofertowych i szans
-sprzedażowych, 10 000 organizacji i 2 000 kategorii — wyszukiwanie we
-wszystkich siedmiu typach zwraca wyniki w ciągu kilkuset milisekund. Gdyby
+sprzedażowych, 10 000 organizacji i 2 000 kategorii — wyszukiwanie w
+tych siedmiu typach zwraca wyniki w ciągu kilkuset milisekund. Gdyby
 instalacja przerosła ten wolumen, rozwiązaniem jest indeks wyszukiwania na
 kolumnach wolnego modułu, dodany przez ten moduł.

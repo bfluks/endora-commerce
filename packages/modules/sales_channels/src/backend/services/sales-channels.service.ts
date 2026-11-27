@@ -1,13 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   DictionaryReferenceError,
   ERROR_CODES,
   SALES_CHANNEL_AUDIT_ACTIONS,
   dispatchValidatorMode,
+  unlinkableAssetIds,
+  type AssetReadPort,
   type DictionaryValidator,
   type SalesChannelAttributionRegistryPort,
-  type SalesChannelCreateBody,
+  type SalesChannelCreateRequest,
   type SalesChannelUpdateBody,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -15,11 +17,18 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
-import type { SalesChannelsCacheInvalidation } from '@endora-commerce/platform/kernel';
+import type {
+  SalesChannelAccessCacheInvalidation,
+  SalesChannelsCacheInvalidation,
+} from '@endora-commerce/platform/kernel';
 import {
   makeSetSystemDefaultChannelCommand,
   type SetSystemDefaultChannelResult,
 } from '../commands/set-default.command.js';
+import {
+  makeCreateSalesChannelCommand,
+  makeUpdateSalesChannelCommand,
+} from '../commands/identity.command.js';
 
 /**
  * SalesChannelsService — feature 005 / T017 (skeleton) + T035-T037 (US2).
@@ -36,9 +45,12 @@ import {
  * pattern.
  *
  * Every successful identity / lifecycle change writes one audit row
- * (`sales_channel.identity.changed` / `sales_channel.lifecycle.changed`)
- * synchronously, **drops the channel cache**, and then emits one EventBus
- * event.
+ * (`sales_channel.identity.changed` / `sales_channel.lifecycle.changed`),
+ * **drops the channel cache**, and then emits one EventBus event. Identity
+ * writes (create, update) are Commands — `commands/identity.command.ts` — so
+ * their row is the Command Bus's, written in the write's own transaction with
+ * the actor from the ambient TenantContext; lifecycle writes are still audited
+ * by hand here.
  *
  * That order is the whole of D-93 (issue #160). The drop used to be a
  * subscriber — `attachSalesChannelsCacheInvalidator` listened for those two
@@ -50,9 +62,10 @@ import {
  * any registration order at all. The events stay — other modules want them —
  * and they stop being how this cache learns about this service's own write.
  *
- * `setDefault` is the exception and the newer pattern: it is a Command
- * (feature 072 / D-51), so the Command Bus writes its audit row and buffers its
- * event co-transactionally, and this class writes neither by hand.
+ * `setDefault` is a Command too (feature 072 / D-51): the Command Bus writes its
+ * audit row and buffers its event co-transactionally. The identity Commands
+ * declare no event, so the drop-then-announce order above holds for them: the
+ * service drops the cache once `CommandBus.run` has committed, then emits.
  */
 
 export interface AdminAuditContext {
@@ -131,6 +144,14 @@ export class SalesChannelsService {
      * `dependencies` and makes no activation control a dead switch.
      */
     private readonly bridgeRegistry: ChannelBridgeRead,
+    /**
+     * Required: identity writes (create, update) and `setDefault` are Commands
+     * (Principle XIII). It was optional while only `setDefault` used it, which
+     * then refused at call time without one; an identity write must not have
+     * an absent form that skips the bus.
+     */
+    private readonly commandBus: CommandBus,
+    /** The lifecycle writes (deactivate, activate, delete) still audit by hand. */
     private readonly auditLogService?: AuditPort,
     /**
      * The invalidating half of the channel cache, narrowed to what a writer
@@ -139,13 +160,37 @@ export class SalesChannelsService {
      */
     private readonly cache?: SalesChannelsCacheInvalidation,
     /**
-     * Used by `setDefault` only, which is a Command (Principle XIII) rather than
-     * a hand-audited write like the rest of this class. Still optional — and
-     * `setDefault` refuses outright when it is missing, so the absence can never
-     * become an unaudited flag move.
+     * Feature 154 — the per-Organization permitted-channel cache the access
+     * rule reads. A delete removes the deleted channel's Organization rows by
+     * cascade and may rebind orphans to the default, so every cached set can
+     * move; it is dropped as part of the write, like the channel cache.
      */
-    private readonly commandBus?: CommandBus,
+    private readonly accessCache?: SalesChannelAccessCacheInvalidation,
+    /**
+     * Issue #544 — `assets_library`'s visibility question, asked before a
+     * write sets a logo the channel does not already have. A write that sets
+     * one without it fails closed.
+     */
+    private readonly assets?: Pick<AssetReadPort, 'visibleToCaller'>,
   ) {}
+
+  /**
+   * Issue #544 (owner ruling 2026-10-30, option a) — refuse a newly set logo
+   * the caller may not see in the asset library, a missing one included, with
+   * `assets_library`'s own answer for a hidden file. The logo already set is
+   * the channel's own and is accepted as it stands.
+   */
+  private async assertLogoLinkable(logoAssetId: string | null | undefined, current: string | null): Promise<void> {
+    if (!logoAssetId) return;
+    const [refused] = await unlinkableAssetIds(
+      this.assets ?? { visibleToCaller: async () => new Set() },
+      [logoAssetId],
+      current ? [current] : [],
+    );
+    if (refused === undefined) return;
+    if (!this.assets) throw new Error('sales_channels: the asset read port is not wired — a logo cannot be set.');
+    throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${refused} not found.`, { assetId: refused });
+  }
 
   // -------------------------------------------------------------------------
   // Read paths
@@ -174,7 +219,7 @@ export class SalesChannelsService {
     if (options.activeOnly) where['active'] = true;
 
     const [items, total] = await em.findAndCount(SalesChannel, where, {
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'asc', id: 'asc' },
       offset: page * pageSize,
       limit: pageSize,
     });
@@ -185,51 +230,20 @@ export class SalesChannelsService {
   // Create
   // -------------------------------------------------------------------------
 
-  async create(
-    body: SalesChannelCreateBody,
-    context?: AdminAuditContext,
-  ): Promise<SalesChannel> {
-    const em = this.emFactory();
-
+  /**
+   * Create a channel, as a Command (Principle XIII). Needs an ambient
+   * TenantContext — the bus refuses without one — and writes exactly one
+   * `sales_channel.identity.changed` row, `stateBefore` null.
+   */
+  async create(body: SalesChannelCreateRequest): Promise<SalesChannel> {
     await this.assertLanguagesValid(body.languages);
     await this.validateLanguage(body.defaultLanguage, 'create-or-change', 'defaultLanguage');
     await this.assertCurrenciesValid(body.currencies);
     await this.validateCurrency(body.defaultCurrency, 'create-or-change', 'defaultCurrency');
+    await this.assertLogoLinkable(body.logoAssetId, null);
 
-    const channel = em.create(SalesChannel, {
-      code: body.code,
-      name: body.name,
-      logoAssetId: body.logoAssetId ?? null,
-      themeCode: body.themeCode ?? null,
-      languages: body.languages,
-      defaultLanguage: body.defaultLanguage,
-      currencies: body.currencies,
-      defaultCurrency: body.defaultCurrency,
-      active: body.active ?? true,
-      systemDefault: false,
-      version: 1,
-      // Legacy columns preserved for one release (research R-12).
-      isPublic: false,
-      status: (body.active ?? true) ? 'active' : 'inactive',
-    });
-
-    try {
-      await em.persistAndFlush(channel);
-    } catch (err) {
-      if (err instanceof UniqueConstraintViolationException) {
-        throw new HttpError(
-          409,
-          ERROR_CODES.DUPLICATE_SALES_CHANNEL_CODE,
-          `Sales channel code "${body.code}" is already in use.`,
-        );
-      }
-      throw err;
-    }
-
-    await this.audit('identity', context, channel.id, {
-      action: 'created',
-      after: this.snapshot(channel),
-    });
+    const channel = await this.commandBus.run(makeCreateSalesChannelCommand(randomUUID(), body));
+    // D-93 — committed by now, so drop, then announce.
     await this.emitIdentityChanged(channel.code);
     return channel;
   }
@@ -238,13 +252,17 @@ export class SalesChannelsService {
   // Update (FR-005 optimistic concurrency)
   // -------------------------------------------------------------------------
 
+  /**
+   * Patch a channel's identity, as a Command (Principle XIII). The refusals an
+   * operator can act on are answered here, before a transaction opens; the
+   * Command re-checks the version inside it and writes exactly one
+   * `sales_channel.identity.changed` row with the before/after snapshots.
+   */
   async update(
     code: string,
     body: SalesChannelUpdateBody,
     expectedVersion: number,
-    context?: AdminAuditContext,
   ): Promise<SalesChannel> {
-    const em = this.emFactory();
     const channel = await this.requireByCode(code);
 
     if (channel.version !== expectedVersion) {
@@ -330,48 +348,25 @@ export class SalesChannelsService {
       );
     }
 
-    const before = this.snapshot(channel);
-
-    if (body.name !== undefined) channel.name = body.name;
-    if (body.logoAssetId !== undefined) channel.logoAssetId = body.logoAssetId;
-    if (body.themeCode !== undefined) channel.themeCode = body.themeCode;
-    if (body.languages !== undefined) channel.languages = body.languages;
-    if (body.defaultLanguage !== undefined) channel.defaultLanguage = body.defaultLanguage;
-    if (body.currencies !== undefined) channel.currencies = body.currencies;
-    if (body.defaultCurrency !== undefined) channel.defaultCurrency = body.defaultCurrency;
-    if (body.active !== undefined) {
-      if (channel.systemDefault && body.active === false) {
-        throw new HttpError(
-          422,
-          ERROR_CODES.CANNOT_MODIFY_SYSTEM_DEFAULT,
-          `Sales channel "${channel.code}" is the system default and cannot be deactivated.`,
-        );
-      }
-      channel.active = body.active;
-      channel.status = body.active ? 'active' : 'inactive';
-    }
-    channel.version += 1;
-
-    try {
-      await em.persistAndFlush(channel);
-    } catch (err) {
-      if (err instanceof UniqueConstraintViolationException) {
-        throw new HttpError(
-          409,
-          ERROR_CODES.DUPLICATE_SALES_CHANNEL_CODE,
-          `Sales channel code "${body.code ?? channel.code}" is already in use.`,
-        );
-      }
-      throw err;
+    // The system default cannot be deactivated. The Command refuses it too;
+    // refusing here as well keeps the answer independent of the transaction.
+    if (body.active === false && channel.systemDefault) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.CANNOT_MODIFY_SYSTEM_DEFAULT,
+        `Sales channel "${channel.code}" is the system default and cannot be deactivated.`,
+      );
     }
 
-    await this.audit('identity', context, channel.id, {
-      action: 'updated',
-      before,
-      after: this.snapshot(channel),
-    });
-    await this.emitIdentityChanged(channel.code);
-    return channel;
+    await this.assertLogoLinkable(body.logoAssetId, channel.logoAssetId ?? null);
+
+    const updated = await this.commandBus.run(
+      makeUpdateSalesChannelCommand(channel.id, body, expectedVersion),
+    );
+    // D-93 — committed by now, so drop, then announce. The access step reads
+    // `anonymousAccess` off the cached channel this drops.
+    await this.emitIdentityChanged(updated.code);
+    return updated;
   }
 
   // -------------------------------------------------------------------------
@@ -392,9 +387,9 @@ export class SalesChannelsService {
     channel.active = false;
     channel.status = 'inactive';
     channel.version += 1;
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
 
-    await this.audit('lifecycle', context, channel.id, {
+    await this.auditLifecycle(context, channel.id, {
       action: 'deactivated',
       channelCode: channel.code,
     });
@@ -409,9 +404,9 @@ export class SalesChannelsService {
     channel.active = true;
     channel.status = 'active';
     channel.version += 1;
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
 
-    await this.audit('lifecycle', context, channel.id, {
+    await this.auditLifecycle(context, channel.id, {
       action: 'activated',
       channelCode: channel.code,
     });
@@ -434,14 +429,6 @@ export class SalesChannelsService {
    */
   async setDefault(code: string): Promise<SetSystemDefaultChannelResult> {
     const channel = await this.requireByCode(code);
-    if (!this.commandBus) {
-      throw new HttpError(
-        500,
-        ERROR_CODES.INTERNAL,
-        'Sales channels are composed without a Command Bus; the system default cannot be moved.',
-      );
-    }
-
     const result = await this.commandBus.run(makeSetSystemDefaultChannelCommand(channel.id));
 
     // D-93 — this is the flag move's drop, not a second one: the Command's
@@ -518,9 +505,10 @@ export class SalesChannelsService {
       await this.rebindOrphansToDefault(em, defaultId, orphans);
     }
 
-    await em.removeAndFlush(channel);
+    await em.remove(channel).flush();
+    await this.accessCache?.invalidateAllAfterWrite();
 
-    await this.audit('lifecycle', context, channel.id, {
+    await this.auditLifecycle(context, channel.id, {
       action: 'deleted',
       channelCode: channel.code,
       rebindCount: orphans.length,
@@ -701,25 +689,8 @@ export class SalesChannelsService {
     }
   }
 
-  private snapshot(c: SalesChannel): Record<string, unknown> {
-    return {
-      id: c.id,
-      code: c.code,
-      name: c.name,
-      logoAssetId: c.logoAssetId ?? null,
-      themeCode: c.themeCode ?? null,
-      languages: c.languages,
-      defaultLanguage: c.defaultLanguage,
-      currencies: c.currencies,
-      defaultCurrency: c.defaultCurrency,
-      active: c.active,
-      systemDefault: c.systemDefault,
-      version: c.version,
-    };
-  }
-
-  private async audit(
-    kind: 'identity' | 'lifecycle',
+  /** The lifecycle writes' hand-written row; identity writes are audited by the Command Bus. */
+  private async auditLifecycle(
     context: AdminAuditContext | undefined,
     channelId: string,
     payload: Record<string, unknown>,
@@ -727,10 +698,7 @@ export class SalesChannelsService {
     if (!this.auditLogService) return;
     await this.auditLogService.record({
       actorAdminUserId: context?.actorAdminUserId ?? null,
-      action:
-        kind === 'identity'
-          ? SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED
-          : SALES_CHANNEL_AUDIT_ACTIONS.LIFECYCLE_CHANGED,
+      action: SALES_CHANNEL_AUDIT_ACTIONS.LIFECYCLE_CHANGED,
       objectType: 'sales_channel',
       objectId: channelId,
       stateAfter: payload,
@@ -741,7 +709,8 @@ export class SalesChannelsService {
   /**
    * Drop the cache, then announce (D-93).
    *
-   * The drop runs **after the flush**, so a concurrent read cannot re-pin the
+   * The drop runs **after the flush** — for an identity write, after
+   * `CommandBus.run` has committed — so a concurrent read cannot re-pin the
    * pre-commit row, and **before the emit**, so every subscriber re-reads
    * post-invalidation state. The count is deliberately unread:
    * `invalidateAfterWrite` answers `null` for an unreachable shared layer, and

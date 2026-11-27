@@ -359,7 +359,16 @@ async function contentPage(execute: Execute, channel: ChannelRow): Promise<Subje
               content: [
                 {
                   type: 'cms.Heading',
-                  props: { id: 'conformance-heading', level: 'h1', text: name },
+                  // Feature 163 (T041): the reshaped heading — the text is a
+                  // one-paragraph inline rich-text document, and the level and
+                  // the visual size are separate props.
+                  props: {
+                    id: 'conformance-heading',
+                    level: 'h1',
+                    size: 'h1',
+                    font: 'heading',
+                    text: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: name }] }] },
+                  },
                 },
               ],
             },

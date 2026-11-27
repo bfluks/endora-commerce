@@ -20,7 +20,20 @@ export const transactionalEmailCodeRe = /^[a-z][a-z0-9_]*$/;
 export const emailVariableDescriptorSchema = z.object({
   key: z.string().min(1).max(160),
   label: z.string().min(1).max(200),
+  /** The example the preview substitutes. English, like every manifest default. */
   sampleValue: z.string().max(2000).optional(),
+  /**
+   * Issue #560 — a bundle key, relative to the declaring module's namespace as
+   * a palette action's `labelKey` is, carrying the sample in every shipped
+   * language. The detail and the preview resolve it in the language being
+   * edited; `sampleValue` is what answers when it resolves to nothing.
+   */
+  sampleValueKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$/, 'Translation key must be dot-separated camelCase namespaces')
+    .optional(),
   description: z.string().max(500).optional(),
 });
 export type EmailVariableDescriptor = z.infer<typeof emailVariableDescriptorSchema>;
@@ -262,6 +275,25 @@ export const putEmailBrandingRequestSchema = z
   .refine((v) => Object.keys(v).length > 0, { message: 'at least one field required' });
 export type PutEmailBrandingRequest = z.infer<typeof putEmailBrandingRequestSchema>;
 
+/** The branding values a sales channel can set for itself. */
+export const emailBrandingFieldSchema = z.enum(['logoAssetId', 'accentColor', 'headerBlockCode', 'footerBlockCode']);
+export type EmailBrandingField = z.infer<typeof emailBrandingFieldSchema>;
+
+/**
+ * `DELETE /branding` — issue #1588. Removes a sales channel's own value for the
+ * named fields, so the channel inherits the all-channels value again. A channel
+ * is required: the all-channels value has nothing above it to inherit, and
+ * clearing it is not what this operation is for. `fields` is comma-separated.
+ */
+export const resetEmailBrandingQuerySchema = z.object({
+  salesChannelId: z.string().uuid(),
+  fields: z
+    .string()
+    .transform((raw) => raw.split(',').map((field) => field.trim()).filter((field) => field !== ''))
+    .pipe(z.array(emailBrandingFieldSchema).min(1)),
+});
+export type ResetEmailBrandingQuery = z.infer<typeof resetEmailBrandingQuerySchema>;
+
 export const emailScopeQuerySchema = z.object({
   salesChannelId: z.string().uuid().optional(),
 });
@@ -358,6 +390,20 @@ export interface TransactionalEmailSender {
   send(input: TransactionalEmailSendInput): Promise<TransactionalSendOutcome>;
 }
 
+/**
+ * Container name: `transactionalEmailStatePort`. Owner: `transactional_emails`
+ * (`specs/180-off-platform-complaints/` D-11, research R-21).
+ *
+ * Whether an e-mail is switched on — what a module reads before it tells its reader
+ * that one is on its way. It reports the operator's `active` flag and nothing about
+ * transport: a deployment without a mail server is a configuration fault the e-mail
+ * log already reports.
+ */
+export interface TransactionalEmailStatePort {
+  /** `TransactionalEmail.active` for the code; `false` for an unknown code. */
+  isActive(code: string): Promise<boolean>;
+}
+
 // ---------------------------------------------------------------------------
 // --- ports -----------------------------------------------------------------
 //
@@ -428,19 +474,46 @@ export interface EmailDefaultsRegistryPort {
 /**
  * Container name: `templateEmailPort`. Owner: `transactional_emails`.
  *
- * `organizations` is the only cross-module consumer. `true` means "handled —
- * do not use your legacy in-code builder", and it covers three outcomes: a
- * delivered e-mail, one an operator deactivated, and a composition with no
- * transport. In all three the platform decided what to send, and a fallback
- * would either send mail the operator switched off or fail the same way. Only
- * a code with no definition at all answers `false`.
+ * `true` means "handled — do not use your legacy in-code builder", and it
+ * covers three outcomes: a delivered e-mail, one an operator deactivated, and a
+ * composition with no transport. In all three the platform decided what to
+ * send, and a fallback would either send mail the operator switched off or fail
+ * the same way. Only a code with no definition at all answers `false`.
+ *
+ * **The scope a message renders in** (issue #1256). A caller that knows the
+ * recipient's sales channel and language passes them, and the message is
+ * rendered from that channel's content in that language — the per-channel
+ * override, else the global one, else the module default, each falling back to
+ * the e-mail's first language (`TransactionalEmailSender`'s own resolution).
+ * The two are resolved independently:
+ *
+ * - `salesChannelId` absent or `null`, or naming a channel that no longer
+ *   resolves → the **system-default channel**, which always exists (D-47);
+ * - `language` absent or `null` → the resolved channel's default language,
+ *   else `en-US`.
+ *
+ * A caller passing neither gets exactly what every caller got before the two
+ * fields existed: the system-default channel in its default language.
+ *
+ * **Owner off:** `transactional_emails` is non-deactivatable and required to be
+ * present (`composeModules` refuses a composition without it), so the gate this
+ * port is registered behind has no absent state a consumer could meet, and no
+ * consumer probes for one. An operator switches an individual e-mail off
+ * instead, which answers `true` and sends nothing.
  */
 export interface TemplateEmailPort {
-  trySend(input: {
-    code: string;
-    to: string;
-    messageId: string;
-    variables: Record<string, unknown>;
-    meta?: Record<string, unknown> | undefined;
-  }): Promise<boolean>;
+  trySend(input: TemplateEmailSendInput): Promise<boolean>;
+}
+
+/** What {@link TemplateEmailPort.trySend} is handed. */
+export interface TemplateEmailSendInput {
+  code: string;
+  to: string;
+  messageId: string;
+  variables: Record<string, unknown>;
+  meta?: Record<string, unknown> | undefined;
+  /** The recipient's sales channel; absent or `null` = the system-default channel. */
+  salesChannelId?: string | null | undefined;
+  /** The recipient's content language (BCP-47); absent or `null` = the channel's default language. */
+  language?: string | null | undefined;
 }

@@ -26,8 +26,9 @@
  * author will look for them:
  *
  *  - **the bus's construction** — `CommandBusOptions` and
- *    `CommandRequestMeta`. A composition root builds the one {@link CommandBus}
- *    and supplies its request-metadata resolver; a module resolves
+ *    `CommandRequestMeta`. A composition root builds the one {@link CommandBus},
+ *    which reads request metadata from the ambient platform scope unless a
+ *    resolver is supplied (issue #997); a module resolves
  *    `commandBus` from the container and calls `run`. The class travels because
  *    75 module files name it in a constructor signature or a cradle field.
  *  - **the command registry**, which this barrel exported until T042f pruned it
@@ -70,3 +71,70 @@ export {
   type RevertHandlers,
   type UndoResult,
 } from './reversible.js';
+/**
+ * `beforeCommit` command hooks (`specs/176-command-hooks-outbox/` P2,
+ * `contracts/command-hooks-api.md` §2) — the shapes a hook author writes
+ * against: the entry `ctx.commandHooks` takes, the context a hook receives, the
+ * veto class and the origin accessor spec 178's owner-side check reads. The
+ * `afterCommit` shapes travel with them: a handler registered through the same
+ * seam is delivered by the transactional outbox (P3).
+ *
+ * The composition refusals are here because they are what a hook module's
+ * author meets when a deployment will not boot, and a `@throws` a reader
+ * cannot name is one they cannot look up. The registry itself is
+ * `./composition`'s: a root builds it, a module never does.
+ */
+export type {
+  CommandHookContext,
+  BeforeCommitHook,
+  CommandHookEntry,
+  AfterCommitContext,
+  AfterCommitHandler,
+} from './hooks/types.js';
+export {
+  CommandHookRefusal,
+  UndeclaredHookableActionError,
+  HookPhaseNotOfferedError,
+  DuplicateHookableActionError,
+  DuplicateCommandHookError,
+  HookOwnerNotDependedOnError,
+  UnorderedCommandHooksError,
+  CommandHookOrderContradictionError,
+} from './hooks/errors.js';
+export { currentCommandHookOrigin, type CommandHookOrigin } from './hooks/origin.js';
+/**
+ * `afterCommit` delivery (176 P3): what a handler throws to dead-letter its
+ * row at once instead of being retried.
+ */
+export { PermanentOutboxFailure } from './outbox/errors.js';
+/**
+ * Command middleware (`specs/189-command-middleware/` P1,
+ * `contracts/command-middleware-api.md` §2, §3, §5): the shapes a middleware
+ * author writes against — the entry `ctx.commandMiddleware` takes, what `admit`
+ * and `observe` receive, the refusal class and the origin accessor — and the
+ * composition refusals, for the reason the hook refusals above are here. The
+ * registry is `./composition`'s: a root builds it, a module never does.
+ */
+export type {
+  CommandAdmissionMeta,
+  CommandAdmitHandler,
+  CommandMiddlewareCallContext,
+  CommandMiddlewareEntry,
+  CommandMiddlewareOrigin,
+  CommandObserveHandler,
+  CommandRunEntry,
+  CommandRunOutcome,
+} from './middleware/types.js';
+export {
+  CommandRefusedError,
+  type CommandRefusalStatus,
+  UndeclaredCommandMiddlewareError,
+  UnregisteredCommandMiddlewareError,
+  CommandMiddlewarePhaseMismatchError,
+  DuplicateCommandMiddlewareError,
+  CommandMiddlewareOriginError,
+  UnorderedCommandMiddlewareError,
+  CommandMiddlewareOrderContradictionError,
+  StaleCommandMiddlewareOrderError,
+} from './middleware/errors.js';
+export { currentCommandMiddlewareOrigin } from './middleware/origin.js';

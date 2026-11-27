@@ -14,19 +14,25 @@
  * not reach the response.
  */
 import {
+  customFieldCarrySkipRecord,
+  customFieldCarrySkipSchema,
   quoteRequestHistoryChangeSchema,
+  uuidSchema,
   type AdminUserRecord,
   type CatalogProductVariantRecord,
   type CustomerAccountRecord,
   type QuoteRequestHistoryActor,
+  type QuoteRequestDelivery,
   type QuoteRequestHistoryChange,
   type QuoteRequestHistoryEntry,
   type QuoteRequestHistoryEntryKind,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { QuoteRequestEventType } from '../../entities/quote-request-event.entity.js';
 import type { QuoteRequestRevisionLine } from '../../entities/quote-request-revision.entity.js';
 import { AUTOMATIC_ADMIN_CREATION_NOTE } from './constants.js';
 import { historyDiff } from './history-diff.js';
+import { compareDeliveries } from './history-deliveries.js';
 
 /** The part of a stored event the projection reads. */
 export interface HistoryEventInput {
@@ -153,10 +159,17 @@ const WRITE_ORDER: Partial<Record<QuoteRequestEventType, number>> = {
   'note-added': 1,
 };
 
+/**
+ * `deliveries` — `specs/179-rfq-and-customer-notifications/` FR-070: event id →
+ * the delivery records announcing it (`deliveriesByEvent`). An entry lists the
+ * records of every event it merged; an entry with none carries no
+ * `deliveries` key.
+ */
 export function projectHistory(
   events: readonly HistoryEventInput[],
   revisions: readonly HistoryRevisionInput[],
   directory: HistoryDirectory,
+  deliveries: ReadonlyMap<string, readonly QuoteRequestDelivery[]> = new Map(),
 ): QuoteRequestHistoryEntry[] {
   const ordered = events
     .map((event, index) => ({ event, index }))
@@ -179,7 +192,7 @@ export function projectHistory(
     const group = pairKind !== null ? [first, next!] : [first];
     if (pairKind !== null) index += 1;
     entries.push(
-      toEntry(group, pairKind ?? singleKind(first), { revisionById, revisionByNumber, directory }),
+      toEntry(group, pairKind ?? singleKind(first), { revisionById, revisionByNumber, directory, deliveries }),
     );
   }
   return entries;
@@ -189,6 +202,7 @@ interface ProjectionContext {
   revisionById: ReadonlyMap<string, HistoryRevisionInput>;
   revisionByNumber: ReadonlyMap<number, HistoryRevisionInput>;
   directory: HistoryDirectory;
+  deliveries: ReadonlyMap<string, readonly QuoteRequestDelivery[]>;
 }
 
 /** Research R8's pairing table; `null` = the two do not merge. */
@@ -237,6 +251,10 @@ function singleKind(event: HistoryEventInput): QuoteRequestHistoryEntryKind {
       return 'note_added';
     case 'pdf-sent':
       return 'pdf_sent';
+    case 'custom-field-carry-skipped':
+      return 'custom_field_carry_skipped';
+    case 'shared':
+      return 'shared';
   }
 }
 
@@ -246,6 +264,7 @@ function toEntry(
   ctx: ProjectionContext,
 ): QuoteRequestHistoryEntry {
   const first = group[0]!;
+  const deliveries = group.flatMap((event) => ctx.deliveries.get(event.id) ?? []).sort(compareDeliveries);
   return {
     id: first.id,
     eventIds: group.map((event) => event.id),
@@ -263,7 +282,35 @@ function toEntry(
         : null,
     orderId: kind === 'completed' ? firstUuid(group, 'orderId') : null,
     delivery: kind === 'pdf_sent' ? deliveryOf(first) : null,
+    customFieldCarry: kind === 'custom_field_carry_skipped' ? customFieldCarryOf(first) : null,
+    ...(deliveries.length > 0 ? { deliveries } : {}),
   };
+}
+
+/**
+ * Feature 162 — the Sales Opportunity a value came from and every key not
+ * carried, with its reason. Read field by field, as `deliveryOf` reads its
+ * payload: a skip that is not well formed is left out, and a source that is
+ * not one — or nothing left to name — reads as none.
+ */
+function customFieldCarryOf(event: HistoryEventInput): QuoteRequestHistoryEntry['customFieldCarry'] {
+  const source = event.payload['source'];
+  if (typeof source !== 'object' || source === null) return null;
+  const { entityType, recordId, reference } = source as Record<string, unknown>;
+  if (
+    entityType !== 'opportunity' ||
+    !uuidSchema.safeParse(recordId).success ||
+    typeof reference !== 'string'
+  ) {
+    return null;
+  }
+  const raw = Array.isArray(event.payload['skipped']) ? (event.payload['skipped'] as unknown[]) : [];
+  const skipped = raw.flatMap((item) => {
+    const parsed = customFieldCarrySkipSchema.safeParse(item);
+    return parsed.success ? [customFieldCarrySkipRecord(parsed.data)] : [];
+  });
+  if (skipped.length === 0) return null;
+  return { source: { entityType, recordId: recordId as string, reference }, skipped };
 }
 
 /**
@@ -328,7 +375,7 @@ function noteOf(group: HistoryEventInput[]): string | null {
   return note === AUTOMATIC_ADMIN_CREATION_NOTE ? null : note;
 }
 
-/** H3 — the diff against the previous revision, plus the validity change of the payload. */
+/** H3 — the diff against the previous revision, plus the validity (and validity-days) change of the payload. */
 function changesOf(event: HistoryEventInput, ctx: ProjectionContext): QuoteRequestHistoryChange[] {
   const changes: QuoteRequestHistoryChange[] = [];
   const revision = event.revisionId ? ctx.revisionById.get(event.revisionId) : undefined;
@@ -350,6 +397,14 @@ function changesOf(event: HistoryEventInput, ctx: ProjectionContext): QuoteReque
   if (validity !== null && typeof validity === 'object') {
     const { before, after } = validity as Record<string, unknown>;
     const parsed = quoteRequestHistoryChangeSchema.safeParse({ kind: 'validity', before, after });
+    if (parsed.success) changes.push(parsed.data);
+  }
+  // `specs/192-quote-request-draft-share/` (R-10) — the days an unshared quote
+  // will carry once shared; read field by field, as the validity above.
+  const validityDays = event.payload['validityDays'];
+  if (validityDays !== null && typeof validityDays === 'object') {
+    const { before, after } = validityDays as Record<string, unknown>;
+    const parsed = quoteRequestHistoryChangeSchema.safeParse({ kind: 'validity_days', before, after });
     if (parsed.success) changes.push(parsed.data);
   }
   return changes;
@@ -374,11 +429,9 @@ function firstString(group: HistoryEventInput[], key: string): string | null {
   return null;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function firstUuid(group: HistoryEventInput[], key: string): string | null {
   const value = firstString(group, key);
-  return value !== null && UUID.test(value) ? value : null;
+  return value !== null && isUuidShape(value) ? value : null;
 }
 
 function fullName(firstName: string | null | undefined, lastName: string | null | undefined): string | null {

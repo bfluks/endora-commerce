@@ -26,6 +26,7 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
 import { CreateDocumentButton, CreatedDocumentNotice } from './CreateFromOpportunity.js';
 import { errorMessage, moneyLabel } from '../lib/labels.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -80,6 +81,7 @@ export interface LinkedQuoteRequestsProps {
  * shows nothing of the request and stays with `crm:write`.
  */
 export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunity, canWrite, reload } = props;
   const t = useTranslation('crm');
   const { isPresent } = useModulePresence();
@@ -191,9 +193,12 @@ export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode 
         <h2 id={headingId} className="text-sm font-semibold tracking-tight">
           {t('links.quote.title')}
         </h2>
-        {present ? <CreateDocumentButton kind="quote_request" opportunity={opportunity} /> : null}
+        {/* The result of "Create quote request" is said beside it (#1499). */}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <CreatedDocumentNotice kind="quote_request" opportunity={opportunity} reload={reload} />
+          {present ? <CreateDocumentButton kind="quote_request" opportunity={opportunity} /> : null}
+        </div>
       </div>
-      <CreatedDocumentNotice kind="quote_request" opportunity={opportunity} reload={reload} />
 
       {!present ? (
         <Alert>
@@ -234,7 +239,7 @@ export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode 
                   <TableCell>
                     {shown ? (
                       <Link
-                        to={`/quote-requests/${item.documentId}`}
+                        to={returnHere(`/quote-requests/${item.documentId}`)}
                         className="font-medium text-primary underline-offset-4 hover:underline"
                       >
                         {item.number}
@@ -255,6 +260,11 @@ export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode 
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {shown ? moneyLabel(item.total, item.currency ?? opportunity.currency) : null}
+                    {shown && item.total !== undefined && item.agreement && item.agreement !== 'agreed' ? (
+                      <Badge variant="outline" className="ml-2 font-normal">
+                        {t(item.agreement === 'partial' ? 'links.quote.partiallyAgreed' : 'links.quote.notYetAgreed')}
+                      </Badge>
+                    ) : null}
                   </TableCell>
                   {canWrite ? (
                     <TableCell className="text-right">

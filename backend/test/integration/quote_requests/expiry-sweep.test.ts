@@ -7,6 +7,8 @@ import {
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { QuoteRequest } from '../../helpers/package-entities.js';
 import { ageQuoteRequest } from '../../helpers/quote-request-age.js';
+import { markUnsharedForTest, shareQuoteRequestForTest } from '../../helpers/quote-request-share.js';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { QUOTE_REQUESTS_SETTING_CODES } from '../../../../packages/modules/quote_requests/src/manifest.js';
 
 const CUSTOMER = { b2b_session: 'stub-customer-session' };
@@ -30,8 +32,7 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
   let h: BackendServerHandle;
 
   interface Deps {
-    notificationService: { enqueue: (...args: never[]) => Promise<number> };
-    salesRepAssignment: { listForOrganization: (organizationId: string) => Promise<unknown[]> };
+    notificationService: { record: (...args: never[]) => Promise<number> };
     batchSize?: number;
     onRequestFailed?: (rfqId: string, error: unknown) => void;
   }
@@ -77,7 +78,7 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
       )[0]!.n,
     );
   const expiredHistoryRows = (id: string) => count('quote_request_events', id, `and "event_type" = 'expired'`);
-  const notificationRows = (id: string) => count('quote_request_notification_events', id);
+  const notificationRows = (id: string) => count('quote_request_notifications', id);
 
   /** Every `rfq.expired.v1` announced while `act` runs, for the given requests. */
   const announcedDuring = async <T>(ids: readonly string[], act: () => Promise<T>) => {
@@ -130,9 +131,9 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
 
     // The fan-out of the second request fails once.
     const deps = worker().deps;
-    const original = deps.notificationService.enqueue;
+    const original = deps.notificationService.record;
     let calls = 0;
-    deps.notificationService.enqueue = (async (...args: never[]) => {
+    deps.notificationService.record = (async (...args: never[]) => {
       calls += 1;
       if (calls === 2) throw new Error('expiry sweep test: the fan-out failed');
       return original.apply(deps.notificationService, args);
@@ -165,7 +166,7 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
       expect(await expiredHistoryRows(second)).toBe(1);
       expect(next.announced.map((event) => event.rfqId)).toEqual([second]);
     } finally {
-      deps.notificationService.enqueue = original;
+      deps.notificationService.record = original;
       delete deps.onRequestFailed;
     }
   });
@@ -173,7 +174,7 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
   /** A submission queues notifications of its own; the baseline for "expiry added none". */
   async function notificationRowsBeforeExpiry(id: string): Promise<number> {
     return count(
-      'quote_request_notification_events',
+      'quote_request_notifications',
       id,
       `and "source_event_id" not in (select "id" from "quote_request_events" where "event_type" = 'expired')`,
     );
@@ -302,8 +303,67 @@ describe('RfqExpiryWorker — each Quote Request expires as one unit of work', (
     expect(announced.map((event) => event.rfqId).sort()).toEqual([...all].sort());
     // Late news is not sent: no notification row, for the customer or anybody else.
     for (const id of stale) expect(await notificationRows(id)).toBe(before.get(id));
-    // Expiry within the grace period is: the customer and the sales side, by e-mail and in the app.
+    // Expiry within the grace period is: the customer by e-mail, the sales side on the bell.
     for (const id of recent) expect(await notificationRows(id)).toBeGreaterThan(before.get(id) ?? 0);
+  });
+
+  // `specs/192-quote-request-draft-share/` (FR-006) — a quote an operator has
+  // not shared yet is never expired, however long it was left untouched; a
+  // shared operator quote beside it still is.
+  it('an unshared operator quote is never expired by inactivity', async () => {
+    const operatorQuote = async (shared: boolean): Promise<string> => {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/quote-requests',
+        cookies: { b2b_session: 'stub-admin-session' },
+        payload: {
+          organizationId: TEST_ORGANIZATION_ID,
+          customerAccountId: TEST_CUSTOMER_ID,
+          items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1, agreedUnitPrice: 5 }],
+        },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const id = (created.json() as { data: { id: string } }).data.id;
+      if (shared) await shareQuoteRequestForTest(h.app, id);
+      else await markUnsharedForTest(h.em(), id);
+      // Aged after the share, whose history entry restarts the clock.
+      await ageQuoteRequest(h.em(), id, new Date(Date.now() - EXPIRY_DAYS * DAY_MS - 60 * DAY_MS));
+      return id;
+    };
+    const unshared = await operatorQuote(false);
+    const shared = await operatorQuote(true);
+
+    const result = await worker().sweep();
+
+    expect(result.expiredCount).toBeGreaterThanOrEqual(1);
+    expect(await statusOf(shared)).toBe('Expired');
+    expect(await statusOf(unshared)).toBe('Created from admin');
+    expect(await expiredHistoryRows(unshared)).toBe(0);
+  });
+
+  // A draft left idle far past `expiry_days` and then shared is a fresh offer:
+  // the share's history entry restarts the inactivity clock, so the sweep that
+  // follows must not expire it at once (FR-006, FR-021).
+  it('a long-idle draft that is then shared is not expired by the next sweep', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/quote-requests',
+      cookies: { b2b_session: 'stub-admin-session' },
+      payload: {
+        organizationId: TEST_ORGANIZATION_ID,
+        customerAccountId: TEST_CUSTOMER_ID,
+        items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1, agreedUnitPrice: 5 }],
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = (created.json() as { data: { id: string } }).data.id;
+    await ageQuoteRequest(h.em(), id, new Date(Date.now() - EXPIRY_DAYS * DAY_MS - 60 * DAY_MS));
+    await shareQuoteRequestForTest(h.app, id);
+
+    await worker().sweep();
+
+    expect(await statusOf(id)).toBe('Created from admin');
+    expect(await expiredHistoryRows(id)).toBe(0);
   });
 
   it('expiry_days = 0 expires nothing, however overdue', async () => {

@@ -16,9 +16,10 @@
 // here, in path order. Detection is by that decorator, not by the
 // `.entity.ts` suffix, because nothing enforces the suffix — and the decorator
 // is deliberately not spelled out in this comment, so that a walk looking for
-// it does not find its own output. A per-deployment overlay contributes no
-// schema (D-106), so an entity under `src/apps/` is refused by the generator
-// rather than registered for a table nothing creates. A **module package** is
+// it does not find its own output. A per-deployment overlay module's entities
+// are not here either: they are read at runtime from the deployment root, so this
+// list is bare core under every value of `DEPLOYMENT` (D-104,
+// `specs/190-overlay-full-modules/` FR-038). A **module package** is
 // the opposite case and is here: its entities are named by a bare specifier
 // derived from that package's own `exports` map (D-149), and they arrive as
 // **one `entities` array** rather than as a class per name (D-168) — the same
@@ -37,9 +38,11 @@
 // `composer:generate`.
 
 import type { EntityClassLike } from '../packages/package-runtime.js';
+import { CommandOutboxEntry } from '@endora-commerce/platform/composition';
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
 import { ModuleRegistration } from '@endora-commerce/platform/composition';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { SchemaExtensionElement } from '@endora-commerce/platform/composition';
 import { SettingGroup } from '@endora-commerce/platform/kernel';
 import { SettingValue } from '@endora-commerce/platform/kernel';
 import { Setting } from '@endora-commerce/platform/kernel';
@@ -65,6 +68,7 @@ import { entities as currenciesEntities } from '@endora-commerce/mod-currencies/
 import { entities as customFieldsEntities } from '@endora-commerce/mod-custom-fields/backend';
 import { entities as customerAccountsEntities } from '@endora-commerce/mod-customer-accounts/backend';
 import { entities as customersEntities } from '@endora-commerce/mod-customers/backend';
+import { entities as customerNotificationsEntities } from '@endora-commerce/mod-customer-notifications/backend';
 import { entities as deliveryMethodsEntities } from '@endora-commerce/mod-delivery-methods/backend';
 import { entities as documentTemplatesEntities } from '@endora-commerce/mod-document-templates/backend';
 import { entities as transactionalEmailsEntities } from '@endora-commerce/mod-transactional-emails/backend';
@@ -72,7 +76,9 @@ import { entities as emailEntities } from '@endora-commerce/mod-email/backend';
 import { entities as organizationsEntities } from '@endora-commerce/mod-organizations/backend';
 import { entities as erpConnectorEntities } from '@endora-commerce/mod-erp-connector/backend';
 import { entities as productFeedsEntities } from '@endora-commerce/mod-product-feeds/backend';
+import { entities as formsEntities } from '@endora-commerce/mod-forms/backend';
 import { entities as googleAnalyticsEntities } from '@endora-commerce/mod-google-analytics/backend';
+import { entities as importExportEntities } from '@endora-commerce/mod-import-export/backend';
 import { entities as invoicesEntities } from '@endora-commerce/mod-invoices/backend';
 import { entities as invoiceLedgerEntities } from '@endora-commerce/mod-invoice-ledger/backend';
 import { entities as languagesEntities } from '@endora-commerce/mod-languages/backend';
@@ -87,24 +93,29 @@ import { entities as paymentMethodsEntities } from '@endora-commerce/mod-payment
 import { entities as paymentsEntities } from '@endora-commerce/mod-payments/backend';
 import { entities as pimConnectorEntities } from '@endora-commerce/mod-pim-connector/backend';
 import { entities as priceListsEntities } from '@endora-commerce/mod-price-lists/backend';
+import { entities as projectsEntities } from '@endora-commerce/mod-projects/backend';
 import { entities as promptActionsEntities } from '@endora-commerce/mod-prompt-actions/backend';
 import { entities as pwaEntities } from '@endora-commerce/mod-pwa/backend';
 import { entities as quickOrderEntities } from '@endora-commerce/mod-quick-order/backend';
 import { entities as quoteRequestsEntities } from '@endora-commerce/mod-quote-requests/backend';
 import { entities as returnsEntities } from '@endora-commerce/mod-returns/backend';
+import { entities as relatedPayersEntities } from '@endora-commerce/mod-related-payers/backend';
 import { entities as searchEntities } from '@endora-commerce/mod-search/backend';
 import { entities as seoEntities } from '@endora-commerce/mod-seo/backend';
 import { entities as authEntities } from '@endora-commerce/mod-auth/backend';
 import { entities as shipmentsEntities } from '@endora-commerce/mod-shipments/backend';
 import { entities as shoppingListsEntities } from '@endora-commerce/mod-shopping-lists/backend';
+import { entities as tasksEntities } from '@endora-commerce/mod-tasks/backend';
 import { entities as taxesEntities } from '@endora-commerce/mod-taxes/backend';
 import { entities as i18nEntities } from '@endora-commerce/mod-i18n/backend';
 import { entities as webhooksEntities } from '@endora-commerce/mod-webhooks/backend';
 
 export const ALL_ENTITIES = [
+  CommandOutboxEntry,
   AuditLogEntry,
   ModuleRegistration,
   SalesChannel,
+  SchemaExtensionElement,
   SettingGroup,
   SettingValue,
   Setting,
@@ -130,6 +141,7 @@ export const ALL_ENTITIES = [
   ...(customFieldsEntities as readonly EntityClassLike[]),
   ...(customerAccountsEntities as readonly EntityClassLike[]),
   ...(customersEntities as readonly EntityClassLike[]),
+  ...(customerNotificationsEntities as readonly EntityClassLike[]),
   ...(deliveryMethodsEntities as readonly EntityClassLike[]),
   ...(documentTemplatesEntities as readonly EntityClassLike[]),
   ...(transactionalEmailsEntities as readonly EntityClassLike[]),
@@ -137,7 +149,9 @@ export const ALL_ENTITIES = [
   ...(organizationsEntities as readonly EntityClassLike[]),
   ...(erpConnectorEntities as readonly EntityClassLike[]),
   ...(productFeedsEntities as readonly EntityClassLike[]),
+  ...(formsEntities as readonly EntityClassLike[]),
   ...(googleAnalyticsEntities as readonly EntityClassLike[]),
+  ...(importExportEntities as readonly EntityClassLike[]),
   ...(invoicesEntities as readonly EntityClassLike[]),
   ...(invoiceLedgerEntities as readonly EntityClassLike[]),
   ...(languagesEntities as readonly EntityClassLike[]),
@@ -152,17 +166,91 @@ export const ALL_ENTITIES = [
   ...(paymentsEntities as readonly EntityClassLike[]),
   ...(pimConnectorEntities as readonly EntityClassLike[]),
   ...(priceListsEntities as readonly EntityClassLike[]),
+  ...(projectsEntities as readonly EntityClassLike[]),
   ...(promptActionsEntities as readonly EntityClassLike[]),
   ...(pwaEntities as readonly EntityClassLike[]),
   ...(quickOrderEntities as readonly EntityClassLike[]),
   ...(quoteRequestsEntities as readonly EntityClassLike[]),
   ...(returnsEntities as readonly EntityClassLike[]),
+  ...(relatedPayersEntities as readonly EntityClassLike[]),
   ...(searchEntities as readonly EntityClassLike[]),
   ...(seoEntities as readonly EntityClassLike[]),
   ...(authEntities as readonly EntityClassLike[]),
   ...(shipmentsEntities as readonly EntityClassLike[]),
   ...(shoppingListsEntities as readonly EntityClassLike[]),
+  ...(tasksEntities as readonly EntityClassLike[]),
   ...(taxesEntities as readonly EntityClassLike[]),
   ...(i18nEntities as readonly EntityClassLike[]),
   ...(webhooksEntities as readonly EntityClassLike[]),
 ] as const;
+
+/**
+ * Which module contributes each module package's entities — the owner of the
+ * tables they map (`specs/187-side-table-extensions/` M2, U1). The classes the
+ * application tree names one by one are the platform's and belong to no module.
+ */
+export const ENTITY_OWNERS: ReadonlyArray<readonly [moduleId: string, entities: readonly (new (...args: never[]) => object)[]]> = [
+  ['addresses', addressesEntities as readonly EntityClassLike[]],
+  ['admin_notifications', adminNotificationsEntities as readonly EntityClassLike[]],
+  ['admin_roles', adminRolesEntities as readonly EntityClassLike[]],
+  ['admin_users', adminUsersEntities as readonly EntityClassLike[]],
+  ['analytics', analyticsEntities as readonly EntityClassLike[]],
+  ['api_keys', apiKeysEntities as readonly EntityClassLike[]],
+  ['assets_library', assetsLibraryEntities as readonly EntityClassLike[]],
+  ['catalog', catalogEntities as readonly EntityClassLike[]],
+  ['inventory', inventoryEntities as readonly EntityClassLike[]],
+  ['blog', blogEntities as readonly EntityClassLike[]],
+  ['carts', cartsEntities as readonly EntityClassLike[]],
+  ['cms', cmsEntities as readonly EntityClassLike[]],
+  ['comparisons', comparisonsEntities as readonly EntityClassLike[]],
+  ['dictionaries', dictionariesEntities as readonly EntityClassLike[]],
+  ['promotions', promotionsEntities as readonly EntityClassLike[]],
+  ['credentials', credentialsEntities as readonly EntityClassLike[]],
+  ['credit_limits', creditLimitsEntities as readonly EntityClassLike[]],
+  ['crm', crmEntities as readonly EntityClassLike[]],
+  ['currencies', currenciesEntities as readonly EntityClassLike[]],
+  ['custom_fields', customFieldsEntities as readonly EntityClassLike[]],
+  ['customer_accounts', customerAccountsEntities as readonly EntityClassLike[]],
+  ['customers', customersEntities as readonly EntityClassLike[]],
+  ['customer_notifications', customerNotificationsEntities as readonly EntityClassLike[]],
+  ['delivery_methods', deliveryMethodsEntities as readonly EntityClassLike[]],
+  ['document_templates', documentTemplatesEntities as readonly EntityClassLike[]],
+  ['transactional_emails', transactionalEmailsEntities as readonly EntityClassLike[]],
+  ['email', emailEntities as readonly EntityClassLike[]],
+  ['organizations', organizationsEntities as readonly EntityClassLike[]],
+  ['erp_connector', erpConnectorEntities as readonly EntityClassLike[]],
+  ['product_feeds', productFeedsEntities as readonly EntityClassLike[]],
+  ['forms', formsEntities as readonly EntityClassLike[]],
+  ['google_analytics', googleAnalyticsEntities as readonly EntityClassLike[]],
+  ['import_export', importExportEntities as readonly EntityClassLike[]],
+  ['invoices', invoicesEntities as readonly EntityClassLike[]],
+  ['invoice_ledger', invoiceLedgerEntities as readonly EntityClassLike[]],
+  ['languages', languagesEntities as readonly EntityClassLike[]],
+  ['linkedin_ads', linkedinAdsEntities as readonly EntityClassLike[]],
+  ['megamenu', megamenuEntities as readonly EntityClassLike[]],
+  ['meta_ads', metaAdsEntities as readonly EntityClassLike[]],
+  ['mfa', mfaEntities as readonly EntityClassLike[]],
+  ['admin_actions', adminActionsEntities as readonly EntityClassLike[]],
+  ['newsletter', newsletterEntities as readonly EntityClassLike[]],
+  ['orders', ordersEntities as readonly EntityClassLike[]],
+  ['payment_methods', paymentMethodsEntities as readonly EntityClassLike[]],
+  ['payments', paymentsEntities as readonly EntityClassLike[]],
+  ['pim_connector', pimConnectorEntities as readonly EntityClassLike[]],
+  ['price_lists', priceListsEntities as readonly EntityClassLike[]],
+  ['projects', projectsEntities as readonly EntityClassLike[]],
+  ['prompt_actions', promptActionsEntities as readonly EntityClassLike[]],
+  ['pwa', pwaEntities as readonly EntityClassLike[]],
+  ['quick_order', quickOrderEntities as readonly EntityClassLike[]],
+  ['quote_requests', quoteRequestsEntities as readonly EntityClassLike[]],
+  ['returns', returnsEntities as readonly EntityClassLike[]],
+  ['related_payers', relatedPayersEntities as readonly EntityClassLike[]],
+  ['search', searchEntities as readonly EntityClassLike[]],
+  ['seo', seoEntities as readonly EntityClassLike[]],
+  ['auth', authEntities as readonly EntityClassLike[]],
+  ['shipments', shipmentsEntities as readonly EntityClassLike[]],
+  ['shopping_lists', shoppingListsEntities as readonly EntityClassLike[]],
+  ['tasks', tasksEntities as readonly EntityClassLike[]],
+  ['taxes', taxesEntities as readonly EntityClassLike[]],
+  ['_i18n', i18nEntities as readonly EntityClassLike[]],
+  ['webhooks', webhooksEntities as readonly EntityClassLike[]],
+];

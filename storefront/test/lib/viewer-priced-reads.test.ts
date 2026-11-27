@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  getProductDisplayMode,
-  getResolvedPrice,
-  getResolvedPricesBulk,
-} from '../../lib/api/pricing';
+import { getProductDisplayMode, getResolvedPrice } from '../../lib/api/pricing';
 import { getCategoryTree, getProductBySlug, listProducts } from '../../lib/api/catalog';
 import { withoutViewer, type RequestContext } from '../../lib/api/client';
 
@@ -75,6 +71,19 @@ const LISTING_BODY = {
   pagination: { limit: 4, cursor: null, hasMore: false },
 };
 
+/**
+ * The channel `middleware.ts` stamped on the request being served, as
+ * `next/headers` answers it — or `null` for no request scope at all
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.3).
+ */
+const stamped: { code: string | null } = { code: null };
+vi.mock('next/headers', () => ({
+  headers: async () => {
+    if (stamped.code === null) throw new Error('`headers` was called outside a request scope.');
+    return new Headers({ 'x-sales-channel': stamped.code });
+  },
+}));
+
 const ANONYMOUS: RequestContext = { salesChannelCode: 'pl_retail', locale: 'en-US' };
 const SIGNED_IN: RequestContext = { ...ANONYMOUS, viewerSession: 'a-buyer-session' };
 
@@ -116,21 +125,6 @@ describe('the storefront asks the price question as the viewer', () => {
         tags: ['pricing:resolved', 'pricing:product:p1'],
       });
       expect(call.init.cache).toBeUndefined();
-    });
-
-    it('carries the viewer through the bulk wrapper too', async () => {
-      // The home page's bestseller cards are the second surface this renders,
-      // and they go through the fan-out rather than the singular call. A
-      // wrapper that dropped the context would put the public price on the
-      // cards and the buyer's on the product page they link to.
-      stubFetch(RESOLVED_PRICE_BODY);
-      await getResolvedPricesBulk(['p1', 'p2'], {}, SIGNED_IN);
-
-      expect(calls).toHaveLength(2);
-      for (const call of calls) {
-        expect(headerOf(call, 'Cookie')).toBe('b2b_session=a-buyer-session');
-        expect(call.init.cache).toBe('no-store');
-      }
     });
   });
 
@@ -214,5 +208,32 @@ describe('the storefront asks the price question as the viewer', () => {
         tags: ['catalog:product', 'catalog:product:a-slug'],
       });
     });
+  });
+});
+
+describe('a reader given no channel (`specs/154-sales-channel-access/`)', () => {
+  afterEach(() => {
+    stamped.code = null;
+  });
+
+  it('names the stamped channel, so the shared entry is one channel’s and not every channel’s', async () => {
+    stamped.code = 'pl_retail';
+    stubFetch(RESOLVED_PRICE_BODY);
+    await getResolvedPrice('p1', { quantity: 1 }, { locale: 'en-US' });
+
+    const call = calls[0]!;
+    expect(headerOf(call, 'X-Sales-Channel')).toBe('pl_retail');
+    expect(headerOf(call, 'Cookie')).toBeUndefined();
+  });
+
+  it('names it for a signed-in viewer too, and still lets no shared cache keep the answer', async () => {
+    stamped.code = 'pl_retail';
+    stubFetch(RESOLVED_PRICE_BODY);
+    await getResolvedPrice('p1', { quantity: 1 }, { locale: 'en-US', viewerSession: 'a-buyer-session' });
+
+    const call = calls[0]!;
+    expect(headerOf(call, 'X-Sales-Channel')).toBe('pl_retail');
+    expect(call.init.cache).toBe('no-store');
+    expect(call.init.next).toBeUndefined();
   });
 });

@@ -9,6 +9,38 @@
 import rootConfig from '../eslint.config.js';
 import nextPlugin from '@next/eslint-plugin-next';
 
+/*
+ * Feature 167 (`specs/167-storefront-locale-path/`, FR-021) — every internal
+ * storefront path carries the page's language prefix, and goes through one helper
+ * to get it: `LocalizedLink`, `useLocalizedPath`, `localizedPath`, `localeRedirect`.
+ * A hand-written root-relative `href`, `redirect`, `permanentRedirect`, router
+ * navigation or `NextResponse.redirect(new URL(…))` would silently switch a buyer's
+ * language through the middleware's 307, so it is refused here.
+ *
+ * `\x2F` is `/`: esquery's regex grammar cannot hold a literal slash. A dynamic
+ * `href={x}` cannot be judged statically; `LocalizedLink` localizes whatever it is
+ * given. Red proof: `test/i18n/locale-href-lint.test.ts`.
+ */
+const ROOT_PATH = String.raw`/^\x2F(?!\x2F)/`;
+const LOCALE_PATH_MESSAGE =
+  'Internal storefront paths go through LocalizedLink / localizedPath / localeRedirect (specs/167-storefront-locale-path).';
+const LINK_HREF = "JSXOpeningElement[name.name=/^(a|Link)$/] > JSXAttribute[name.name='href']";
+const REDIRECT_CALL = 'CallExpression[callee.name=/^(redirect|permanentRedirect)$/]';
+const ROUTER_CALL = "CallExpression[callee.object.name='router'][callee.property.name=/^(push|replace|prefetch)$/]";
+const RESPONSE_REDIRECT = "CallExpression[callee.object.name='NextResponse'][callee.property.name='redirect'] NewExpression[callee.name='URL']";
+const literalAt = (parent) => [
+  `${parent} > Literal:first-child[value=${ROOT_PATH}]`,
+  `${parent} > TemplateLiteral:first-child > TemplateElement:first-child[value.raw=${ROOT_PATH}]`,
+];
+const LOCALE_PATH_SELECTORS = [
+  `${LINK_HREF} > Literal[value=${ROOT_PATH}]`,
+  `${LINK_HREF} > JSXExpressionContainer > Literal[value=${ROOT_PATH}]`,
+  `${LINK_HREF} > JSXExpressionContainer > TemplateLiteral > TemplateElement:first-child[value.raw=${ROOT_PATH}]`,
+  ...literalAt(REDIRECT_CALL),
+  ...literalAt(ROUTER_CALL),
+  ...literalAt(RESPONSE_REDIRECT),
+];
+
 export default [
   ...rootConfig,
   {
@@ -83,6 +115,16 @@ export default [
         { selector: 'function', format: ['camelCase', 'UPPER_CASE'] },
         { selector: 'variable', format: ['camelCase', 'UPPER_CASE', 'PascalCase'], leadingUnderscore: 'allow' },
         { selector: 'typeLike', format: ['PascalCase'] },
+      ],
+    },
+  },
+  {
+    files: ['app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}', 'lib/**/*.{ts,tsx}'],
+    ignores: ['lib/i18n/locale-path*.{ts,tsx}', 'lib/i18n/localized-link.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...LOCALE_PATH_SELECTORS.map((selector) => ({ selector, message: LOCALE_PATH_MESSAGE })),
       ],
     },
   },

@@ -1,26 +1,35 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import {
+  CUSTOMER_ACCOUNT_ANONYMIZED_EVENT,
+  type CustomerAccountAnonymizedEventV1,
+} from '@endora-commerce/contracts';
 import type {
   AdminAuthenticationThrottlePort,
   AdminPasswordVerificationPort,
   AdminRolePort,
   AdminUserPreferencePort,
   AdminUserReadPort,
+  AssetReadPort,
   AuthSessionPort,
   CustomerAccountReadPort,
   ImpersonationPort,
+  MfaAdminEnforcementPort,
   MfaEnrolmentStatePort,
   MfaLoginPort,
+  OrganizationRoleReadPort,
   PermissionCataloguePort,
   PermissionReadPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { lazyPort, requireModuleEnabled } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { adminModule } from './plugin.js';
 import { AdminUser } from './entities/admin-user.entity.js';
+import { AdminUserPreference } from './entities/admin-user-preference.entity.js';
+import { ImpersonationReason } from './entities/impersonation-reason.entity.js';
 import {
   AdminUserReadService,
   createAdminPasswordVerificationPort,
@@ -29,6 +38,7 @@ import {
 } from './services/admin-user-ports.js';
 import type { AttemptCounterStore } from './services/authentication-throttle.js';
 import { describeAdministratorsWithoutRole } from './services/admin-user-service.js';
+import { eraseImpersonationReasons } from './services/impersonation-reason-erasure.js';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
 
 /**
@@ -97,6 +107,11 @@ export function registerModule(ctx: ModuleContext): void {
   // response the Admin UI seeds its auth context from.
   const mfaEnrolmentStatePort = lazyPort<MfaEnrolmentStatePort>(ctx, 'mfaEnrolmentStatePort');
 
+  // Issue #349 — what a role's two-factor requirement does to sessions already
+  // open, on the same terms as the two ports above: presence is decided first,
+  // and absent, nothing is resolved.
+  const mfaAdminEnforcementPort = lazyPort<MfaAdminEnforcementPort>(ctx, 'mfaAdminEnforcementPort');
+
   /**
    * The degrade is performed by **not resolving**, exactly as `getMfaLoginPort`
    * below does it — presence is decided first and there is deliberately no
@@ -133,6 +148,7 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'customerAccountReadPort',
           ),
+          organizationRoleReadPort: lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort'),
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<AdminUsersCradle>().requireAdmin(permission)(req, reply),
           resolveAdminContext: (req) => ctx.cradle<AdminUsersCradle>().adminContextResolver(req),
@@ -144,6 +160,15 @@ export function registerModule(ctx: ModuleContext): void {
           // branch — the password-only fallback of feature 042 FR-033 — is what
           // `undefined` selects.
           getMfaLoginPort: () => (effectiveState.isPresent('mfa') ? mfaLoginPort : undefined),
+          getMfaAdminEnforcementPort: () =>
+            effectiveState.isPresent('mfa') ? mfaAdminEnforcementPort : undefined,
+          // Feature 171 (US6) — the avatar must be a live library asset. With the
+          // library absent no avatar can be set, decided before the port is
+          // resolved (the `mfa` shape above): a `MODULE_DISABLED` answer.
+          assetExists: async (assetId) => {
+            requireModuleEnabled('assets_library');
+            return (await lazyPort<AssetReadPort>(ctx, 'assetReadPort').findById(assetId, { liveOnly: true })) !== null;
+          },
           twoFactorEnrolments,
           // Kernel-owned and lazy for the reason every port above is: this
           // registration is a singleton, and a cradle parameter would resolve
@@ -234,6 +259,20 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
+   * Issue #470 — `customer_account.anonymized.v1`: the impersonation reasons
+   * written about the account are erased within the sweep step that anonymised
+   * it (`customer_accounts` dispatches in a bus scope the sweep awaits). They
+   * used to sit in the `impersonation.start` audit entry, which the sweep's
+   * audit redaction erases; `admin_impersonation_reasons` has to follow it. A
+   * failure is the bus's to log and never fails the sweep.
+   */
+  ctx.subscribe(CUSTOMER_ACCOUNT_ANONYMIZED_EVENT, async (payload) => {
+    const { customerAccountId } = payload as CustomerAccountAnonymizedEventV1;
+    const { emFactory, auditLogService } = ctx.cradle<AdminUsersCradle>();
+    await eraseImpersonationReasons(emFactory, auditLogService, customerAccountId);
+  });
+
+  /**
    * Say so at boot when an administrator account holds no role.
    *
    * Such an account is refused — its permission checks and its tenant reach
@@ -267,4 +306,6 @@ export function registerModule(ctx: ModuleContext): void {
  */
 export const entities = [
   AdminUser,
+  AdminUserPreference,
+  ImpersonationReason,
 ];

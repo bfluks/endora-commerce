@@ -43,6 +43,7 @@
     "@endora-commerce/mod-delivery-methods": "workspace:*",
     "@endora-commerce/mod-dictionaries": "workspace:*",
     "@endora-commerce/mod-document-templates": "workspace:*",
+    "@endora-commerce/mod-forms": "workspace:*",
     "@endora-commerce/mod-google-analytics": "workspace:*",
     "@endora-commerce/mod-import-export": "workspace:*",
     "@endora-commerce/mod-inventory": "workspace:*",
@@ -59,14 +60,17 @@
     "@endora-commerce/mod-payments": "workspace:*",
     "@endora-commerce/mod-price-lists": "workspace:*",
     "@endora-commerce/mod-product-feeds": "workspace:*",
+    "@endora-commerce/mod-projects": "workspace:*",
     "@endora-commerce/mod-promotions": "workspace:*",
     "@endora-commerce/mod-pwa": "workspace:*",
     "@endora-commerce/mod-quick-order": "workspace:*",
     "@endora-commerce/mod-quote-requests": "workspace:*",
+    "@endora-commerce/mod-related-payers": "workspace:*",
     "@endora-commerce/mod-returns": "workspace:*",
     "@endora-commerce/mod-sales-channels": "workspace:*",
     "@endora-commerce/mod-seo": "workspace:*",
     "@endora-commerce/mod-settings": "workspace:*",
+    "@endora-commerce/mod-tasks": "workspace:*",
     "@endora-commerce/mod-taxes": "workspace:*",
     "@endora-commerce/mod-transactional-emails": "workspace:*",
     "@endora-commerce/mod-webhooks": "workspace:*",
@@ -94,6 +98,7 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@endora-commerce/cli": "workspace:*",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
@@ -106,7 +111,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
-    "vite": "^7.3.2",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.8",
+    "vitest": "^4.1.12"
   }
 }

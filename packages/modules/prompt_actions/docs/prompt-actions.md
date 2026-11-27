@@ -1,9 +1,9 @@
 ---
-title: Prompt Actions (AI assistant)
+title: Prompt actions (AI assistant)
 description: Natural-language prompt mode for the admin command palette, with an explicit preview-and-confirm step before any change
 ---
 
-# Prompt Actions (AI assistant)
+# Prompt actions (AI assistant)
 
 The `prompt_actions` module adds a natural-language prompt mode to the admin
 command palette (`⌘K` / `Ctrl+K`). An operator describes what they want in
@@ -52,7 +52,7 @@ missing permissions are reported plainly, and nothing changes.
   (with the original prompt, provider and model) plus the underlying
   modules' own audit rows (e.g. `stock_level.adjust`). Permission refusals
   are audited as `prompt_action.refused`. Executions also appear on the
-  dashboard's Recent Activity card.
+  dashboard's Recent activity card.
 
 ## Configuration (platform administrator)
 
@@ -130,7 +130,24 @@ automatically.
 | `inventory.search_warehouses` | resolver | `catalog:read` |
 | `inventory.set_stock_level` | mutation | `catalog:write` |
 | `catalog.assign_products_to_category` | mutation | `catalog:write` |
+| `catalog.remove_products_from_category` | mutation | `catalog:write` |
+| `catalog.set_product_status` | mutation | `catalog:write` |
+| `catalog.set_products_visibility` | mutation | `catalog:write` |
+| `catalog.archive_product` | mutation | `catalog:write` |
+| `catalog.restore_product` | mutation | `catalog:write` |
 
 Bulk category assignments above 50 products ride the existing durable
 `catalog.bulk-operation` queue (the same worker that serves the bulk-edit
 screen), so large prompts never block the API process.
+
+**Archiving is not a status.** `catalog.set_product_status` switches products
+on (`active`) or off (`inactive`) and never archives or restores them. Ask the
+assistant to archive or restore instead: `catalog.archive_product` and
+`catalog.restore_product` run the Catalog module's own Archive and Restore
+actions — the same audit entry (`product.archive` / `product.restore`), with
+the admin who confirmed the plan as the actor — and above 50 products they run
+as the bulk Archive / Restore on the same queue, undoable from the bulk
+operation's page. The plan's preview says that only Restore brings an archived
+product back. `catalog.search_products` includes archived products and returns
+`archived` beside `status`, so an archived product can be found to restore it.
+The two tools are offered only where the Catalog module's command bus is wired.

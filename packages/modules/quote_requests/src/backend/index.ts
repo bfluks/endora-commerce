@@ -1,28 +1,47 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, EntityExtensionReads } from '@endora-commerce/platform/kernel';
 import type { EventBus } from '@endora-commerce/platform/events';
-import { ERROR_CODES, QUOTE_REQUEST_PDF_LIMITS, QUOTE_REQUEST_WEBHOOK_EVENT_TYPES } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  QUOTE_REQUEST_PDF_LIMITS,
+  QUOTE_REQUEST_WEBHOOK_EVENT_TYPES,
+  QUOTE_VALIDITY_DAYS_MAX,
+  isUuidShape,
+} from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type {
   Actor,
   AdminI18nTranslatePort,
+  AdminNotificationRecordPort,
   AdminSearchProviderRegistryPort,
   AdminRolePort,
+  AdminTenantScopePort,
   AdminUserReadPort,
   BuyerLinePricePort,
   CartWritePort,
   CatalogAttributeReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
+  CatalogProductUrlKeyReadPort,
   CustomerAccountReadPort,
+  CustomerNotificationRecordPort,
+  CustomerPushPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
+  CustomFieldListFilterPort,
   CustomFieldDefinitionReadPort,
   DocumentRenderPort,
   DocumentTypeRegistryPort,
   EmailDefaultsRegistryPort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
+  PermissionReadPort,
   OrganizationTaxProfilePort,
+  QuoteRequestCommandPort,
   QuoteRequestReadPort,
   RfqCustomerPort,
   SalesChannelAttributionRegistryPort,
@@ -33,7 +52,10 @@ import type {
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { Redis } from 'ioredis';
+import { defaultValidityDaysFromSetting } from './services/operator-quote-sharing.js';
 import { QuoteRequestReadService } from './services/quote-request-read-port.js';
+import { QuoteRequestCustomFieldCarryReceiver } from './services/quote-request-custom-field-carry-receiver.js';
+import { QuoteRequestCommandService } from './services/quote-request-command-port.js';
 import {
   createQuoteRequestAdminSearchProvider,
   type QuoteRequestAdminSearchProviderDeps,
@@ -41,16 +63,20 @@ import {
 import type { AdminContext } from './services/rfq-admin-service.js';
 import { NegotiationPolicyService } from './services/negotiation-policy-service.js';
 import { startRfqExpirySweep } from './workers/rfq-expiry-sweep-worker.js';
+import { startRfqNotificationDelivery } from './workers/rfq-notification-delivery-worker.js';
+import { createNotificationKickProducer } from './services/notifications/kick.js';
+import { resolveCustomerStorefrontUrl } from './services/notifications/storefront-url.js';
 import { registerQuoteRequestSalesChannelAttributions } from './services/sales-channel-attributions.js';
 import {
   effectiveState,
   enterSystemScope,
+  lazyEntityExtensionReads,
   lazyPort,
   SettingNotRegistered,
   SettingOutOfScopeForChannel,
 } from '@endora-commerce/platform/kernel';
 import type { RequireAdminAnyFactory, RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import type { CommandBus } from '@endora-commerce/platform/commands';
+import { resolveCommandActor, type CommandBus } from '@endora-commerce/platform/commands';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { SalesChannelResolutionPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { QUOTE_REQUESTS_SETTING_CODES } from '../manifest.js';
@@ -58,8 +84,9 @@ import { quoteRequestsModule, type QuoteRequestsModuleOptions } from './plugin.j
 import { QuoteRequest } from './entities/quote-request.entity.js';
 import { QuoteRequestEvent } from './entities/quote-request-event.entity.js';
 import { QuoteRequestItem } from './entities/quote-request-item.entity.js';
+import { QuoteRequestItemGroup } from './entities/quote-request-item-group.entity.js';
 import { QuoteRequestListSavedView } from './entities/quote-request-list-saved-view.entity.js';
-import { QuoteRequestNotificationEvent } from './entities/quote-request-notification-event.entity.js';
+import { QuoteRequestNotification } from './entities/quote-request-notification.entity.js';
 import { QuoteRequestRevision } from './entities/quote-request-revision.entity.js';
 import { QuoteRequestOrgPolicy } from './entities/quote-request-org-policy.entity.js';
 import { QuoteRequestAccountPolicy } from './entities/quote-request-account-policy.entity.js';
@@ -68,6 +95,7 @@ import { QuoteRequestDocumentService } from './document/document-service.js';
 import { createQuoteRequestDocumentType } from './document/quote-request-document-type.js';
 import { QUOTE_REQUEST_PDF_EMAIL_CODE } from './commands/document-template-commands.js';
 import { QUOTE_REQUEST_PDF_EMAIL_DEFAULT } from './email-templates/quote-pdf-defaults.js';
+import { QUOTE_NOTIFICATION_EMAIL_DEFAULTS } from './email-templates/quote-notification-defaults.js';
 
 /**
  * `quote_requests` — four settings resolvers that belonged to the module
@@ -162,6 +190,12 @@ export interface QuoteRequestsCradle {
    * then not built.
    */
   readonly moduleQueueRedis: Redis | undefined;
+  /**
+   * The delivery queue's kick (`specs/179-rfq-and-customer-notifications/`
+   * research R-8), built on `moduleQueueRedis`: none on a composition without
+   * queues, where the kick does nothing.
+   */
+  readonly quoteRequestNotificationKick: ReturnType<typeof createNotificationKickProducer>;
   readonly quoteRequests: ReturnType<typeof quoteRequestsModule>;
   /**
    * Feature 146, US4 — the request owner's price-negotiation lock (research
@@ -183,14 +217,6 @@ export interface QuoteRequestsCradle {
       : never
     : never;
 }
-
-/**
- * `setting_values.sales_channel_id` is a `uuid` column, so a channel id that is
- * not one cannot match a row — PostgreSQL rejects the comparison outright. The
- * check is here rather than in the settings service because this is the caller
- * that has somewhere to degrade to.
- */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Conditions this module has already reported. Module scope and never reset, so
@@ -223,8 +249,10 @@ function warnOnce(condition: string, message: string): void {
  *
  * Both bodies are this module's own and carry no deployment judgement. They
  * read `request.actor`, which is the platform's decoration since T118b, and
- * three ports this manifest already declares as binding `dependencies`:
- * `customer_accounts`, `admin_users` and `admin_roles`. A root that wants a
+ * the admin one reads two ports this manifest already declares as binding
+ * `dependencies`: `admin_users` and `admin_roles` (the customer one read
+ * `customer_accounts` for the legacy role until `specs/170-organization-roles/`
+ * WP-05). A root that wants a
  * different answer still contributes one — the test harness does, and its
  * divergence is deliberate — which is what the window is for.
  */
@@ -232,7 +260,10 @@ function registerActorResolvers(ctx: ModuleContext): void {
   ctx.di.register({
     /**
      * Who is asking, in this module's shape: the account, its Organization and
-     * whether the caller administers it.
+     * the role the actor carries (`specs/170-organization-roles/`, R-15).
+     * Whether the caller sees the whole Organization is not stated here: the
+     * service asks `organizationPermissionPort` (R-30), so the legacy `role`
+     * column is no longer read.
      *
      * The Organization guard asserts an invariant rather than describing a
      * business state (D-178) — `customer_accounts.organization_id` is `NOT NULL`
@@ -244,7 +275,6 @@ function registerActorResolvers(ctx: ModuleContext): void {
      */
     rfqCustomerContextResolver: ctx
       .asFunction(() => {
-        const accounts = lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort');
         return async (request: FastifyRequest) => {
           const actor = request.actor as Actor | undefined;
           if (actor?.kind !== 'customer') {
@@ -258,11 +288,10 @@ function registerActorResolvers(ctx: ModuleContext): void {
               { code: 'customer_account_organization_missing' },
             );
           }
-          const account = await accounts.findById(actor.customerAccountId);
           return {
             customerAccountId: actor.customerAccountId,
             organizationId: actor.organizationId,
-            isOrgAdmin: account?.role === 'organization_admin',
+            organizationRoleId: actor.organizationRoleId ?? null,
           };
         };
       })
@@ -352,8 +381,13 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
   });
   ctx.di.register({
+    quoteRequestNotificationKick: ctx
+      .asFunction(({ moduleQueueRedis }: QuoteRequestsCradle) => createNotificationKickProducer(moduleQueueRedis, ctx.log))
+      .singleton(),
+  });
+  ctx.di.register({
     quoteRequests: ctx
-      .asFunction(({ emFactory, eventBus, auditLogService, commandBus }: QuoteRequestsCradle) => {
+      .asFunction(({ emFactory, eventBus, auditLogService, commandBus, quoteRequestNotificationKick }: QuoteRequestsCradle) => {
         /**
          * This module's own settings, read through the port it already holds,
          * against the **resolved** sales channel.
@@ -397,7 +431,11 @@ export function registerModule(ctx: ModuleContext): void {
           channelId: string | null,
         ): Promise<T> => {
           const cradle = ctx.cradle<QuoteRequestsCradle>();
-          if (channelId === null || !UUID_PATTERN.test(channelId)) {
+          // `setting_values.sales_channel_id` is a `uuid` column, so a channel id that is
+          // not one cannot match a row — PostgreSQL rejects the comparison outright. The
+          // check is here rather than in the settings service because this is the caller
+          // that has somewhere to degrade to.
+          if (channelId === null || !isUuidShape(channelId)) {
             // Both roots answer this resolver with the system-default channel's
             // id, falling back to `ORGANIZATIONS_SETTINGS_CHANNEL_ID` — an env
             // knob whose own default is the string `'default'`. So "no channel"
@@ -435,11 +473,14 @@ export function registerModule(ctx: ModuleContext): void {
           emFactory,
           eventBus,
           log: ctx.log,
+          notificationKick: quoteRequestNotificationKick.kick,
           auditLog: auditLogService,
           customFieldValues: lazyPort<QuoteRequestsCradle['customFieldValueService']>(
             ctx,
             'customFieldValueService',
           ),
+          // Feature 157 — the admin list's custom-field filters.
+          customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<QuoteRequestsCradle>().requireAdmin(permission)(req, reply),
           requireAdminAny: (permissions) => async (req, reply) =>
@@ -474,10 +515,30 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'salesChannelMembershipPort',
           ),
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
+          ),
           customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
           organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
           adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
           orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
+          // `specs/170-organization-roles/` — the customer routes' permission
+          // guards (FR-040) and the *Administrator*-only Organization-wide
+          // visibility (R-30). `organizations` is a binding dependency; the
+          // port is resolved per call, so its effective state decides.
+          organizationPermissions: () =>
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+          // `specs/179-rfq-and-customer-notifications/` WP-03 — the two reads
+          // the recipient rule adds (research R-3, R-5): `organizations`' role
+          // read for the Organization-wide viewers, `admin_roles`' effective
+          // permissions for `rfqs:handle`. Both owners are binding
+          // dependencies; both are resolved per call.
+          organizationRoles: () => lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort'),
+          permissions: lazyPort<PermissionReadPort>(ctx, 'permissionService'),
+          // Issue #1906 — the reach of the assignee a command hook names on the
+          // buyer's create. `organizations` is a binding dependency; resolved per call.
+          adminTenantScope: lazyPort<AdminTenantScopePort>(ctx, 'adminTenantScopePort'),
           // The completion reactor's second look at an order whose commit was
           // still in flight (`specs/143-crm-sales-opportunities/`, FR-104). Off
           // the bus's chain, so in a system scope of its own — the handler's
@@ -533,6 +594,22 @@ export function registerModule(ctx: ModuleContext): void {
               z.boolean(),
               true,
             ),
+          // `specs/192-quote-request-draft-share/` (R-12) — one global value,
+          // read with no channel of its own: the module's settings channel.
+          // Read without a shape so a value out of range (above
+          // `QUOTE_VALIDITY_DAYS_MAX`, negative, a fraction) falls back to `0`,
+          // no deadline, instead of a shape-mismatch error on every create.
+          resolveDefaultValidityDays: async () => {
+            const code = QUOTE_REQUESTS_SETTING_CODES.DEFAULT_VALIDITY_DAYS;
+            const stored = await setting<unknown>(code, z.unknown(), 0);
+            const days = defaultValidityDaysFromSetting(stored);
+            if (days !== null) return days;
+            ctx.log.warn(
+              { setting: code, value: stored },
+              `quote_requests: setting "${code}" holds a value outside 0…${QUOTE_VALIDITY_DAYS_MAX} days — read as 0, no deadline`,
+            );
+            return 0;
+          },
           resolveBusinessIdPrefix: () =>
             setting(QUOTE_REQUESTS_SETTING_CODES.BUSINESS_ID_PREFIX, z.string(), ''),
           resolveBusinessIdSuffix: () =>
@@ -540,6 +617,38 @@ export function registerModule(ctx: ModuleContext): void {
           // Feature 153 — the quote PDF routes' service, resolved when the
           // routes are mounted.
           documentService: () => ctx.cradle<QuoteRequestsCradle>().quoteRequestDocumentService,
+          // `specs/179-rfq-and-customer-notifications/` WP-05, WP-08, WP-10 —
+          // what the delivery worker delivers through. The bell's, the
+          // customer centre's and the push's owners are switchable and only
+          // degrade this module (the manifest's `degrades-without` edges):
+          // their presence is asked in front of each port by the delivery
+          // service, never caught behind it. The sender is read off the cradle
+          // per send — a function announced late, which `lazyPort` cannot
+          // forward (the PDF e-mail's precedent). A push is rendered from this
+          // module's own bundle through `_i18n`, a binding dependency.
+          delivery: {
+            bell: lazyPort<AdminNotificationRecordPort<EntityManager>>(ctx, 'adminNotificationRecordPort'),
+            centre: lazyPort<CustomerNotificationRecordPort<EntityManager>>(ctx, 'customerNotificationRecordPort'),
+            push: lazyPort<CustomerPushPort>(ctx, 'customerPushPort'),
+            translate: (key, language, params) =>
+              lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate('quote_requests', key, language, params),
+            sender: () => ctx.cradle<QuoteRequestsCradle>().transactionalEmailSenderAccessor(),
+            salesChannels: {
+              getById: (id) => ctx.cradle<QuoteRequestsCradle>().salesChannelResolutionPort.getById(id),
+              getSystemDefault: () => ctx.cradle<QuoteRequestsCradle>().salesChannelResolutionPort.getSystemDefault(),
+            },
+            // The setting, then `STOREFRONT_BASE_URL` — as the setting defines
+            // itself — and no third rung.
+            storefrontUrl: (salesChannelId) =>
+              resolveCustomerStorefrontUrl(
+                (id) =>
+                  ctx
+                    .cradle<QuoteRequestsCradle>()
+                    .settingsReadPort.get('sales_channels.storefront_url', id, z.string()),
+                salesChannelId,
+              ),
+            isPresent: (moduleId) => effectiveState.isPresent(moduleId),
+          },
         });
       })
       .singleton(),
@@ -553,8 +662,63 @@ export function registerModule(ctx: ModuleContext): void {
     'quoteRequestReadPort',
     ctx
       .asFunction(
-        ({ emFactory }: QuoteRequestsCradle) => new QuoteRequestReadService(emFactory),
+        ({ emFactory }: QuoteRequestsCradle) =>
+          new QuoteRequestReadService(
+            emFactory,
+            (key, language) =>
+              lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate('quote_requests', key, language),
+            // `specs/187-side-table-extensions/` FR-058 — `include` on the
+            // record reads; resolved only for a read that names one.
+            lazyEntityExtensionReads(() => ctx.cradle<{ entityExtensionReads: EntityExtensionReads }>().entityExtensionReads),
+          ),
       )
+      .singleton(),
+  );
+
+  /**
+   * Feature 162 — a Sales Opportunity's custom-field values received into a
+   * Quote Request created from it (`specs/162-custom-fields-value-carry/`,
+   * contract `carry-api.md` §4.2). `crm` decides this module's presence before
+   * it calls; the carry itself is planned by `custom_fields`.
+   */
+  ctx.di.providePort<CustomFieldCarryReceiverPort>(
+    'quoteRequestCustomFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ commandBus }: QuoteRequestsCradle) =>
+          new QuoteRequestCustomFieldCarryReceiver({
+            commandBus,
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
+          }),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Issue #1824 (`specs/186-aggregate-ports/` US5, D-293) — the QuoteRequest
+   * aggregate's write port: each method runs the Command the admin route for
+   * the same operation runs, through the same runner, with the ambient actor.
+   * The semantics, the refusals and the owner-off answer are on
+   * `QuoteRequestCommandPort` in the contracts. The history names the ambient
+   * administrator with the label the admin routes show, else the system.
+   */
+  ctx.di.providePort<QuoteRequestCommandPort>(
+    'quoteRequestCommandPort',
+    ctx
+      .asFunction(({ quoteRequests }: QuoteRequestsCradle) => {
+        const admins = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
+        const roles = lazyPort<AdminRolePort>(ctx, 'adminRolePort');
+        return new QuoteRequestCommandService({
+          admin: () => quoteRequests.handle().adminService,
+          documents: () => ctx.cradle<QuoteRequestsCradle>().quoteRequestDocumentService,
+          operator: async () => {
+            const adminUserId = resolveCommandActor().actorAdminUserId;
+            if (adminUserId === null) return { adminUserId: null, roleLabel: 'System' };
+            const { roleLabel } = await rfqAdminContextFor(admins, roles, adminUserId);
+            return { adminUserId, roleLabel };
+          },
+        });
+      })
       .singleton(),
   );
 
@@ -679,6 +843,19 @@ export function registerModule(ctx: ModuleContext): void {
               adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
               // A kernel registration: no module edge.
               salesChannels: lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+              // Issue #1904 — the product name in the document's language and
+              // the product page: `catalog`'s effective texts and URL keys, on
+              // the channel's storefront address as the customer e-mails read it.
+              catalogTexts: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+              catalogUrlKeys: lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
+              storefrontUrl: (salesChannelId) =>
+                resolveCustomerStorefrontUrl(
+                  (id) =>
+                    ctx
+                      .cradle<QuoteRequestsCradle>()
+                      .settingsReadPort.get('sales_channels.storefront_url', id, z.string()),
+                  salesChannelId,
+                ),
               taxRate: (organizationId) => ctx.cradle<QuoteRequestsCradle>().rfqTaxRateResolver(organizationId),
             }),
             customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
@@ -712,16 +889,19 @@ export function registerModule(ctx: ModuleContext): void {
    * registry `transactional_emails` reads once at boot; no presence probe.
    */
   ctx.onBoot(() => {
-    lazyPort<EmailDefaultsRegistryPort>(ctx, 'emailDefaultsPort').register(
-      QUOTE_REQUEST_PDF_EMAIL_CODE,
-      QUOTE_REQUEST_PDF_EMAIL_DEFAULT,
-      'quote_requests',
-    );
+    const registry = lazyPort<EmailDefaultsRegistryPort>(ctx, 'emailDefaultsPort');
+    registry.register(QUOTE_REQUEST_PDF_EMAIL_CODE, QUOTE_REQUEST_PDF_EMAIL_DEFAULT, 'quote_requests');
+    // `specs/179-rfq-and-customer-notifications/` FR-020 — the eleven
+    // notification e-mails' defaults (en, pl), the same contribution.
+    for (const [code, defaults] of Object.entries(QUOTE_NOTIFICATION_EMAIL_DEFAULTS)) {
+      registry.register(code, defaults, 'quote_requests');
+    }
   });
 
   ctx.routes(async (app) => {
     const cradle = ctx.cradle<QuoteRequestsCradle>();
     await cradle.quoteRequests.register(app);
+    app.addHook('onClose', () => cradle.quoteRequestNotificationKick.close());
 
     // The clock of the expiry sweep: a Job Scheduler and its consumer. Until
     // this call existed nothing ran `RfqExpiryWorker.sweep()` at all — see
@@ -738,6 +918,22 @@ export function registerModule(ctx: ModuleContext): void {
       processRunsWorkers: cradle.processRunsWorkers,
       moduleQueueRedis: cradle.moduleQueueRedis,
       expiry: cradle.quoteRequests.handle().expiryWorker,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
+
+    // The clock of notification delivery (`specs/179-rfq-and-customer-notifications/`
+    // research R-8): a Job Scheduler every minute and the kick the writers add,
+    // on one queue, consumed through `ctx.worker` for the same reason as the
+    // sweep above — while this module is off no record is delivered, and the
+    // records wait, pending, for it to come back.
+    await startRfqNotificationDelivery({
+      processRunsWorkers: cradle.processRunsWorkers,
+      moduleQueueRedis: cradle.moduleQueueRedis,
+      delivery: cradle.quoteRequests.handle().deliveryService,
       log: ctx.log,
       attach: (worker) => ctx.worker(worker, { logger: app.log }),
       onClose: (close) => {
@@ -783,8 +979,9 @@ export const entities = [
   QuoteRequest,
   QuoteRequestEvent,
   QuoteRequestItem,
+  QuoteRequestItemGroup,
   QuoteRequestListSavedView,
-  QuoteRequestNotificationEvent,
+  QuoteRequestNotification,
   QuoteRequestRevision,
   QuoteRequestOrgPolicy,
   QuoteRequestAccountPolicy,
@@ -792,28 +989,24 @@ export const entities = [
 
 /**
  * What global search's Quote Request provider reads through: this module's own
- * admin service, asked with the same admin context the list's routes resolve,
- * and this module's bundle for status labels. Built outside the boot hook so
- * the hook only registers — the closures run per search, never at boot.
+ * admin service, under the request's tenant scope — which is the whole of the
+ * list's visibility since issue #957 — and this module's bundle for status
+ * labels. Built outside the boot hook so the hook only registers — the closures
+ * run per search, never at boot.
  */
 function quoteRequestAdminSearchDeps(ctx: ModuleContext): QuoteRequestAdminSearchProviderDeps {
-  const admins = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
-  const roles = lazyPort<AdminRolePort>(ctx, 'adminRolePort');
   const i18n = lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService');
   return {
-    search: async (query, adminUserId) =>
-      ctx
-        .cradle<QuoteRequestsCradle>()
-        .quoteRequests.handle()
-        .adminService.searchForAdmin(await rfqAdminContextFor(admins, roles, adminUserId), query),
+    search: (query) =>
+      ctx.cradle<QuoteRequestsCradle>().quoteRequests.handle().adminService.searchForAdmin(query),
     translate: (key, language) => i18n.translate('quote_requests', key, language),
   };
 }
 
 /**
- * Who is administering, as the quote request list's routes and global search
- * both read it: the role decides whether the sales-representative visibility
- * rule applies (`isPlatformAdmin`) and what the event records call the actor.
+ * Who is administering, as the quote request routes read it: what the event
+ * records call the actor. Which organizations they reach is the tenant scope's
+ * answer, not this one's (issue #957).
  */
 async function rfqAdminContextFor(
   admins: AdminUserReadPort,

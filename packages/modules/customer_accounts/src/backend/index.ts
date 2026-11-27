@@ -1,15 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { z } from 'zod';
-import type { ChannelMemberEntityType } from '@endora-commerce/contracts';
+import { CUSTOMER_ACCOUNT_ANONYMIZED_EVENT, type ChannelMemberEntityType } from '@endora-commerce/contracts';
 import { normalizeEmailAddress } from '@endora-commerce/contracts';
-import type { AuditReferenceRegistryPort, OrganizationDetailsPort } from '@endora-commerce/contracts';
+import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
 import type {
   AuthSessionPort,
   CustomerAccountAdminSearchPort,
+  CustomerAccountCommandPort,
   CustomerAccountLifecycleWritePort,
   CustomerAccountMemberWritePort,
   CustomerAccountReadPort,
+  CustomerAccountRoleCommandPort,
+  CustomerAccountMemberCommandPort,
+  CustomerAccountPreferencePort,
   CustomerAuthPort,
   CustomerAuthenticationThrottlePort,
   CustomerGroupReadPort,
@@ -20,13 +24,20 @@ import type {
   CustomerRollupScopePort,
   MfaEnrolmentStatePort,
   MfaLoginPort,
+  OrganizationDetailsPort,
+  OrganizationRoleReadPort,
 } from '@endora-commerce/contracts';
-import type { AttemptCounterStore, AuditPort } from '@endora-commerce/platform/kernel';
+import type {
+  AttemptCounterStore,
+  AuditPort,
+  SalesChannelAccessPort,
+} from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { EventBus } from '@endora-commerce/platform/events';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { lazyEntityExtensionReads, lazyPort, type EntityExtensionReads } from '@endora-commerce/platform/kernel';
 import { registerCustomerAccountAuditReferences } from './services/audit-references.js';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -37,12 +48,15 @@ import type { PersonalOrganizationProvisionApi } from '@endora-commerce/mod-orga
 import { CustomerAccount } from './entities/customer-account.entity.js';
 import { CustomerGroup } from './entities/customer-group.entity.js';
 import { PasswordResetToken } from './entities/password-reset-token.entity.js';
+import { accountCreatedAuditState } from './services/customer-account-audit-state.js';
 import { registerCustomerGroupAdminRoutes } from './routes.admin.js';
 import {
   CustomerAccountMemberWriteService,
   CustomerAccountReadService,
   CustomerPasswordStateService,
   CustomerPasswordVerificationService,
+  createCustomerAccountRoleCommandPort,
+  createCustomerAccountMemberCommandPort,
   createCustomerAuthPort,
   createCustomerRolePort,
 } from './services/customer-account-ports.js';
@@ -51,12 +65,13 @@ import {
   CustomerAccountLifecycleWriteService,
 } from './services/customer-account-lifecycle-ports.js';
 import { CustomerAuthService } from './services/customer-auth-service.js';
+import { CustomerAccountCommandService } from './services/customer-account-command-port.js';
+import { CustomerAccountPreferenceService } from './services/customer-account-preference-port.js';
 import { CustomerAuthenticationThrottle } from './services/customer-authentication-throttle.js';
 import { CustomerGroupReadService } from './services/customer-group-read-port.js';
 import { CustomerGroupService } from './services/customer-group-service.js';
 import { CustomerRollupScopeService } from './services/customer-rollup-scope.js';
 import { PasswordResetService } from './services/password-reset-service.js';
-import { RoleService } from './services/role-service.js';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
 
 /**
@@ -134,15 +149,11 @@ export interface CustomerAccountsCradle {
   readonly redis: AttemptCounterStore;
   /** Feature 054 — the customer-group writes audit co-transactionally. */
   readonly commandBus: CommandBus;
+  /** The in-process bus `customer_account.anonymized.v1` is published on (read per call). */
+  readonly eventBus: EventBus;
   /** `auth`'s admin guard, for the customer-group admin routes. */
   readonly requireAdmin: RequireAdminFactory;
   readonly settingsReadPort: SettingsReadPort;
-  /**
-   * Which channel a global-scope settings read resolves against — the
-   * deployment's system-default channel. A property of the deployment, so a
-   * root supplies it; `inventory` reads the same name.
-   */
-  readonly settingsChannelResolver: () => Promise<string | null>;
   /**
    * The two customer-side halves of `mfa`'s `SocialIdentityDeps` (T143a): match
    * a verified provider e-mail to an account, and create one when nothing
@@ -150,12 +161,14 @@ export interface CustomerAccountsCradle {
    */
   readonly customerSocialLoginPort: {
     resolveByEmail(email: string): Promise<{ id: string } | null>;
-    autoCreate(email: string): Promise<{ id: string } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null; preferredLanguage?: string | null },
+    ): Promise<{ id: string } | null>;
   };
   readonly customerAuthService: CustomerAuthService;
   readonly passwordResetService: PasswordResetService;
   readonly customerAuthenticationThrottle: CustomerAuthenticationThrottle;
-  readonly customerRoleService: RoleService;
   readonly customerGroupService: CustomerGroupService;
 }
 
@@ -198,6 +211,13 @@ export function registerModule(ctx: ModuleContext): void {
   const mfaEnrolmentStatePort = lazyPort<MfaEnrolmentStatePort>(ctx, 'mfaEnrolmentStatePort');
 
   /**
+   * `specs/170-organization-roles/` — which roles an Organization has is
+   * `organizations`' fact (this module already declares that module). Resolved
+   * per call, like every port above; never captured into a singleton.
+   */
+  const organizationRoles = lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort');
+
+  /**
    * The degrade is performed by **not resolving**, exactly as the login port's
    * getter below does it — presence is decided first and there is deliberately
    * no `catch` anywhere near the port. A buyer's own account page is the wrong
@@ -224,9 +244,10 @@ export function registerModule(ctx: ModuleContext): void {
   // crossing a boundary is the problem this feature exists to remove — so they
   // get record-returning siblings rather than a rename. `customerAuthPort` and
   // `customerRolePort` are what the consumers rewired to — `customers` was the
-  // last of them, in issue #195 — and `customerAuthService` /
-  // `customerRoleService` stay registered because those two adapters are built
-  // over them.
+  // last of them, in issue #195 — and `customerAuthService` stays registered
+  // because that adapter is built over it. `customerRoleService` went with
+  // `RoleService` (`specs/170-organization-roles/` WP-02b): `customerRolePort`
+  // runs the member Commands itself.
   // ---------------------------------------------------------------------------
 
   ctx.di.providePort<CustomerAccountReadPort>(
@@ -234,54 +255,114 @@ export function registerModule(ctx: ModuleContext): void {
     ctx
       .asFunction(
         ({ emFactory }: CustomerAccountsCradle) =>
-          new CustomerAccountReadService(emFactory, twoFactorEnrolments),
+          new CustomerAccountReadService(
+            emFactory,
+            twoFactorEnrolments,
+            organizationRoles,
+            // `specs/187-side-table-extensions/` FR-058 — `include` on the
+            // record reads; the kernel's `entityExtensionReads` is resolved
+            // only for a read that names one.
+            lazyEntityExtensionReads(() => ctx.cradle<{ entityExtensionReads: EntityExtensionReads }>().entityExtensionReads),
+          ),
       )
       .singleton(),
   );
 
   /**
+   * `specs/186-aggregate-ports/` US3 (issue #1822) — the CustomerAccount
+   * aggregate port: every lifecycle write of an account as one audited Command,
+   * the one `customers`' and `organizations`' admin routes run. What it needs of
+   * other modules is resolved per call: `organizations`' roles (already above),
+   * whether an Organization is personal (the depletion guard's exemption), the
+   * personal-Organization provisioning seam (D-178), and `auth`'s sessions,
+   * which a block and a deletion end after their commit. The bus is read per
+   * call, never captured.
+   */
+  ctx.di.providePort<CustomerAccountCommandPort>(
+    'customerAccountCommandPort',
+    ctx
+      .asFunction(({ emFactory, commandBus }: CustomerAccountsCradle) => {
+        const organizations = lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort');
+        return new CustomerAccountCommandService({
+          commandBus,
+          emFactory,
+          twoFactorEnrolments,
+          roles: organizationRoles,
+          isPersonal: async (organizationId) => (await organizations.findById(organizationId))?.isPersonal === true,
+          // D-178 — `lazyPort` rather than a captured value: the gate stays
+          // live inside this singleton and the seam is resolved per call.
+          personalOrganizations: lazyPort<PersonalOrganizationProvisionApi>(ctx, 'personalOrganizationProvisionApi'),
+          sessions: lazyPort<AuthSessionPort>(ctx, 'authSessionPort'),
+          afterCommit: (fn) => ctx.cradle<CustomerAccountsCradle>().eventBus.afterScope(fn),
+          // `specs/170-forms-module/` research R-17 — the anonymisation is
+          // announced in a bus scope this write awaits, so a subscriber's
+          // erasure runs within the sweep step (cms' `publishContentChange`
+          // precedent). A handler's failure is the bus's to log and never
+          // fails the sweep.
+          announceAnonymized: async (payload) => {
+            const bus = ctx.cradle<CustomerAccountsCradle>().eventBus;
+            await bus.run(async () => {
+              bus.emit(CUSTOMER_ACCOUNT_ANONYMIZED_EVENT, payload);
+            });
+          },
+        });
+      })
+      .singleton(),
+  );
+
+  /**
    * Feature 075, Phase C — the member lifecycle `organizations` runs over this
-   * table. Published when that module was cut: it created and mutated the
-   * entity in seven places, and the argon2 hash it needed to do so came from an
-   * import of `auth`. Both are on this side of the port now, and each write
-   * records its own audit row, as `roleService` beside it always has.
+   * table. Deprecated since 0.113.0: its writes delegate to
+   * `customerAccountCommandPort` (186 T051); `attachToOrganization` stays, for
+   * `specs/191-membership-join-requests/` to replace.
    */
   ctx.di.providePort<CustomerAccountMemberWritePort>(
     'customerAccountMemberWritePort',
     ctx
       .asFunction(
         ({ emFactory, auditLogService }: CustomerAccountsCradle) =>
-          new CustomerAccountMemberWriteService(emFactory, twoFactorEnrolments, auditLogService),
+          new CustomerAccountMemberWriteService(emFactory, twoFactorEnrolments, auditLogService, {
+            port: lazyPort<CustomerAccountCommandPort>(ctx, 'customerAccountCommandPort'),
+          }),
       )
       .singleton(),
   );
 
   /**
    * Feature 075, Phase C — the account lifecycle `customers` runs over this
-   * table, and the list its admin screen reads it with.
-   *
-   * `customers` is the management surface over these accounts and it ran both
-   * by holding the entity: block, unblock, soft-delete, restore, the retention
-   * sweep's scrub, the organisation and group assignments, standalone
-   * registration and the custom-field patch, plus the paginated admin query.
-   * The policy — who may act on whom, and the "an organisation keeps an
-   * administrator" guard — stayed on that side; the statement and its one audit
-   * row are here.
+   * table. Deprecated since 0.113.0: its writes delegate to
+   * `customerAccountCommandPort` and its work-list reads to
+   * `customerAccountReadPort` (186 T050, T051); the two Organization moves
+   * stay, for `specs/191-membership-join-requests/` to replace.
    */
   ctx.di.providePort<CustomerAccountLifecycleWritePort>(
     'customerAccountLifecycleWritePort',
     ctx
       .asFunction(
-        ({ emFactory, auditLogService, commandBus }: CustomerAccountsCradle) =>
-          new CustomerAccountLifecycleWriteService(
-            emFactory,
-            auditLogService,
+        ({ emFactory, auditLogService }: CustomerAccountsCradle) =>
+          new CustomerAccountLifecycleWriteService(emFactory, auditLogService, twoFactorEnrolments, {
+            commands: lazyPort<CustomerAccountCommandPort>(ctx, 'customerAccountCommandPort'),
+            reads: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+          }),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Issue #652 (D-292) — the account's preferred language: the owner's choice
+   * (`customers`' self-service route) and a federated sign-in's capture
+   * (`mfa`). Both run `customer_account.set_preferred_language` on the bus.
+   */
+  ctx.di.providePort<CustomerAccountPreferencePort>(
+    'customerAccountPreferencePort',
+    ctx
+      .asFunction(
+        ({ commandBus }: CustomerAccountsCradle) =>
+          new CustomerAccountPreferenceService(
             twoFactorEnrolments,
-            // D-178 — `lazyPort` rather than a captured value: the gate stays
-            // live inside this singleton and the seam is resolved per call. The
-            // proxy is what makes the capture legal at all.
-            lazyPort<PersonalOrganizationProvisionApi>(ctx, 'personalOrganizationProvisionApi'),
             commandBus,
+            // 186 R-17.4 — the owner's choice runs the aggregate port's write.
+            lazyPort<CustomerAccountCommandPort>(ctx, 'customerAccountCommandPort'),
           ),
       )
       .singleton(),
@@ -363,16 +444,46 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
   );
 
+  /**
+   * The member-management surface `organizations` calls, over the member
+   * Commands (`specs/170-organization-roles/` WP-02b) — it adapted
+   * `RoleService`, which wrote and audited by hand and is gone.
+   */
   ctx.di.providePort<CustomerRolePort>(
     'customerRolePort',
     ctx
-      .asFunction(() =>
-        createCustomerRolePort(
-          () => ctx.cradle<CustomerAccountsCradle>().customerRoleService,
-          twoFactorEnrolments,
-        ),
+      .asFunction(({ emFactory, commandBus }: CustomerAccountsCradle) =>
+        createCustomerRolePort({ emFactory, commandBus, roles: organizationRoles, twoFactorEnrolments }),
       )
       .singleton(),
+  );
+
+  /**
+   * `specs/170-organization-roles/` WP-02b — the role assignment as a Command
+   * factory (`contracts/commands-audit-events.md` §2; research R-22).
+   * `organizations` runs `changeRole` as a child of `organization_role.delete`
+   * through `ctx.run`, so a deleted role's holders move in that Command's
+   * transaction, each with its own audit entry.
+   */
+  ctx.di.providePort<CustomerAccountRoleCommandPort>(
+    'customerAccountRoleCommandPort',
+    ctx
+      .asFunction(({ emFactory }: CustomerAccountsCradle) =>
+        createCustomerAccountRoleCommandPort({ emFactory, roles: organizationRoles }),
+      )
+      .singleton(),
+  );
+
+  /**
+   * `specs/176-command-hooks-outbox/` FR-002 — the account creation as a
+   * Command factory (`contracts/registration-command.md`). `organizations`
+   * runs `customer_account.create` as the child of `organization.register`
+   * through `ctx.run`, so a registration's Organization and administrator
+   * commit together; the password is hashed before that transaction opens.
+   */
+  ctx.di.providePort<CustomerAccountMemberCommandPort>(
+    'customerAccountMemberCommandPort',
+    ctx.asFunction(() => createCustomerAccountMemberCommandPort()).singleton(),
   );
 
   /**
@@ -409,7 +520,7 @@ export function registerModule(ctx: ModuleContext): void {
     'customerAuthService',
     ctx
       .asFunction(
-        ({ emFactory, auditLogService, customerAuthenticationThrottle }: CustomerAccountsCradle) =>
+        ({ emFactory, auditLogService, customerAuthenticationThrottle, commandBus }: CustomerAccountsCradle) =>
           new CustomerAuthService(
             emFactory,
             // Feature 075, Phase C — `auth`'s **published** session surface,
@@ -427,6 +538,22 @@ export function registerModule(ctx: ModuleContext): void {
             () => (effectiveState.isPresent('mfa') ? mfaLoginPort : undefined),
             auditLogService,
             customerAuthenticationThrottle,
+            // Feature 154 — kernel-provided and ungated, like the membership
+            // port; resolved per call so the singleton holds no captured value.
+            lazyPort<SalesChannelAccessPort>(ctx, 'salesChannelAccessPort'),
+            // Issue #652 (D-292) — the sign-in fills an unknown preferred
+            // language. This module's own service, so built here rather than
+            // resolved through its port. A failure is logged by account id —
+            // never the tag, which is personal data — and the sign-in goes on.
+            {
+              captureIfUnset: (customerAccountId, language) =>
+                new CustomerAccountPreferenceService(twoFactorEnrolments, commandBus).captureIfUnset(
+                  customerAccountId,
+                  language,
+                ),
+              onFailure: (err, customerAccountId) =>
+                ctx.log.warn({ err, customerAccountId }, 'customer_accounts: preferred-language capture at sign-in failed'),
+            },
           ),
       )
       .singleton(),
@@ -454,23 +581,13 @@ export function registerModule(ctx: ModuleContext): void {
   );
 
   ctx.di.providePort(
-    'customerRoleService',
-    ctx
-      .asFunction(
-        ({ emFactory, auditLogService }: CustomerAccountsCradle) =>
-          new RoleService(emFactory, auditLogService),
-      )
-      .singleton(),
-  );
-
-  ctx.di.providePort(
     'customerOrgResolver',
     ctx
       .asFunction(
         ({ emFactory }: CustomerAccountsCradle) =>
           async (
             customerAccountId: string,
-          ): Promise<{ organizationId: string | null; active: boolean } | null> => {
+          ): Promise<{ organizationId: string | null; active: boolean; organizationRoleId: string } | null> => {
             // Runs in the auth hook, before a tenant context exists, so the
             // read is system-scoped — identity resolution precedes tenancy.
             return withSystemScope('auth: resolve customer org', async () => {
@@ -483,6 +600,12 @@ export function registerModule(ctx: ModuleContext): void {
               return {
                 organizationId: customer.organizationId ?? null,
                 active: customer.blockedAt == null && customer.deletedAt == null,
+                // `specs/170-organization-roles/` research R-15 — the member's
+                // role, stamped on the actor out of the read this hook makes
+                // anyway, so a permission check needs no read of its own. Read
+                // fresh on every request: an assignment change applies to the
+                // next request on every process.
+                organizationRoleId: customer.organizationRoleId,
               };
             });
           },
@@ -499,7 +622,7 @@ export function registerModule(ctx: ModuleContext): void {
    * resolution precedes tenancy, exactly as `customerOrgResolver` above.
    *
    * The refusal is the return type rather than a throw: `null` is what
-   * `SocialIdentityService` reads as `registration_required`, so the policy
+   * `SocialIdentityService` reads as `registration_disabled_in_channel`, so the policy
    * lands on the caller as a redirect to the login screen and not as a 500.
    *
    * Both answers carry the account's organisation, which the second-factor
@@ -547,17 +670,21 @@ export function registerModule(ctx: ModuleContext): void {
 
         async autoCreate(
           email: string,
+          context: { salesChannelId: string | null; preferredLanguage?: string | null },
         ): Promise<{ id: string; organizationId: string | null } | null> {
           const cradle = ctx.cradle<CustomerAccountsCradle>();
-          // The channel a global-scope read resolves against. Both roots used
-          // to pass the literal `'default'` here, which is **not** a channel
-          // id: `sales_channel_id` is a uuid column, so the query threw
-          // `invalid input syntax for type uuid` on every call, the closure's
-          // `catch` read that as "not allowed", and federated sign-in could
-          // therefore never create an account in production however the
-          // operator had configured it. The harness had no gate at all and
-          // always created one. Neither was the behaviour anybody wanted.
-          const salesChannelId = await cradle.settingsChannelResolver();
+          // Issue #773 — the setting is read for the channel the sign-in was
+          // started on, which `SocialIdentityService` carries out of the OAuth
+          // transaction, exactly as `POST /api/v1/customers/register` reads it
+          // for the request's channel. This read used the deployment's
+          // system-default channel instead, so the default channel's value
+          // opened (or closed) federated sign-up on every store. No channel
+          // means no account: a gate with no channel to ask fails closed.
+          //
+          // Before that, both roots passed the literal `'default'`, which is
+          // not a channel id: the uuid column threw on every call and the
+          // `catch` below read it as "not allowed".
+          const salesChannelId = context.salesChannelId;
           if (salesChannelId === null) return null;
 
           let allowed = false;
@@ -590,8 +717,13 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'personalOrganizationProvisionApi',
           );
+          // Issue #1926 — the transaction runs inside a bus scope, so the
+          // personal organisation's access-cache drop, which the channel
+          // binding defers to the scope, follows the commit; the binding's
+          // events are dropped with a rollback.
+          const bus = cradle.eventBus;
           return withSystemScope('mfa: auto-create customer from social login', async () =>
-            emFactory().transactional(async (em) => {
+            bus.run(() => emFactory().transactional(async (em) => {
               /**
                * D-178 — the personal organisation, in the same transaction as
                * the account.
@@ -612,6 +744,13 @@ export function registerModule(ctx: ModuleContext): void {
               const organization = await provision.provisionFor(em, {
                 customerAccountId,
                 email: folded,
+                // Feature 154 (owner decision D6) — the store the federated
+                // sign-in was started on, which `mfa` carries in the OAuth
+                // transaction because the provider's redirect names none, so
+                // the session issued next is accepted there. `mfa` creates an
+                // account only on a store open to anonymous visitors. A caller
+                // with no channel never gets here (issue #773).
+                salesChannelId,
               });
               const account = em.create(CustomerAccount, {
                 id: customerAccountId,
@@ -620,9 +759,15 @@ export function registerModule(ctx: ModuleContext): void {
                 passwordSetAt: null,
                 firstName: '',
                 lastName: '',
-                role: 'regular_user',
                 organizationId: organization.id,
+                // The individual administers their personal Organization (owner
+                // ruling PR-3, research R-34) — the provisioning answer's id,
+                // because the role row exists only in this transaction.
+                organizationRoleId: organization.administratorRoleId,
                 emailVerifiedAt: new Date(),
+                // Issue #652 (D-292) — the language of the page the federated
+                // sign-in was started on, resolved by `mfa` against the channel.
+                preferredLanguage: context.preferredLanguage ?? null,
               });
               // The other way an account is created without an admin —
               // `customers`' standalone self-registration — records this same
@@ -635,11 +780,11 @@ export function registerModule(ctx: ModuleContext): void {
                 objectType: 'customer_account',
                 objectId: account.id,
                 stateBefore: null,
-                stateAfter: { email: account.email },
+                stateAfter: accountCreatedAuditState(account),
               });
               await em.flush();
               return { id: account.id, organizationId: organization.id };
-            }),
+            })),
           );
         },
       }))
@@ -691,8 +836,9 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * What an audit row about an impersonated customer is called, and where the admin app shows it
-   * (feature 075, D-87 drain).
+   * What an audit row calls a customer — one who acted for themselves, or one an
+   * admin impersonated — and where the admin app shows it (feature 075, D-87
+   * drain; issue #741).
    *
    * `audit_logs` used to answer both by hand — one SQL statement naming this
    * module's table, and this module's admin route spelled into its own switch.
@@ -713,7 +859,6 @@ export function registerModule(ctx: ModuleContext): void {
     registerCustomerAccountAuditReferences(
       lazyPort<AuditReferenceRegistryPort>(ctx, 'auditReferenceRegistry'),
       ctx.cradle<CustomerAccountsCradle>().emFactory,
-      lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
     );
   });
 }

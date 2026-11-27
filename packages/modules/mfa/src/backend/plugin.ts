@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
@@ -8,6 +9,8 @@ import type {
   CustomerAuthenticationThrottlePort,
   AuthSessionPort,
   CustomerPasswordStatePort,
+  CustomerAccountPreferencePort,
+  CustomerSignInCompletionPort,
   MfaLoginPort,
 } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -16,6 +19,7 @@ import { ChallengeStore } from './services/challenge-store.js';
 import { createFactorWithdrawal } from './services/factor-withdrawal.js';
 import {
   MfaPolicyResolver,
+  type AdminRoleReader,
   type SettingsReader,
 } from './services/mfa-policy-resolver.js';
 import { MfaLoginService } from './services/mfa-login-service.js';
@@ -27,11 +31,13 @@ import {
   type SocialIdentityDeps,
 } from './services/social-identity-service.js';
 import { SocialLinkService } from './services/social-link-service.js';
+import type { CustomerChannelAccess } from './services/customer-channel-access.js';
 import type { OAuthProviderPort } from './services/oauth-provider-service.js';
 import { SecretCipher } from './services/secret-cipher.js';
+import { createStorefrontOriginResolver } from './services/storefront-origin.js';
 import { registerMfaPublicRoutes } from './routes.public.js';
 import { registerMfaSelfServiceRoutes } from './routes.self-service.js';
-import { registerMfaAdminRoutes } from './routes.admin.js';
+import { registerMfaAdminOrgPolicyRoutes, registerMfaAdminRoutes } from './routes.admin.js';
 import { registerMfaOrgRoutes } from './routes.org.js';
 import { registerMfaOAuthRoutes } from './routes.oauth.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -57,7 +63,8 @@ type ModuleAttach = (app: FastifyInstance) => Promise<void>;
  *
  * Enrolment requires `secretEncryptionKey`; when it is absent the module still
  * composes and `beginLogin` works (password-only), but the enrolment + verify
- * routes are not registered.
+ * routes are not registered. The organization-policy writes are (issue #947),
+ * and refuse requiring a second factor.
  */
 export interface MfaModuleOptions {
   emFactory: () => EntityManager;
@@ -74,6 +81,14 @@ export interface MfaModuleOptions {
    */
   customerPasswordState: CustomerPasswordStatePort;
   sessionService: AuthSessionPort;
+  /**
+   * Issue #349 — an administrator's role, from `admin_roles`' published
+   * `permissionService`. Its `requiresTwoFactor` is a second source of the
+   * administrator requirement, beside `mfa.admin.totp_enforced`. Required: a
+   * composition without it would have to guess, and guessing "not required"
+   * is the defect the issue was filed about.
+   */
+  readAdminRole: AdminRoleReader;
   /** Resolves the system-default sales-channel id for global setting reads. */
   resolveDefaultChannelId?: () => Promise<string | null>;
   /** base64 32-byte AES key for TOTP secrets at rest. */
@@ -98,6 +113,12 @@ export interface MfaModuleOptions {
   socialAccountResolvers?: SocialIdentityDeps;
   backendBaseUrl?: string;
   storefrontBaseUrl?: string;
+  /**
+   * Issue #1279 — a sales channel's `sales_channels.storefront_url`, or `null`
+   * when it names none; the customer federated sign-in returns to that
+   * storefront, else to `storefrontBaseUrl`. Absent: `storefrontBaseUrl` always.
+   */
+  readChannelStorefrontUrl?: (salesChannelId: string) => Promise<string | null>;
   adminBaseUrl?: string;
   /**
    * `specs/110-instance-repository/` T118c — required, where both were optional
@@ -129,6 +150,23 @@ export interface MfaModuleOptions {
    * the reason the administrator one is.
    */
   customerAuthenticationThrottle: CustomerAuthenticationThrottlePort;
+  /**
+   * Feature 154 — the sales-channel access rule, asked by every route here
+   * that completes a customer sign-in. Required for the reason the throttles
+   * are: a composition without it would issue sessions the rule refuses.
+   */
+  customerChannelAccess: CustomerChannelAccess;
+  /**
+   * Issue #368 — `organizations`' post-sign-in step, run by the customer
+   * routes here that establish the session (second-step verify, enforced
+   * enrolment and — issues #1188, #1279 — the federated exchange), so those sign-ins
+   * carry the signed-out basket over.
+   */
+  customerSignInCompletion: CustomerSignInCompletionPort;
+  /** Feature 167 — the channel's URL-language facts for the storefront pages sign-in returns to. */
+  channelUrlFactsFor?: (salesChannelId: string | null) => Promise<ChannelUrlFacts | null>;
+  /** Issue #652 (D-292) — the preferred-language capture at a federated sign-in. */
+  customerLanguageCapture?: Pick<CustomerAccountPreferencePort, 'captureIfUnset'>;
 }
 
 export interface MfaModuleHandle {
@@ -138,20 +176,42 @@ export interface MfaModuleHandle {
   enrolmentService: MfaEnrolmentService | null;
 }
 
+/**
+ * The base the admin-surface sign-in redirects are built on.
+ *
+ * The configured admin address when there is one. Without it, the development
+ * address `http://localhost:3002` — but only outside production (architect
+ * ruling on #1078): a production redirect to localhost sends an administrator
+ * to their own machine. In production the base is empty, so the redirect is a
+ * path on the host that served the callback (`/#mfa-challenge=…`, `/login?…`)
+ * and names no absolute admin address at all, as every other caller omits an
+ * admin link when the platform has none.
+ */
+export function adminRedirectBase(
+  configured: string | undefined,
+  nodeEnv: string | undefined = process.env['NODE_ENV'],
+): string {
+  if (configured !== undefined) return configured;
+  return nodeEnv === 'production' ? '' : 'http://localhost:3002';
+}
+
 export function mfaModule(options: MfaModuleOptions): {
   plugin: ModuleAttach;
   handle: () => MfaModuleHandle;
 } {
   const challengeStore = new ChallengeStore(options.redis);
-  const policyResolver = new MfaPolicyResolver(
-    options.settingsService,
-    options.emFactory,
-    options.resolveDefaultChannelId ?? (async () => null),
-  );
-
   const cipher = options.secretEncryptionKey
     ? new SecretCipher(options.secretEncryptionKey)
     : null;
+  const policyResolver = new MfaPolicyResolver(
+    options.settingsService,
+    options.emFactory,
+    options.readAdminRole,
+    options.resolveDefaultChannelId ?? (async () => null),
+    // Issue #930 — no cipher, no enrolment route: see the resolver.
+    cipher !== null,
+  );
+
   const enrolmentService = cipher
     ? new MfaEnrolmentService(options.emFactory, cipher, options.auditLogService)
     : null;
@@ -170,7 +230,12 @@ export function mfaModule(options: MfaModuleOptions): {
     policyResolver,
     verifySecondFactor,
   );
-  const orgPolicyService = new MfaOrgPolicyService(options.emFactory, options.auditLogService);
+  // Issue #947 — without a cipher, requiring a second factor is refused.
+  const orgPolicyService = new MfaOrgPolicyService(
+    options.emFactory,
+    options.commandBus,
+    cipher !== null,
+  );
   // Deliberately not behind the `oauthProvider` check below: the links an
   // account already holds stay listable and severable after an operator turns
   // a provider off, which is precisely when somebody goes looking for them.
@@ -183,6 +248,22 @@ export function mfaModule(options: MfaModuleOptions): {
   const withdrawFactorGrants = createFactorWithdrawal(options.sessionService, challengeStore);
 
   const plugin: ModuleAttach = async (app) => {
+    // Organization enforcement (US3), storefront and Admin UI. Served with or
+    // without an encryption key (issue #947): without one, a policy set before
+    // the key went must stay liftable, and `orgPolicyService` refuses
+    // requiring one.
+    await registerMfaOrgRoutes(app, {
+      orgPolicyService,
+      requireCustomer: options.requireCustomer,
+      resolveOrgAdmin: options.resolveOrgAdmin,
+    });
+    if (options.requireAdmin) {
+      await registerMfaAdminOrgPolicyRoutes(app, {
+        orgPolicyService,
+        requireAdmin: options.requireAdmin,
+        resolveAdminActor: options.resolveAdminActor,
+      });
+    }
     // enrolment disabled without an encryption key
     if (!enrolmentService || !verifySecondFactor) return;
     await registerMfaPublicRoutes(app, {
@@ -193,6 +274,8 @@ export function mfaModule(options: MfaModuleOptions): {
       auditLogService: options.auditLogService,
       adminAuthenticationThrottle: options.adminAuthenticationThrottle,
       customerAuthenticationThrottle: options.customerAuthenticationThrottle,
+      customerChannelAccess: options.customerChannelAccess,
+      customerSignInCompletion: options.customerSignInCompletion,
     });
     // Storefront customer self-service (US1).
     await registerMfaSelfServiceRoutes(app, {
@@ -214,10 +297,12 @@ export function mfaModule(options: MfaModuleOptions): {
     });
     // Federated sign-in (US4 customer / US5 admin).
     if (options.oauthProvider && options.socialAccountResolvers) {
+      const storefrontBaseUrl = options.storefrontBaseUrl ?? 'http://localhost:3000';
       const socialIdentityService = new SocialIdentityService(
         options.emFactory,
         options.socialAccountResolvers,
         options.auditLogService,
+        options.customerChannelAccess,
       );
       await registerMfaOAuthRoutes(app, {
         oauthProvider: options.oauthProvider,
@@ -227,18 +312,19 @@ export function mfaModule(options: MfaModuleOptions): {
         loginService,
         sessionService: options.sessionService,
         backendBaseUrl: options.backendBaseUrl ?? 'http://localhost:8080',
-        storefrontBaseUrl: options.storefrontBaseUrl ?? 'http://localhost:3000',
-        adminBaseUrl: options.adminBaseUrl ?? 'http://localhost:3002',
+        storefrontBaseUrl,
+        storefrontOriginFor: createStorefrontOriginResolver(
+          options.readChannelStorefrontUrl ?? (async () => null),
+          storefrontBaseUrl,
+        ),
+        adminBaseUrl: adminRedirectBase(options.adminBaseUrl),
+        customerChannelAccess: options.customerChannelAccess,
+        customerSignInCompletion: options.customerSignInCompletion,
+        ...(options.channelUrlFactsFor ? { channelUrlFactsFor: options.channelUrlFactsFor } : {}),
+        ...(options.customerLanguageCapture ? { customerLanguageCapture: options.customerLanguageCapture } : {}),
       });
     }
-    // Storefront org-admin enforcement (US3).
-    await registerMfaOrgRoutes(app, {
-      orgPolicyService,
-      auditLogService: options.auditLogService,
-      requireCustomer: options.requireCustomer,
-      resolveOrgAdmin: options.resolveOrgAdmin,
-    });
-    // Admin user self-service (US2) + admin reset (US6) + org enforcement (US3).
+    // Admin user self-service (US2) + admin reset (US6).
     const { requireAdmin, resolveAdminActor } = options;
     if (requireAdmin) {
       await registerMfaSelfServiceRoutes(app, {
@@ -259,7 +345,6 @@ export function mfaModule(options: MfaModuleOptions): {
       });
       await registerMfaAdminRoutes(app, {
         enrolmentService,
-        orgPolicyService,
         auditLogService: options.auditLogService,
         requireAdmin,
         resolveAdminActor,

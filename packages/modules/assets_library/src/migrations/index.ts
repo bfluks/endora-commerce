@@ -23,11 +23,14 @@
  */
 
 import { Migration20260505T102206AssetsLibraryInit } from './20260505T102206_assets_library_init.js';
+import { Migration20261018T141739AssetsLibraryAssetVersionsPermalinks } from './20261018T141739_assets_library_asset_versions_permalinks.js';
 
 export const migrations = [
   Migration20260505T102206AssetsLibraryInit,
+  Migration20261018T141739AssetsLibraryAssetVersionsPermalinks,
 ];
 
 export {
   Migration20260505T102206AssetsLibraryInit,
+  Migration20261018T141739AssetsLibraryAssetVersionsPermalinks,
 };

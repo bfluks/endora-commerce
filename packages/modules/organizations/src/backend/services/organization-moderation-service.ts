@@ -1,11 +1,22 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { OptimisticLockError } from '@mikro-orm/core';
-import { Organization, type OrganizationStatus } from '../entities/organization.entity.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { Organization } from '../entities/organization.entity.js';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { CustomerAccountReadPort, EmailMailerPort } from '@endora-commerce/contracts';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
-import type { OrganizationEventBus } from './registration-service.js';
 import { noopOrgTemplateEmail, type OrgTemplateEmail } from './org-template-email.js';
+import { predefinedRoleIdOn } from './organization-role-store.js';
+import { isUuidShape } from '@endora-commerce/contracts';
+import { makeApproveOrganizationCommand } from '../commands/approve-organization.command.js';
+import { makeRejectOrganizationCommand } from '../commands/reject-organization.command.js';
+import { makeBlockOrganizationCommand } from '../commands/block-organization.command.js';
+import { makeUnblockOrganizationCommand } from '../commands/unblock-organization.command.js';
+import { withCallerOptions, type CallerOptions } from '../commands/caller-options.js';
+
+export {
+  OrganizationNotFoundError,
+  OrganizationStatusGuardError,
+  OrganizationVersionMismatchError,
+} from './organization-moderation-errors.js';
 
 /**
  * OrganizationModerationService — owns every status transition on the
@@ -17,12 +28,17 @@ import { noopOrgTemplateEmail, type OrgTemplateEmail } from './org-template-emai
  *   active               -> blocked  via block(reason?)
  *   blocked              -> active   via unblock()
  *
- * Every transition is recorded to `audit_log_entries` with `before/after`
- * snapshots and the actor; emits `organization.status_changed.v1` so the
- * notifier + downstream consumers (pricing cache, sales-rep dashboards)
- * can react. Each write is gated by the Organization's `version` column
- * — mismatch raises `OrganizationVersionMismatchError` which routes map
- * to HTTP 409 with `currentVersion` in the body.
+ * Every transition is one Command on the bus (`specs/186-aggregate-ports/`
+ * T026; `commands/{approve,reject,block,unblock}-organization.command.ts`):
+ * the status write and its audit entry commit together under the ambient
+ * actor, and `organization.status_changed.v1` (with the status left and the
+ * operator's reason, issue #1620) dispatches once, on commit, so the notifier
+ * and downstream consumers (pricing cache, sales-rep dashboards) can react.
+ * Each write is gated by the Organization's `version` column — mismatch raises
+ * `OrganizationVersionMismatchError` which routes map to HTTP 409 with
+ * `currentVersion` in the body. The customer notice is sent by
+ * {@link OrganizationModerationService.notifyStatusChanged}, this module's
+ * subscriber of the event, after the commit, best effort.
  *
  * The service also exposes `handleNewlyRegistered(orgId)` — invoked by
  * the registration-event subscriber so the moderation-mode setting
@@ -34,38 +50,51 @@ import { noopOrgTemplateEmail, type OrgTemplateEmail } from './org-template-emai
  * admin-editable transactional template, which resolves them in the
  * recipient's language, and fall back to the English in-code builders below
  * only when the platform holds no definition for the code. The recipient is
- * the Organization's first `organization_admin` Customer account, read through
- * `customer_accounts`' published port (feature 075, D-87).
+ * the Organization's first Customer account holding its *Administrator* role
+ * (`specs/170-organization-roles/` WP-03), read through `customer_accounts`'
+ * published port (feature 075, D-87).
  */
-export interface ModerationActorContext {
-  actorAdminUserId?: string | null;
-  requestId?: string | null;
+/**
+ * The actor is not an option: it is the ambient one the Command Bus resolves —
+ * the administrator of the request, or `system` under `withSystemScope`.
+ * `expectedVersion` is optional (`specs/186-aggregate-ports/` research R-16.6):
+ * the admin routes always send it; absent, the transition applies to the
+ * version it reads and the status guard still applies. `source` and
+ * `extensions` are `organizationCommandPort`'s ({@link CallerOptions}).
+ */
+export interface ApproveOptions extends CallerOptions {
+  expectedVersion?: number | undefined;
 }
 
-export interface ApproveOptions extends ModerationActorContext {
-  expectedVersion: number;
-}
-
-export interface RejectOptions extends ModerationActorContext {
-  expectedVersion: number;
+export interface RejectOptions extends CallerOptions {
+  expectedVersion?: number | undefined;
   reason: string;
-  notifyCustomerEmail?: boolean;
+  notifyCustomerEmail?: boolean | undefined;
 }
 
-export interface BlockOptions extends ModerationActorContext {
-  expectedVersion: number;
-  reason?: string | null;
+export interface BlockOptions extends CallerOptions {
+  expectedVersion?: number | undefined;
+  reason?: string | null | undefined;
 }
 
-export interface UnblockOptions extends ModerationActorContext {
-  expectedVersion: number;
+export interface UnblockOptions extends CallerOptions {
+  expectedVersion?: number | undefined;
+}
+
+/** What the notice subscriber reads off `organization.status_changed.v1`. */
+export interface ModerationStatusChange {
+  readonly organizationId: string;
+  readonly newStatus: string;
+  readonly previousStatus: string;
+  readonly reason: string | null;
+  readonly notifyCustomer: boolean;
 }
 
 export class OrganizationModerationService {
   constructor(
     private readonly emFactory: () => EntityManager,
-    private readonly auditLogService: AuditPort,
-    private readonly events: OrganizationEventBus,
+    /** Runs the four moderation Commands; audit entry and event are the bus's. */
+    private readonly commandBus: Pick<CommandBus, 'run'>,
     private readonly mailer: EmailMailerPort,
     /**
      * `customer_accounts`' published read, for the one question this service
@@ -87,9 +116,10 @@ export class OrganizationModerationService {
 
   /**
    * Invoked by the `organization.registered.v1` subscriber. When the
-   * setting is `auto`, the freshly created org is approved immediately
-   * (system actor = null adminUserId). When `manual`, this is a no-op
-   * — the org stays in `pending_verification` until an admin acts.
+   * setting is `auto`, the freshly created org is approved immediately,
+   * through the same `organization.approved` Command an administrator runs,
+   * under the `system` actor (no approving administrator). When `manual`, this
+   * is a no-op — the org stays in `pending_verification` until an admin acts.
    */
   async handleNewlyRegistered(organizationId: string): Promise<void> {
     let mode: 'auto' | 'manual' = 'manual';
@@ -101,30 +131,83 @@ export class OrganizationModerationService {
     if (mode !== 'auto') return;
 
     const em = this.emFactory();
+    if (!isUuidShape(organizationId)) return;
     const org = await em.findOne(Organization, { id: organizationId, deletedAt: null });
     if (!org) return;
     if (org.status !== 'pending_verification') return;
-    await this.approve(organizationId, {
-      expectedVersion: org.version,
-      actorAdminUserId: null,
-    });
+    // The subscriber runs in whatever scope the registration left — a
+    // storefront visitor's, or none — so the approval is the system's, named.
+    await withSystemScope('organizations: auto-approve a newly registered organization (moderation mode auto)', () =>
+      this.approve(organizationId, { expectedVersion: org.version }),
+    );
   }
 
-  async approve(organizationId: string, options: ApproveOptions): Promise<Organization> {
-    return this.transition({
-      organizationId,
-      expectedVersion: options.expectedVersion,
-      requireStatus: 'pending_verification',
-      mutate: (org) => {
-        org.status = 'active';
-        org.approvedAt = new Date();
-        org.approvedByAdminUserId = options.actorAdminUserId ?? null;
-      },
-      action: 'organization.approved',
-      actorAdminUserId: options.actorAdminUserId ?? null,
-      requestId: options.requestId ?? null,
-      eventNewStatus: 'active',
-      afterCommit: async (org) => {
+  async approve(organizationId: string, options: ApproveOptions = {}): Promise<Organization> {
+    return this.commandBus.run(
+      withCallerOptions(
+        makeApproveOrganizationCommand({ organizationId, ...versionOf(options) }),
+        options,
+      ),
+    );
+  }
+
+  async reject(organizationId: string, options: RejectOptions): Promise<Organization> {
+    if (!options.reason || options.reason.trim().length === 0) {
+      throw new Error('OrganizationModerationService.reject: reason is required.');
+    }
+    return this.commandBus.run(
+      withCallerOptions(
+        makeRejectOrganizationCommand({
+          organizationId,
+          ...versionOf(options),
+          reason: options.reason,
+          notifyCustomer: options.notifyCustomerEmail !== false,
+        }),
+        options,
+      ),
+    );
+  }
+
+  async block(organizationId: string, options: BlockOptions = {}): Promise<Organization> {
+    return this.commandBus.run(
+      withCallerOptions(
+        makeBlockOrganizationCommand({ organizationId, ...versionOf(options), reason: options.reason ?? null }),
+        options,
+      ),
+    );
+  }
+
+  async unblock(organizationId: string, options: UnblockOptions = {}): Promise<Organization> {
+    return this.commandBus.run(
+      withCallerOptions(makeUnblockOrganizationCommand({ organizationId, ...versionOf(options) }), options),
+    );
+  }
+
+  /**
+   * The customer notice of a moderation transition — this module's subscriber
+   * of `organization.status_changed.v1` (`specs/186-aggregate-ports/` research
+   * R-16.4). It was sent by {@link approve} and {@link reject} after their
+   * `commandBus.run` returned, which a transition run as a **child** Command
+   * (`specs/188-policy-points/`) never reaches; the event dispatches once, on
+   * the commit of whichever Command ran it. An approval (from
+   * `pending_verification`) and a rejection the caller did not silence are
+   * told; nothing else is.
+   *
+   * Best effort: the transition has committed, and nothing raised here reaches
+   * it — a failure is logged and swallowed.
+   */
+  async notifyStatusChanged(change: ModerationStatusChange): Promise<void> {
+    if (!change.notifyCustomer) return;
+    const approved = change.newStatus === 'active' && change.previousStatus === 'pending_verification';
+    const rejected = change.newStatus === 'rejected';
+    if (!approved && !rejected) return;
+    await this.afterCommit(async () => {
+      if (!isUuidShape(change.organizationId)) return;
+      // `refresh`: the request's unit of work may hold the row as it was read
+      // before the transition, and the message id names the version it left.
+      const org = await this.emFactory().findOne(Organization, { id: change.organizationId }, { refresh: true });
+      if (!org) return;
+      if (approved) {
         await this.notifyCustomer(org, {
           code: 'organization_approved',
           variables: { organizationName: org.name },
@@ -132,142 +215,33 @@ export class OrganizationModerationService {
           fallbackText: `Hi,\n\nOrganization "${org.name}" has been verified successfully and can now place Orders and Requests for Quotation.\n\nThank you.`,
           messageIdSuffix: 'approved',
         });
-      },
-    });
-  }
-
-  async reject(organizationId: string, options: RejectOptions): Promise<Organization> {
-    if (!options.reason || options.reason.trim().length === 0) {
-      throw new Error('OrganizationModerationService.reject: reason is required.');
-    }
-    return this.transition({
-      organizationId,
-      expectedVersion: options.expectedVersion,
-      requireStatus: 'pending_verification',
-      mutate: (org) => {
-        org.status = 'rejected';
-        org.rejectedAt = new Date();
-        org.rejectedReason = options.reason;
-      },
-      action: 'organization.rejected',
-      actorAdminUserId: options.actorAdminUserId ?? null,
-      requestId: options.requestId ?? null,
-      eventNewStatus: 'rejected',
-      reason: options.reason,
-      afterCommit: async (org) => {
-        if (options.notifyCustomerEmail === false) return;
-        await this.notifyCustomer(org, {
-          code: 'organization_rejected',
-          variables: { organizationName: org.name, reason: options.reason },
-          fallbackSubject: 'Organization registration rejected',
-          fallbackText: `Hi,\n\nUnfortunately, the registration of organization "${org.name}" was rejected for the following reason:\n\n${options.reason}\n\nIf you have any questions, please contact the platform administrators.`,
-          messageIdSuffix: 'rejected',
-        });
-      },
-    });
-  }
-
-  async block(organizationId: string, options: BlockOptions): Promise<Organization> {
-    return this.transition({
-      organizationId,
-      expectedVersion: options.expectedVersion,
-      requireStatus: 'active',
-      mutate: (org) => {
-        org.status = 'blocked';
-        org.blockedAt = new Date();
-        org.blockedReason = options.reason ?? null;
-      },
-      action: 'organization.blocked',
-      actorAdminUserId: options.actorAdminUserId ?? null,
-      requestId: options.requestId ?? null,
-      eventNewStatus: 'blocked',
-      reason: options.reason ?? null,
-    });
-  }
-
-  async unblock(organizationId: string, options: UnblockOptions): Promise<Organization> {
-    return this.transition({
-      organizationId,
-      expectedVersion: options.expectedVersion,
-      requireStatus: 'blocked',
-      mutate: (org) => {
-        org.status = 'active';
-        org.blockedAt = null;
-        org.blockedReason = null;
-      },
-      action: 'organization.unblocked',
-      actorAdminUserId: options.actorAdminUserId ?? null,
-      requestId: options.requestId ?? null,
-      eventNewStatus: 'active',
+        return;
+      }
+      const reason = change.reason ?? '';
+      await this.notifyCustomer(org, {
+        code: 'organization_rejected',
+        variables: { organizationName: org.name, reason },
+        fallbackSubject: 'Organization registration rejected',
+        fallbackText: `Hi,\n\nUnfortunately, the registration of organization "${org.name}" was rejected for the following reason:\n\n${reason}\n\nIf you have any questions, please contact the platform administrators.`,
+        messageIdSuffix: 'rejected',
+      });
     });
   }
 
   // ── internals ──────────────────────────────────────────────────────────
 
-  private async transition(input: TransitionInput): Promise<Organization> {
-    const em = this.emFactory();
-    const captured: {
-      snapshotBefore: OrgSnapshot | null;
-      snapshotAfter: OrgSnapshot | null;
-      org: Organization | null;
-    } = { snapshotBefore: null, snapshotAfter: null, org: null };
-
+  /**
+   * Work that follows a committed transition — the customer e-mail. Best
+   * effort: the transition has already happened and is not undone by a
+   * notice that fails (the mailer is idempotent via messageId).
+   */
+  private async afterCommit(work: () => Promise<void>): Promise<void> {
     try {
-      await em.transactional(async (tem) => {
-        const org = await tem.findOne(Organization, { id: input.organizationId, deletedAt: null });
-        if (!org) {
-          throw new OrganizationNotFoundError(input.organizationId);
-        }
-        if (org.version !== input.expectedVersion) {
-          throw new OrganizationVersionMismatchError(org.id, input.expectedVersion, org.version);
-        }
-        if (org.status !== input.requireStatus) {
-          throw new OrganizationStatusGuardError(org.id, org.status, input.requireStatus);
-        }
-        captured.snapshotBefore = snapshot(org);
-        input.mutate(org);
-        await tem.flush();
-        captured.snapshotAfter = snapshot(org);
-        captured.org = org;
-      });
+      await work();
     } catch (err) {
-      if (err instanceof OptimisticLockError) {
-        throw new OrganizationVersionMismatchError(input.organizationId, input.expectedVersion, -1);
-      }
-      throw err;
+      // Customer email is best-effort. The transition has already happened.
+      console.warn('[organizations] the moderation e-mail could not be sent', err);
     }
-
-    const { snapshotBefore, snapshotAfter, org: approvedOrg } = captured;
-
-    // Audit + event + email run AFTER the DB commit so a downstream failure
-    // never poisons the status transition. We accept best-effort semantics
-    // for those (mailer is idempotent via messageId).
-    await this.auditLogService.record({
-      actorAdminUserId: input.actorAdminUserId,
-      action: input.action,
-      objectType: 'organization',
-      objectId: input.organizationId,
-      stateBefore: snapshotBefore ? { ...snapshotBefore } : null,
-      stateAfter: snapshotAfter ? { ...snapshotAfter } : null,
-      requestId: input.requestId,
-    });
-
-    this.events.emit('organization.status_changed.v1', {
-      eventId: crypto.randomUUID(),
-      occurredAt: new Date().toISOString(),
-      organizationId: input.organizationId,
-      newStatus: input.eventNewStatus,
-    });
-
-    if (input.afterCommit && approvedOrg) {
-      try {
-        await input.afterCommit(approvedOrg);
-      } catch {
-        // Customer email is best-effort. The transition has already happened.
-      }
-    }
-
-    return approvedOrg!;
   }
 
   private async notifyCustomer(
@@ -300,14 +274,16 @@ export class OrganizationModerationService {
      * (Constitution XI, FR-005), with a reason and one audit record.
      *
      * `listByOrganization` orders by role then creation date, so the first
-     * `organization_admin` in the result is the row the `order by
-     * "created_at" asc limit 1` picked.
+     * holder of the *Administrator* role in the result is the earliest
+     * created one. The role is this module's own row, read on its own unit of
+     * work (`specs/170-organization-roles/` WP-03); the legacy column is not.
      */
     const members = await withSystemScope(
       'organizations: notify the moderated organisation of its status change',
       () => this.customerAccounts.listByOrganization(org.id, { activeOnly: true }),
     );
-    const recipient = members.find((m) => m.role === 'organization_admin')?.email;
+    const administratorRoleId = await predefinedRoleIdOn(this.emFactory(), org.id, 'administrator');
+    const recipient = members.find((m) => m.organizationRoleId === administratorRoleId)?.email;
     if (!recipient) return;
     const messageId = `organization.${input.messageIdSuffix}.${org.id}.${org.version}`;
     const meta = { organizationId: org.id, kind: input.messageIdSuffix };
@@ -369,74 +345,7 @@ export class OrganizationModerationService {
   }
 }
 
-interface TransitionInput {
-  organizationId: string;
-  expectedVersion: number;
-  requireStatus: OrganizationStatus;
-  mutate: (org: Organization) => void;
-  action: string;
-  actorAdminUserId: string | null;
-  requestId: string | null;
-  eventNewStatus: string;
-  reason?: string | null;
-  afterCommit?: (org: Organization) => Promise<void>;
-}
-
-interface OrgSnapshot {
-  id: string;
-  status: OrganizationStatus;
-  approvedAt: string | null;
-  approvedByAdminUserId: string | null;
-  blockedAt: string | null;
-  blockedReason: string | null;
-  rejectedAt: string | null;
-  rejectedReason: string | null;
-  version: number;
-}
-
-function snapshot(org: Organization): OrgSnapshot {
-  return {
-    id: org.id,
-    status: org.status,
-    approvedAt: org.approvedAt ? org.approvedAt.toISOString() : null,
-    approvedByAdminUserId: org.approvedByAdminUserId ?? null,
-    blockedAt: org.blockedAt ? org.blockedAt.toISOString() : null,
-    blockedReason: org.blockedReason ?? null,
-    rejectedAt: org.rejectedAt ? org.rejectedAt.toISOString() : null,
-    rejectedReason: org.rejectedReason ?? null,
-    version: org.version,
-  };
-}
-
-export class OrganizationNotFoundError extends Error {
-  constructor(public readonly organizationId: string) {
-    super(`Organization ${organizationId} not found.`);
-    this.name = 'OrganizationNotFoundError';
-  }
-}
-
-export class OrganizationVersionMismatchError extends Error {
-  constructor(
-    public readonly organizationId: string,
-    public readonly expectedVersion: number,
-    public readonly currentVersion: number,
-  ) {
-    super(
-      `Organization ${organizationId} version mismatch (expected ${expectedVersion}, currently ${currentVersion}).`,
-    );
-    this.name = 'OrganizationVersionMismatchError';
-  }
-}
-
-export class OrganizationStatusGuardError extends Error {
-  constructor(
-    public readonly organizationId: string,
-    public readonly currentStatus: OrganizationStatus,
-    public readonly requiredStatus: OrganizationStatus,
-  ) {
-    super(
-      `Organization ${organizationId} is in status '${currentStatus}', cannot perform an action that requires '${requiredStatus}'.`,
-    );
-    this.name = 'OrganizationStatusGuardError';
-  }
+/** The version a transition compares against, when the caller read one. */
+function versionOf(options: { expectedVersion?: number | undefined }): { expectedVersion?: number } {
+  return options.expectedVersion !== undefined ? { expectedVersion: options.expectedVersion } : {};
 }

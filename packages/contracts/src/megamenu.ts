@@ -17,8 +17,72 @@ export const megamenuItemKindSchema = z.enum([
   'button',
   'asset',
   'cms-block-embed',
+  // Feature 168: a heading without a link (a column of a `mega` panel), and a
+  // live expansion of the catalogue's category tree.
+  'group',
+  'category-tree',
 ]);
 export type MegamenuItemKind = z.infer<typeof megamenuItemKindSchema>;
+
+/**
+ * How a top-level item — a **tab** of the navigation bar — opens (feature 168):
+ * a plain link, a narrow list, a full-width panel of columns, or the
+ * departments → subcategories catalogue panel.
+ */
+export const megamenuPresentationSchema = z.enum(['link', 'dropdown', 'mega', 'catalog']);
+export type MegamenuPresentation = z.infer<typeof megamenuPresentationSchema>;
+
+/** Which end of the navigation bar a tab sits at. */
+export const megamenuAlignmentSchema = z.enum(['start', 'end']);
+export type MegamenuAlignment = z.infer<typeof megamenuAlignmentSchema>;
+
+/** The kinds a tab may be (FR-002). Media, embeds and trees open under a tab, never as one. */
+export const MEGAMENU_TAB_KINDS: ReadonlySet<MegamenuItemKind> = new Set<MegamenuItemKind>([
+  'category-link',
+  'cms-page-link',
+  'external-link',
+  'button',
+  'group',
+]);
+
+/**
+ * The kinds whose label may be empty: each points at something with a name of
+ * its own in every language, which an empty label inherits (FR-015).
+ */
+/** The kinds a tab may be that have a link of their own to follow on click. */
+export const MEGAMENU_CLICK_NAVIGATES_KINDS: ReadonlySet<MegamenuItemKind> = new Set<MegamenuItemKind>([
+  'category-link',
+  'cms-page-link',
+  'external-link',
+]);
+
+export const MEGAMENU_LABEL_INHERITING_KINDS: ReadonlySet<MegamenuItemKind> = new Set<MegamenuItemKind>([
+  'category-link',
+  'cms-page-link',
+  'category-tree',
+]);
+
+/**
+ * Who may see an item (feature 168, FR-017). Hiding an item hides its subtree.
+ * A customer-group audience matches the buyer's *effective* customer group
+ * (`effectiveCustomerGroupId`), the one pricing reads.
+ */
+export const megamenuAudienceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('everyone') }),
+  z.object({ kind: z.literal('guests') }),
+  z.object({ kind: z.literal('signed_in') }),
+  z.object({
+    kind: z.literal('customer_groups'),
+    customerGroupIds: z
+      .array(uuidSchema)
+      .min(1)
+      .max(50)
+      .refine((ids) => new Set(ids).size === ids.length, { message: 'Customer groups must be unique.' }),
+  }),
+]);
+export type MegamenuAudience = z.infer<typeof megamenuAudienceSchema>;
+
+export const MEGAMENU_EVERYONE_AUDIENCE: MegamenuAudience = { kind: 'everyone' };
 
 export const megamenuButtonVariantSchema = z.enum(['primary', 'secondary', 'ghost']);
 export type MegamenuButtonVariant = z.infer<typeof megamenuButtonVariantSchema>;
@@ -59,6 +123,18 @@ export const megamenuItemBaseFields = {
   position: z.number().int().nonnegative(),
   labels: multilingualStringSchema,
   descriptions: multilingualStringSchema.nullable().optional(),
+  /** Tabs only, and required there (FR-001) — the server refuses either mistake. */
+  presentation: megamenuPresentationSchema.optional(),
+  /** Tabs only; `start` when a tab omits it. */
+  alignment: megamenuAlignmentSchema.optional(),
+  /** `everyone` when omitted. */
+  audience: megamenuAudienceSchema.optional(),
+  /**
+   * Tabs with a link of their own and a panel only: a click follows the tab's
+   * link, and the panel opens on hover and from its own toggle. Off by default,
+   * when a click opens the panel.
+   */
+  clickNavigates: z.boolean().optional(),
 } as const;
 
 export const categoryLinkTargetSchema = z.object({
@@ -104,6 +180,20 @@ export const cmsBlockEmbedTargetSchema = z.object({
 });
 export type CmsBlockEmbedTarget = z.infer<typeof cmsBlockEmbedTargetSchema>;
 
+/** A group points at nothing: it is a heading. */
+export const groupTargetSchema = z.object({});
+export type GroupTarget = z.infer<typeof groupTargetSchema>;
+
+/**
+ * A live expansion of the catalogue: the root's live descendants to `depth`
+ * levels, or the whole catalogue's from its top level when the root is `null`.
+ */
+export const categoryTreeTargetSchema = z.object({
+  rootCategoryId: uuidSchema.nullable(),
+  depth: z.number().int().min(1).max(3),
+});
+export type CategoryTreeTarget = z.infer<typeof categoryTreeTargetSchema>;
+
 export const megamenuItemSchema = z.discriminatedUnion('kind', [
   z.object({ ...megamenuItemBaseFields, kind: z.literal('category-link'), target: categoryLinkTargetSchema }),
   z.object({ ...megamenuItemBaseFields, kind: z.literal('cms-page-link'), target: cmsPageLinkTargetSchema }),
@@ -111,6 +201,8 @@ export const megamenuItemSchema = z.discriminatedUnion('kind', [
   z.object({ ...megamenuItemBaseFields, kind: z.literal('button'), target: buttonTargetSchema }),
   z.object({ ...megamenuItemBaseFields, kind: z.literal('asset'), target: assetTargetSchema }),
   z.object({ ...megamenuItemBaseFields, kind: z.literal('cms-block-embed'), target: cmsBlockEmbedTargetSchema }),
+  z.object({ ...megamenuItemBaseFields, kind: z.literal('group'), target: groupTargetSchema }),
+  z.object({ ...megamenuItemBaseFields, kind: z.literal('category-tree'), target: categoryTreeTargetSchema }),
 ]);
 export type MegamenuItem = z.infer<typeof megamenuItemSchema>;
 
@@ -202,11 +294,28 @@ export const megamenuResolvedBlockSchema = z.object({
 });
 export type MegamenuResolvedBlock = z.infer<typeof megamenuResolvedBlockSchema>;
 
+/**
+ * The kinds a resolved tree carries: every stored kind but `category-tree`,
+ * which the resolver replaces by the categories it expands to (feature 168).
+ */
+export const megamenuResolvedItemKindSchema = megamenuItemKindSchema.exclude(['category-tree']);
+export type MegamenuResolvedItemKind = z.infer<typeof megamenuResolvedItemKindSchema>;
+
 const resolvedMenuItemBase = z.object({
-  id: uuidSchema,
-  parentId: uuidSchema.nullable(),
-  kind: megamenuItemKindSchema,
+  /**
+   * A stored item's uuid, or `<tree item id>:<category id>` for a category a
+   * `category-tree` expanded to — those have no row of their own.
+   */
+  id: z.string().min(1),
+  parentId: z.string().min(1).nullable(),
+  kind: megamenuResolvedItemKindSchema,
   label: z.string(),
+  /** Tabs only. */
+  presentation: megamenuPresentationSchema.optional(),
+  /** Tabs only. */
+  alignment: megamenuAlignmentSchema.optional(),
+  /** Tabs only, and only when `true`: a click follows `url`; the panel opens on hover or its toggle. */
+  clickNavigates: z.boolean().optional(),
   description: z.string().nullable().optional(),
   url: z.string().optional(),
   icon: megamenuResolvedIconSchema.nullable().optional(),

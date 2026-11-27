@@ -24,10 +24,11 @@ import {
   segmentOf,
   slugOf,
 } from '../src/new-module/spec.js';
+import { bundleEntries } from '../src/new-module/emit.js';
 
 const MINIMAL = {
   id: 'demo_widgets',
-  name: 'Demo Widgets',
+  name: 'Demo widgets',
   description: 'A worked example of a module package.',
 };
 
@@ -75,6 +76,26 @@ describe('refusals', () => {
     );
     expect(() => buildScaffoldSpec({ id: 'demo_widgets', name: 'Demo' })).toThrow(
       /--description is required/,
+    );
+  });
+
+  it('refuses a title-case name, naming the sentence-case one (issue #776)', () => {
+    // The name becomes the manifest `name` and the English `module.name`, which
+    // the backend drift test holds to sentence case — but only once the module
+    // is registered. Refusing here is the earlier, cheaper answer.
+    expect(() => buildScaffoldSpec({ ...MINIMAL, name: 'Demo Widgets' })).toThrow(
+      /--name "Demo Widgets" is not sentence case \(Widgets\)\. Write "Demo widgets"/,
+    );
+    expect(() => buildScaffoldSpec({ ...MINIMAL, name: 'demo widgets' })).toThrow(
+      /Write "Demo widgets"/,
+    );
+  });
+
+  it('accepts a sentence-case name, an acronym and an allowlisted product name', () => {
+    expect(buildScaffoldSpec({ ...MINIMAL, name: 'Demo widgets' }).name).toBe('Demo widgets');
+    expect(buildScaffoldSpec({ ...MINIMAL, name: 'ERP bridge' }).name).toBe('ERP bridge');
+    expect(buildScaffoldSpec({ ...MINIMAL, name: 'Google Analytics export' }).name).toBe(
+      'Google Analytics export',
     );
   });
 
@@ -247,5 +268,15 @@ describe('the specification it produces', () => {
       module: 'demo_widgets',
       label: 'View widgets',
     });
+  });
+});
+
+// Issue #1809 — Platform → Modules reads a module's name and description from its own bundle.
+describe('the scaffolded bundle', () => {
+  it('carries the module name and description the manifest declares', () => {
+    const spec = buildScaffoldSpec(MINIMAL);
+    const entries = new Map(bundleEntries(spec));
+    expect(entries.get('module.name')).toBe(spec.name);
+    expect(entries.get('module.description')).toBe(spec.description);
   });
 });

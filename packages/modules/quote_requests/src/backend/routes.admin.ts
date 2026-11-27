@@ -1,18 +1,28 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
 import {
   adminApproveQuoteRequestSchema,
   adminAssignQuoteRequestSchema,
   adminCancelQuoteRequestSchema,
   adminCreateQuoteRequestSchema,
   adminPatchQuoteRequestSchema,
+  adminPrepareCustomerBasketResponseSchema,
+  adminQuoteRequestCreateDefaultsSchema,
+  adminQuoteRequestListQuerySchema,
+  adminShareQuoteRequestSchema,
   createQuoteRequestSavedViewRequestSchema,
-  rfqStatusSchema,
+  customFieldFiltersQueryParamSchema,
+  ERROR_CODES,
+  isCustomFieldFilterUnavailableFailure,
   updateQuoteRequestSavedViewRequestSchema,
+  type AdminQuoteRequestListPagination,
+  type SupportedLanguage,
 } from '@endora-commerce/contracts';
 import { savedViewActor } from './saved-view-actor.js';
-import type { RfqAdminService, AdminContext, AdminAssignmentScope } from './services/rfq-admin-service.js';
+import type { RfqAdminService, AdminContext } from './services/rfq-admin-service.js';
 import type { QuoteRequestListViewService } from './services/quote-request-list-view-service.js';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { HttpError } from '@endora-commerce/platform/http';
 
 export interface AdminContextResolver {
   (request: FastifyRequest): Promise<AdminContext>;
@@ -24,7 +34,12 @@ export interface QuoteRequestsAdminDeps {
   resolveAdminContext: AdminContextResolver;
   /** `specs/147-saved-views/` (US3) — the Quote Request list's saved views. */
   listViewService: QuoteRequestListViewService;
+  /** A status's name in a language, in this module's wording (issue #455). */
+  statusName: (status: string, language: SupportedLanguage) => Promise<string>;
 }
+
+/** The list's one query member with a schema: the custom-field filters (feature 157). */
+const customFieldFiltersQuerySchema = z.object({ customFieldFilters: customFieldFiltersQueryParamSchema });
 
 function parseIfMatch(request: FastifyRequest): number | null {
   const header = request.headers['if-match'];
@@ -42,31 +57,81 @@ export async function registerQuoteRequestsAdminRoutes(
   app: FastifyInstance,
   deps: QuoteRequestsAdminDeps,
 ): Promise<void> {
-  const { adminService, requireAdmin, resolveAdminContext, listViewService } = deps;
+  const { adminService, requireAdmin, resolveAdminContext, listViewService, statusName } = deps;
   const guard = requireAdmin('rfqs:handle');
+
+  // `specs/157-custom-fields-list-filters/` — the custom fields the list offers as filters.
+  app.get('/api/v1/admin/quote-requests/custom-field-filters', { preHandler: guard }, async () => ({
+    data: await adminService.customFieldFilterFields(),
+  }));
 
   app.get('/api/v1/admin/quote-requests', { preHandler: guard }, async (request) => {
     const ctx = await resolveAdminContext(request);
-    const q = (request.query ?? {}) as Record<string, string | undefined>;
+    const rawQuery = (request.query ?? {}) as Record<string, unknown>;
+    // The list has no route-level query schema, so the custom-field filters are
+    // read here: a repeated parameter arrives as an array and is refused rather
+    // than one of its copies silently applied.
+    const rawFilters = rawQuery['customFieldFilters'];
+    if (rawFilters !== undefined && typeof rawFilters !== 'string') {
+      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'customFieldFilters must be given once.');
+    }
+    // Parsed under its own name, so a refusal is located at
+    // `customFieldFilters.<key>.<operator>` as on the Orders list.
+    const { customFieldFilters } = customFieldFiltersQuerySchema.parse({ customFieldFilters: rawFilters });
+    // Issue #317 — the page, the sort and every other filter, applied by the server.
+    const query = adminQuoteRequestListQuerySchema.parse(rawQuery);
 
-    const status = q['status']
-      ? q['status']
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => rfqStatusSchema.safeParse(s).success)
-      : undefined;
-    const scope = (q['assignmentScope'] as AdminAssignmentScope | undefined) ?? undefined;
-
-    const data = await adminService.listAll(ctx, {
-      ...(q['organizationId'] ? { organizationId: q['organizationId']! } : {}),
-      ...(status && status.length > 0 ? { status: status as never } : {}),
-      ...(scope ? { scope } : {}),
+    const { rows, total } = await adminService.listAll(ctx, {
+      ...(query.organizationId ? { organizationId: query.organizationId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.assignmentScope ? { scope: query.assignmentScope } : {}),
+      ...(customFieldFilters ? { customFieldFilters } : {}),
+      ...(query.q ? { q: query.q } : {}),
+      ...(query.sharing ? { sharing: query.sharing } : {}),
+      sort: query.sort,
+      page: query.page,
+      pageSize: query.pageSize,
+    }).catch((error: unknown) => {
+      if (isCustomFieldFilterUnavailableFailure(error)) {
+        throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+          key: error.keys[0] ?? '',
+          keys: [...error.keys],
+        });
+      }
+      throw error;
     });
+    // Each row's status by its name in the response language, beside the code
+    // (issue #455) — what another module's link picker shows. Six statuses at
+    // most, so each is named once.
+    const language = await request.responseLanguage();
+    const names = new Map<string, Promise<string>>();
+    const nameOf = (status: string): Promise<string> => {
+      let name = names.get(status);
+      if (!name) names.set(status, (name = statusName(status, language)));
+      return name;
+    };
     return {
-      data,
-      pagination: { limit: 50, nextCursor: null, hasMore: false },
+      data: await Promise.all(rows.map(async (row) => ({ ...row, statusName: await nameOf(row.status) }))),
+      // True for this response (issue #317): the page read, its size and the
+      // matches. `limit` and `hasMore` keep the envelope's earlier members; the
+      // list has no cursor, so the next page is asked for by `page`.
+      pagination: {
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+        limit: query.pageSize,
+        hasMore: query.page * query.pageSize < total,
+        nextCursor: null,
+      } satisfies AdminQuoteRequestListPagination,
     };
   });
+
+  // `specs/192-quote-request-draft-share/` (contracts/admin-api.md §2) — what
+  // the create screen pre-fills. Declared before `/:id`, so the segment is
+  // never read as an id; `rfqs:handle`, not `settings:read` (research R-12).
+  app.get('/api/v1/admin/quote-requests/create-defaults', { preHandler: guard }, async () => ({
+    data: adminQuoteRequestCreateDefaultsSchema.parse(await adminService.createDefaults()),
+  }));
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/quote-requests/:id',
@@ -98,9 +163,12 @@ export async function registerQuoteRequestsAdminRoutes(
       const ctx = await resolveAdminContext(request);
       const body = adminCreateQuoteRequestSchema.parse(request.body);
       const rfq = await adminService.createOnBehalf(ctx, body);
+      // Feature 163 (FR-018) — accepted, and each line not available to the
+      // Organization here is named for the operator.
+      const warnings = await adminService.onBehalfWarnings(body);
       setEtag(reply, rfq.version);
       reply.code(201);
-      return { data: rfq };
+      return { data: rfq, ...(warnings.length > 0 ? { warnings } : {}) };
     },
   );
 
@@ -117,6 +185,23 @@ export async function registerQuoteRequestsAdminRoutes(
     },
   );
 
+  // `specs/192-quote-request-draft-share/` (contracts/admin-api.md §1) — share
+  // an unshared operator quote with its customer. No body; `If-Match` as on
+  // `PATCH /:id`.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/quote-requests/:id/share',
+    { preHandler: guard },
+    async (request, reply) => {
+      const ctx = await resolveAdminContext(request);
+      // No body, or an empty object; parsed here because an absent body
+      // reaches the handler as `null`.
+      adminShareQuoteRequestSchema.parse(request.body ?? {});
+      const rfq = await adminService.share(ctx, request.params.id, parseIfMatch(request));
+      setEtag(reply, rfq.version);
+      return { data: rfq };
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/quote-requests/:id/approve',
     { preHandler: guard, schema: { body: adminApproveQuoteRequestSchema.optional() } },
@@ -127,6 +212,26 @@ export async function registerQuoteRequestsAdminRoutes(
       const rfq = await adminService.approve(ctx, request.params.id, expectedVersion, body.note);
       setEtag(reply, rfq.version);
       return { data: rfq };
+    },
+  );
+
+  // Issue #170 — the operator's conversion: the approved request's lines into
+  // the basket of the customer who owns it. The admin screen used to post to the
+  // storefront's `convert-to-order`, which refuses an administrator with 401.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/quote-requests/:id/prepare-customer-basket',
+    { preHandler: guard },
+    async (request) => {
+      const ctx = await resolveAdminContext(request);
+      // The quote's own channel decides the basket; the resolved one (the
+      // system default on an admin route) only stands in where the request
+      // records none.
+      const result = await adminService.prepareCustomerBasket(
+        ctx,
+        request.params.id,
+        getResolvedChannel(request).id,
+      );
+      return { data: adminPrepareCustomerBasketResponseSchema.parse(result) };
     },
   );
 

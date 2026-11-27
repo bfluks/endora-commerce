@@ -1,9 +1,9 @@
 ---
-title: crm
+title: CRM — szanse sprzedażowe
 description: Szanse sprzedażowe z konfigurowalnym przepływem statusów, za którym podążają powiązane zamówienia
 ---
 
-# `crm`
+# CRM — szanse sprzedażowe (`crm`)
 
 Moduł CRM prowadzi **szanse sprzedażowe**: transakcje, nad którymi
 handlowiec pracuje z jedną organizacją klienta — od pierwszego kontaktu do chwili, gdy szansa zostaje wygrana albo przegrana.
@@ -45,14 +45,14 @@ grupę — tylko wtedy, gdy widoczna jest przynajmniej jedna z nich.
 
 | Ekran | Gdzie | Uprawnienie | Do czego służy |
 | --- | --- | --- | --- |
-| Szanse sprzedażowe | **CRM → Szanse sprzedażowe** (`/crm/opportunities`) | `crm:read` | Wszystkie szanse, które możesz zobaczyć, z wyszukiwaniem i filtrami: stan, status, organizacja, handlowiec, etykiety, kanał sprzedaży i data utworzenia. |
+| Szanse sprzedażowe | **CRM → Szanse sprzedażowe** (`/crm/opportunities`) | `crm:read` | Wszystkie szanse, które możesz zobaczyć, jako lista albo — przełącznikiem **Lista / Tablica** w nagłówku — jako tablica. Lista ma wyszukiwanie i filtry: stan, status, organizacja, handlowiec, etykiety, kanał sprzedaży, data utworzenia i pola niestandardowe oznaczone jako filtry listy; oba widoki mają zapisane widoki. |
 | Nowa szansa | przycisk **Nowa szansa** (`/crm/opportunities/new`) | `crm:write` | Ręczne utworzenie szansy: tytuł, organizacja i waluta są wymagane; osoba kontaktowa, kanał sprzedaży, szacowana wartość, planowana data zamknięcia i opis — opcjonalne. |
-| Szansa sprzedażowa | wiersz listy (`/crm/opportunities/:id`) | `crm:read` | Nagłówek, pasek etapów z obecnym statusem i dozwolonymi z niego zmianami — wstecz i dalej — panel informacji po prawej oraz karty: *Przegląd*, **Powiązania** (zamówienia i zapytania ofertowe szansy), **Wydarzenia** (to, co dla niej zaplanowano, z przypomnieniami), *Notatki*, *Wiadomości*, *Załączniki* i **Historia zmian**. Zobacz *Ekran szansy sprzedażowej*. |
-| Tablica | **CRM → Tablica** (`/crm/board`) | `crm:read` | Te same szanse jako karty, w kolumnie dla każdego statusu. Posiadacz uprawnienia `crm:write` przenosi kartę do innego statusu. |
+| Szansa sprzedażowa | wiersz listy (`/crm/opportunities/:id`) | `crm:read` | Nagłówek ze statusem obok tytułu, pasek etapów z dozwolonymi z tego statusu zmianami — wstecz i dalej — panel informacji po prawej oraz karty: *Przegląd*, **Powiązania** (zamówienia i zapytania ofertowe szansy), **Wydarzenia** (to, co dla niej zaplanowano, z przypomnieniami), *Notatki*, *Wiadomości*, *Załączniki* i **Historia zmian**. Zobacz *Ekran szansy sprzedażowej*. |
+| Tablica | **Tablica** w przełączniku *Lista / Tablica* ekranu **CRM → Szanse sprzedażowe** (`/crm/opportunities?view=board`) | `crm:read` | Te same szanse jako karty, w kolumnie dla każdego statusu. Posiadacz uprawnienia `crm:write` przenosi kartę do innego statusu. Dawny adres `/crm/board` nadal ją otwiera. |
 | Kalendarz | **CRM → Kalendarz** (`/crm/calendar`) | `crm:read` | Wydarzenia zaplanowane w otwartych szansach, które możesz zobaczyć — w miesiącu, tygodniu, dniu albo jako lista. Każde wydarzenie otwiera swoją szansę. Zobacz *Kalendarz*. |
 | Analityka | **CRM → Analityka** (`/crm/analytics`) | `crm:analytics` | Pięć wskaźników dla wybranego zakresu dni: czas obsługi, czas w każdym statusie, najskuteczniejsi handlowcy, najcenniejsze szanse i średnia wartość. |
-| Etykiety | **CRM → Etykiety** (`/crm/tags`) | `crm:configure` | Lista etykiet: dodawanie, zmiana nazwy i koloru oraz usuwanie oznaczeń, które można nadawać szansom. |
-| Statusy i przepływ | **CRM → Statusy i przepływ** (`/crm/workflow`) | `crm:configure` | Statusy, przejścia między nimi, status zamówienia ustawiany przez każdy status szansy, status szansy, do którego prowadzi każdy status zamówienia, statusy liczone do wartości wyliczanej oraz pola widoczne na karcie na tablicy. |
+| Etykiety | karta **Etykiety** w **CRM → Konfiguracja** (`/crm/workflow/tags`) | `crm:configure` | Lista etykiet: dodawanie, zmiana nazwy i koloru oraz usuwanie oznaczeń, które można nadawać szansom. Dawny adres `/crm/tags` nadal ją otwiera. |
+| Statusy i przepływ | **CRM → Konfiguracja** (`/crm/workflow`) | `crm:configure` | Cztery karty przed kartą **Etykiety**, każda z jednym sposobem zapisu. **Statusy i przejścia** (`/crm/workflow`): statusy i przejścia między nimi, każda zmiana stosowana od razu. **Synchronizacja zamówień** (`/crm/workflow/order-sync`): status zamówienia ustawiany przez każdy status szansy i status szansy, do którego prowadzi każdy status zamówienia, pod jednym przyciskiem Zapisz. **Wartość** (`/crm/workflow/value`): statusy liczone do wartości wyliczanej. **Karta na tablicy** (`/crm/workflow/board-card`): pola widoczne na karcie na tablicy. |
 
 Codzienne ekrany są też w palecie poleceń (`⌘K` / `Ctrl+K`):
 **Szanse sprzedażowe**, **Nowa szansa sprzedażowa**, **Tablica szans
@@ -89,16 +89,19 @@ panel z informacjami o niej.
 
 **Nagłówek** zawiera tytuł ze statusem obok, a pod nim jeden dyskretny wiersz:
 numer, organizację, osobę prowadzącą szansę — albo *Nieprzypisana* — oraz kanał
-sprzedaży, jeśli jest ustawiony. Po prawej są przyciski **Edytuj**
-(`crm:write`) i **Usuń** (`crm:configure`).
+sprzedaży, jeśli jest ustawiony. Po prawej jest przycisk **Usuń**
+(`crm:configure`). Nie ma przycisku **Edytuj** ani osobnego formularza edycji:
+każde pole, które można zmienić, zmienia się tam, gdzie jest pokazane (zob.
+*Edycja i usuwanie szansy*). Tytuł ma swój ołówek obok nagłówka.
 
-**Pasek etapów**, na górze lewej kolumny, podaje **obecny status** i pokazuje,
-dokąd szansa może z niego przejść — i nic więcej. Przepływ nie jest prostą
+**Pasek etapów**, na górze lewej kolumny, pokazuje pod etykietą **Przenieś do…**,
+dokąd szansa może przejść ze swojego statusu — i nic więcej. Sam status to
+plakietka obok tytułu; pasek go nie powtarza. Przepływ nie jest prostą
 linią, więc pasek jej nie rysuje: statusu, na który Twój przepływ nie pozwala
 z obecnego miejsca, nie ma na ekranie.
 
 - **Wstecz** to zmiany na status wcześniejszy w kolejności ustawionej na
-  ekranie **CRM → Statusy i przepływ** oraz zmiany, które ponownie otwierają
+  ekranie **CRM → Konfiguracja → Statusy i przejścia** oraz zmiany, które ponownie otwierają
   zamkniętą szansę.
 - **Dalej** to zmiany na status późniejszy oraz każda zmiana zamykająca szansę,
   oznaczona jako *wygrana* albo *przegrana* — niezależnie od tego, które
@@ -108,8 +111,8 @@ z obecnego miejsca, nie ma na ekranie.
   też, jak i kiedy została zamknięta.
 - Dla posiadacza uprawnienia `crm:write` **każda zmiana jest przyciskiem**,
   a jego naciśnięcie to ta sama zmiana statusu, z tymi samymi regułami, co
-  w pozostałych miejscach modułu. Opcjonalny **powód** wpisuje się w polu pod
-  paskiem. Osoba mająca tylko `crm:read` widzi te same zmiany jako zwykły tekst.
+  w pozostałych miejscach modułu. Opcjonalny **powód** dodaje się przyciskiem
+  **Dodaj powód** pod zmianami. Osoba mająca tylko `crm:read` widzi te same zmiany jako zwykły tekst.
 - **Pasek nie udaje historii i nie liczy etapów.** Mówi, gdzie szansa jest
   i dokąd może przejść; gdzie była, mówi karta *Historia zmian*.
 - Jeśli nie uda się wczytać kolejności statusów, wszystkie zmiany nadal są
@@ -125,9 +128,10 @@ karty.
 
 | Karta | Co na niej jest |
 | --- | --- |
-| **Przegląd** | Opis, pola niestandardowe oraz — po naciśnięciu **Edytuj** — formularz edycji. |
+| **Przegląd** | Opis — sformatowany i zmieniany na miejscu jego ołówkiem — oraz pola niestandardowe. |
 | **Powiązania** | *Powiązane zamówienia* i *Powiązane zapytania ofertowe*: wiązanie, odłączanie, przełącznik *Podąża za szansą*, przyciski **Utwórz zamówienie** i **Utwórz zapytanie ofertowe**. Na karcie widać liczbę powiązanych dokumentów. |
 | **Wydarzenia** | To, co zaplanowano dla szansy — rozmowa, spotkanie, termin — jako lista i we własnym kalendarzu, każde z opcjonalnym przypomnieniem. Na karcie widać liczbę wydarzeń, które jeszcze się nie zakończyły. Zobacz *Wydarzenia i przypomnienia*. |
+| **Zadania** | Zadania powiązane z szansą, z przyciskiem *Dodaj zadanie*. Na karcie widać, ile z nich jest jeszcze otwartych. Kartę dodaje moduł **Zadania**, jest więc widoczna tylko wtedy, gdy ten moduł jest włączony, i tylko dla osoby, która może odczytywać zadania — zobacz stronę modułu Zadania. |
 | **Notatki**, **Wiadomości** | Dwie rozmowy. Na karcie **Notatki** widać liczbę notatek, a na karcie **Wiadomości** — liczbę wiadomości, których jeszcze nie przeczytałeś. |
 | **Załączniki** | Pliki. Na karcie widać liczbę załączonych plików. |
 | **Historia zmian** | Wszystko, co zrobiono z szansą, od najnowszych zmian. |
@@ -138,19 +142,41 @@ otworzyć. Na kartach *Powiązania*, *Notatki* i *Załączniki* jest to liczba
 pozycji: powiązanych dokumentów, notatek, plików. Na karcie *Wydarzenia* —
 liczba wydarzeń, które jeszcze się nie zakończyły. Na karcie *Wiadomości* —
 liczba wiadomości, których jeszcze nie przeczytałeś; zobacz *Notatki i
-wiadomości wewnętrzne*. Liczby przychodzą razem z szansą, są więc widoczne,
-zanim otworzysz którąkolwiek kartę, a każda zmienia się, gdy dodasz lub usuniesz
-pozycję na jej karcie. To, co w tym czasie doda ktoś inny, pojawi się po
-odświeżeniu strony. Czytnik ekranu odczytuje każdą liczbę razem z tym, co ona
-liczy — „Notatki, liczba pozycji: 3”, „Wydarzenia, nadchodzące: 2”,
+wiadomości wewnętrzne*. Na karcie *Zadania* — liczba powiązanych zadań, które
+są jeszcze otwarte. Liczby przychodzą razem z szansą, są więc widoczne, zanim
+otworzysz którąkolwiek kartę, a każda zmienia się, gdy dodasz lub usuniesz
+pozycję na jej karcie; liczba na karcie *Zadania* jest odczytywana tuż po
+otwarciu ekranu, a jeśli nie uda się jej odczytać, karta po prostu jej nie
+pokazuje. To, co w tym czasie doda ktoś inny, pojawi się po odświeżeniu strony.
+Czytnik ekranu odczytuje każdą liczbę razem z tym, co ona liczy — „Notatki,
+liczba pozycji: 3”, „Wydarzenia, nadchodzące: 2”, „Zadania, otwarte: 3”,
 „Wiadomości, nieprzeczytane: 1”.
 
 Otwarta karta jest częścią adresu — `/crm/opportunities/:id?tab=links`,
-i odpowiednio `events`, `notes`, `messages`, `attachments` oraz `history` — dzięki czemu
-zostaje po odświeżeniu strony i można ją wysłać innej osobie. Adres bez nazwy
-karty albo z nazwą karty, która nie istnieje, otwiera *Przegląd*. Powrót z
+i odpowiednio `events`, `tasks`, `notes`, `messages`, `attachments` oraz `history` — dzięki
+czemu zostaje po odświeżeniu strony i można ją wysłać innej osobie. Adres bez
+nazwy karty, z nazwą karty, która nie istnieje, albo karty, której nie widzisz
+(`tasks`, gdy moduł Zadania jest wyłączony), otwiera *Przegląd*. Powrót z
 ekranu **Utwórz zamówienie** albo **Utwórz zapytanie ofertowe** otwiera kartę
 **Powiązania**, na której pojawia się nowy dokument.
+
+Dla autorów modułów: moduł dodaje do tego paska własną kartę — etykietę,
+opcjonalną liczbę i panel — przez strefę panelu administracyjnego
+`opportunity.detail.tabs`, deklarowaną funkcją `recordTabComponent()`
+z `@endora-commerce/admin-kit/contributions`. Dodane karty stoją po karcie
+*Wydarzenia*; karta, której identyfikator jest identyfikatorem jednej z kart
+samego ekranu, nie jest pokazywana. CRM nie wymienia żadnego modułu, który
+dodaje karty, i od żadnego nie zależy.
+
+**Powrót do szansy.** Każda droga, którą szansa prowadzi do zamówienia albo
+zapytania ofertowego — karta *Powiązania*, zamówienie wspomniane w opisie,
+notatce albo wiadomości, to, co stało się z powiązanymi zamówieniami po zmianie
+statusu, dokumenty pominięte w wartości wyliczanej, historia zmian oraz
+odnośnik do właśnie utworzonego dokumentu — otwiera go z adresem szansy, razem
+z otwartą kartą, w parametrze `?returnTo=`. Odnośnik powrotu w nagłówku tego
+zamówienia albo zapytania ofertowego brzmi wtedy **Wstecz** i prowadzi do
+szansy, na kartę, którą opuszczono. Otwarty w inny sposób, odnośnik powrotu
+jest zwykły i prowadzi do listy.
 
 **Informacje**, w jednym panelu po prawej — od nagłówka w dół, obok paska
 etapów i dowolnej otwartej karty — każda jako mała etykieta nad wartością. Na
@@ -159,21 +185,25 @@ i termin nigdy nie trafiają pod długą kartę:
 
 | Grupa | Informacje | Co można tu zmienić |
 | --- | --- | --- |
-| **Wartość i termin** | Wartość oraz to, czy jest wpisana ręcznie, czy wyliczana; planowana data zamknięcia. | Sposób ustalania wartości, jednym przyciskiem. |
-| **Klient i handlowiec** | Organizacja (odnośnik do jej ekranu), osoba kontaktowa, handlowiec. | Handlowca. |
-| **Klasyfikacja** | Kanał sprzedaży, źródło szansy, jej etykiety. | Etykiety. |
+| **Wartość i termin** | Wartość oraz to, czy jest wpisana ręcznie, czy wyliczana; planowana data zamknięcia. | Sposób ustalania wartości, jednym przyciskiem; kwotę, gdy jest wpisana ręcznie; planowaną datę zamknięcia. |
+| **Klient i handlowiec** | Organizacja (odnośnik do jej ekranu), osoba kontaktowa, handlowiec. | Osobę kontaktową; handlowca. |
+| **Klasyfikacja** | Kanał sprzedaży, źródło szansy, jej etykiety. | Kanał sprzedaży; etykiety. |
 | **Rekord** | Numer, data utworzenia i ostatniej zmiany oraz — po zamknięciu — data zamknięcia. | — |
 
-Informacja bez wartości jest pokazana jako pusta, a nie pominięta. Wszystko,
-czego nie zmienia się w samym panelu — tytuł, opis, osobę kontaktową, kanał
-sprzedaży, planowaną datę zamknięcia i kwotę — zmienia się przyciskiem
-**Edytuj**.
+Informacja bez wartości jest pokazana jako pusta, a nie pominięta. Informacja,
+którą można zmienić, ma obok siebie ołówek — dla posiadacza uprawnienia
+`crm:write`; organizacja, waluta, źródło, numer i daty rekordu go nie mają, bo
+nie można ich zmienić.
 
 ## Konfigurowanie przepływu
 
 Przepływ należy do operatora. Status ma **kod** (małe litery, cyfry
 i podkreślenia; po utworzeniu nigdy się nie zmienia), nazwę w każdym języku,
-rodzaj, kolor oraz wagę, która ustala jego kolejność na ekranie. Dokładnie
+rodzaj, kolor oraz miejsce w kolejności, w jakiej statusy są wyświetlane,
+także na tablicy. Nowy status trafia na koniec; strzałki w każdym wierszu
+ekranu **Przepływ** przesuwają go w górę lub w dół, jedna zmiana na każde
+przesunięcie. Jeśli ktoś inny zmienił w tym czasie listę, przesunięcie jest
+odrzucane, lista wczytuje się ponownie, a ekran o tym informuje. Dokładnie
 jeden status jest **statusem początkowym** — tym, w którym zaczyna nowa
 szansa — i musi to być status otwarty.
 
@@ -209,6 +239,7 @@ usunąć ten. Usunięcie statusu usuwa razem z nim jego przejścia i mapowania.
 | `GET /api/v1/admin/crm/workflow` | `crm:read` | Skonfigurowane statusy wraz z liczbą szans w każdym z nich, przejścia między nimi, mapowania statusów zamówień oraz statusy liczone do wartości wyliczanej. |
 | `POST /api/v1/admin/crm/statuses` | `crm:configure` | Dodanie statusu. |
 | `PATCH /api/v1/admin/crm/statuses/:code` | `crm:configure` | Zmiana nazwy lub koloru statusu, zmiana jego rodzaju albo oznaczenie go jako początkowego. |
+| `PUT /api/v1/admin/crm/statuses/order` | `crm:configure` | Zmiana kolejności statusów: `{ orderedCodes }` wymienia każdy skonfigurowany status dokładnie raz, w nowej kolejności. Wszystko inne — kod, który nie jest skonfigurowany (usunięty lub przemianowany w międzyczasie), pominięty status, status podany dwa razy — daje `409` `ORDER_STALE`: lista się zmieniła, więc wczytaj ją ponownie. |
 | `DELETE /api/v1/admin/crm/statuses/:code` | `crm:configure` | Usunięcie statusu, w którym nie ma żadnej szansy. |
 | `PUT /api/v1/admin/crm/transitions` | `crm:configure` | Dodawanie i usuwanie przejść. |
 | `PUT /api/v1/admin/crm/order-status-mappings` | `crm:configure` | Zastąpienie zbioru mapowań statusów zamówień. |
@@ -241,23 +272,44 @@ ją ponownie.
 
 ## Edycja i usuwanie szansy
 
-Na ekranie szansy przycisk **Edytuj** — w nagłówku, dla posiadacza
-uprawnienia `crm:write` — otwiera formularz na karcie *Przegląd*, niezależnie
-od tego, która karta była otwarta: tytuł,
-opis, osoba kontaktowa, kanał sprzedaży, planowana data zamknięcia i
-wartość. Organizacja i waluta są pokazane i nie można ich zmienić. Wartość jest
-**wpisana ręcznie** albo **wyliczana z powiązanych dokumentów**; wpisana kwota
-zostaje zachowana na czas pokazywania wyliczonej.
+**Pole zmieniasz tam, gdzie je czytasz.** Nie ma przycisku **Edytuj** ani
+formularza edycji: dla posiadacza uprawnienia `crm:write` każde pole, które
+można zmienić, ma obok siebie przycisk z ołówkiem — widoczny zawsze, nie tylko
+po najechaniu kursorem — który czytnik ekranu odczytuje jako *Edytuj:* i nazwę
+pola. Jego naciśnięcie zamienia to jedno pole w kontrolkę edycji, z przyciskami
+**Zapisz** i **Anuluj**:
 
-Zapis wysyła tylko zmienione pola. Jeśli szansa została w międzyczasie
-zmieniona — przez inną osobę albo przez zmianę statusu wykonaną przez Ciebie
-przy otwartym formularzu — nic nie zostaje zapisane, a formularz o tym
-informuje: naciśnij **Wczytaj szansę ponownie**, aby zobaczyć aktualną wersję,
-i wprowadź zmiany jeszcze raz. Nic nie jest nadpisywane po cichu.
+| Pole | Gdzie | Jak |
+| --- | --- | --- |
+| **Tytuł** | Obok nagłówka strony. | **Enter** zapisuje, **Escape** anuluje. |
+| **Opis** | Własna sekcja na karcie *Przegląd*. | Edytor formatowania (zob. *Tekst sformatowany*); zapisuje **Ctrl+Enter** (**Cmd+Enter** na Macu) albo **Zapisz**. |
+| **Planowana data zamknięcia** | Panel informacji. | Data. |
+| **Osoba kontaktowa** | Panel informacji. | Proponowane są tylko osoby z organizacji szansy. |
+| **Handlowiec** | Panel informacji. | Wybranie osoby jeszcze jej nie przypisuje: przypisuje **Zapisz**. Wyczyszczony wybór zdejmuje przypisanie. |
+| **Kanał sprzedaży** | Panel informacji. | |
+| **Wartość** — kwota | Panel informacji. | Tylko gdy wartość jest **wpisana ręcznie**. Wartość wyliczana nie ma ołówka: najpierw trzeba przełączyć sposób jej ustalania. |
 
-Zmiana statusu może mieć **powód**: wpisz go w polu pod paskiem etapów,
-zanim naciśniesz status. Powód jest opcjonalny i zostaje zapisany razem
-ze zmianą.
+Etykiety i sposób ustalania wartości już wcześniej zmieniało się na miejscu
+i tak zostaje. Organizacji, waluty, źródła, numeru ani dat rekordu nie
+można zmienić i nie mają ołówka. Pola niestandardowe mają nadal własną sekcję
+i własny przycisk **Zapisz pola niestandardowe** (zob. *Pola niestandardowe*).
+
+**Zapis wysyła to jedno pole i nic więcej**, razem z wersją szansy, którą
+miałeś przed sobą (`If-Match`). Co dalej:
+
+- **Zapisano** — pole pokazuje nową wartość, a krótki komunikat to potwierdza.
+- **Ktoś zapisał wcześniej** — inna osoba albo zmiana statusu wykonana w
+  międzyczasie przez Ciebie (`409 VERSION_CONFLICT`). Nic nie jest nadpisywane:
+  ekran pokazuje szansę w obecnym stanie, komunikat mówi, że w międzyczasie
+  została zmieniona, a **to, co wpisałeś, zostaje w polu**. Sprawdź nowszą
+  wersję i naciśnij **Zapisz** jeszcze raz, aby zapisać swoją wartość na niej —
+  albo **Anuluj**, aby ją porzucić.
+- **Odmowa z innego powodu** — na przykład pusty tytuł — pole pokazuje
+  komunikat serwera i zachowuje to, co wpisałeś.
+
+Zmiana statusu może mieć **powód**: naciśnij **Dodaj powód** pod zmianami,
+wpisz go, a potem naciśnij status. Powód jest opcjonalny, zostaje zapisany
+razem ze zmianą, a po zmianie pole znów się zwija.
 
 **Usuń**, w nagłówku ekranu, jest dla posiadacza uprawnienia `crm:configure`.
 Najpierw pyta o potwierdzenie, a następnie usuwa szansę razem z historią
@@ -265,7 +317,8 @@ statusów i powiązaniami; same powiązane zamówienia pozostają bez zmian.
 
 ## Tablica
 
-**CRM → Tablica** pokazuje szanse, które możesz zobaczyć, jako karty — po
+Widok **Tablica** ekranu **CRM → Szanse sprzedażowe** — przełącznik **Lista /
+Tablica** w nagłówku strony — pokazuje szanse, które możesz zobaczyć, jako karty — po
 jednej kolumnie dla każdego statusu, w kolejności przepływu. Nagłówek kolumny
 podaje liczbę szans w tym statusie i ich wartość, osobną sumę dla każdej
 waluty; karta pokazuje tytuł szansy oraz pola wybrane dla karty — dopóki nikt
@@ -313,7 +366,7 @@ menu.
 ### Co pokazuje karta
 
 Karta zawsze pokazuje tytuł szansy. To, co widać pod tytułem, wybierasz
-samodzielnie: na ekranie **CRM → Statusy i przepływ** sekcja **Karta na
+samodzielnie: na ekranie **CRM → Konfiguracja** karta **Karta na
 tablicy** zawiera listę pól widocznych na karcie, w kolejności, oraz pola,
 które można dodać. Osoba, która może konfigurować CRM, trafia tam również z
 tablicy, przyciskiem **Pola na karcie**.
@@ -360,10 +413,50 @@ znajduje szansę po numerze. Filtry się łączą:
 pokazywane, liczone i sumowane są tylko szanse spełniające wszystkie naraz.
 Filtr wartości porównuje kwotę niezależnie od waluty.
 
-**Filtry są zapisane w adresie tablicy.** Odśwież stronę, dodaj ją do zakładek
-albo wyślij link współpracownikowi — zostaną zastosowane te same filtry.
-Przycisk **Wyczyść filtry** usuwa wszystkie. Link zapisany przed zmianą karty
-nadal się otwiera: filtr po polu, którego nie ma już na karcie, jest pomijany.
+**Filtry są zapisane w adresie strony.** Odśwież stronę, dodaj ją do zakładek
+albo wyślij link współpracownikowi — zostaną zastosowane te same filtry. Lista
+i tablica mają wspólny adres: wyszukiwanie, organizacja, handlowiec, etykiety,
+kanał sprzedaży i daty utworzenia ustawione w jednym widoku obowiązują w drugim
+po przełączeniu, a filtr, który ma tylko jeden widok, czeka na niego. Przycisk
+**Wyczyść wszystkie filtry** usuwa filtry obu widoków. Link zapisany przed
+zmianą karty nadal się otwiera: filtr po polu, którego nie ma już na karcie,
+jest pomijany.
+
+### Filtry pól niestandardowych na liście
+
+**Lista szans sprzedażowych** nie kieruje się kartą. Oferuje filtr dla każdego pola
+niestandardowego szansy z włączoną opcją **Używaj jako filtra listy** (ustawianą na ekranie **Pola
+niestandardowe**), niezależnie od tego, czy karta pokazuje to pole, obok pozostałych filtrów.
+Filtry działają jak filtry tablicy dla pól tego samego rodzaju, z tą różnicą, że szansa bez
+wartości nigdy nie pasuje — także do *Nie*. Są zapisane w adresie strony, a ich zmiana wraca do
+pierwszej strony listy. Panel pokazuje pierwsze trzy; pozostałe kryją się pod **Więcej filtrów (n)**,
+a ukryte pole z aktywnym filtrem jest zawsze widoczne.
+
+Te dwie reguły są niezależne: pole może być filtrem tablicy, bo pokazuje je karta, a nie być
+filtrem listy — albo odwrotnie. **Pole karty, które nie jest filtrem listy, nie filtruje listy**:
+link, który filtrował nim listę, dostaje błąd z nazwą pola i przyciskiem **Usuń ten filtr**, dopóki
+opcja nie zostanie włączona. Tablica — łącznie z *Pokaż więcej* — działa bez zmian.
+
+### Zapisane widoki
+
+Pasek narzędzi **CRM → Szanse sprzedażowe** ma listę wyboru **Zapisane widoki** z przyciskami
+**Zapisz widok** i **Usuń widok** obok — tak samo na liście i na tablicy. Działają jak na listach
+zamówień, zapytań ofertowych i zadań:
+
+- **Jeden widok dla obu.** Widok zapamiętuje wszystkie filtry strony — filtry listy (stan, status,
+  filtry pól niestandardowych), filtry tablicy (filtry pól karty) i te, które obie mają wspólne —
+  oraz sortowanie listy. Nie zapamiętuje, czy byłeś na liście, czy na tablicy: wybór widoku
+  zastępuje wszystkie filtry i sortowanie i zostawia cię tam, gdzie jesteś, więc widok zapisany na
+  liście otwiera na tablicy te same szanse.
+- **Widok nigdy nie poszerza tego, co widzisz.** Przechowuje wartości filtrów, nigdy wyniki; strona
+  jest potem odczytywana z *twoimi* uprawnieniami i organizacjami. *Ja* jako handlowiec oznacza
+  tego, kto stosuje widok.
+- **Prywatny albo udostępniony.** Okno **Zapisz widok** pyta o nazwę (najwyżej 160 znaków) i o to,
+  czy udostępnić widok każdemu administratorowi, który może otworzyć stronę; udostępniony widok ma
+  po nazwie dopisek **(udostępniony)**. Nie możesz mieć dwóch widoków, których nazwy różnią się
+  tylko wielkością liter albo spacjami na początku i końcu.
+- **Usuwanie.** **Usuń widok** jest dostępne dla twoich własnych widoków; cudzy udostępniony widok
+  może usunąć tylko administrator, który ma dostęp do każdej organizacji.
 
 ### Dla integratorów
 
@@ -372,6 +465,7 @@ nadal się otwiera: filtr po polu, którego nie ma już na karcie, jest pomijany
 | `GET /api/v1/admin/crm/board` | `crm:read` | Po jednej kolumnie dla każdego statusu, w kolejności przepływu: status, `count`, `valueTotals` dla każdej waluty, pierwsze `perColumn` szans (domyślnie 50, najwyżej 200) oraz `hasMore`; a także `cardFields` — pola widoczne na karcie, w kolejności. Przyjmuje filtry listy z wyjątkiem `statusCode` i `state` — także filtr handlowca i filtr etykiet, w tym samym znaczeniu — oraz `fieldFilters`. |
 | `GET /api/v1/admin/crm/board/card-fields` | `crm:read` | `fields`: pola widoczne na karcie, w kolejności. `available`: wszystkie pola, które można wybrać. `maxFields`: 6. |
 | `PUT /api/v1/admin/crm/board/card-fields` | `crm:configure` | Treść `{ "fields": ["builtin:organization", "custom:lead_source"] }` — odwołania do pól, w kolejności. W odpowiedzi konfiguracja po zmianie. `422` dla odwołania, które nie wskazuje żadnego pola. |
+| `GET`, `POST /api/v1/admin/crm/opportunities/list-views`; `PATCH`, `DELETE …/list-views/:id` | `crm:read` | Zapisane widoki strony: twoje własne i każdy udostępniony. Widok to `{ name, shared, filters, sort }`; `filters` zawiera parametry adresu strony. `409` `CRM_SAVED_VIEW_NAME_TAKEN` dla nazwy, której już używasz. |
 
 Przeniesienie karty to `POST /api/v1/admin/crm/opportunities/:id/transition`;
 tablica nie ma do tego własnej operacji zapisu. Kolejne karty kolumny pochodzą
@@ -395,8 +489,21 @@ kluczach będących odwołaniami: `{"custom:lead_source":{"in":["referral"]},"bu
 Operatory to `contains` (tekst), `min` / `max` (liczby i kwoty, jako napisy
 dziesiętne), `from` / `to` (daty, `YYYY-MM-DD`, oba dni włącznie), `is` (tak /
 nie) oraz `in` (opcje oraz identyfikator konta klienta osoby kontaktowej).
-Odwołanie do pola, którego nie ma na karcie, jest pomijane; parametr, który
-nie jest poprawnym obiektem JSON tej postaci, kończy się odpowiedzią `400`.
+Parametr, który nie jest poprawnym obiektem JSON tej postaci, kończy się
+odpowiedzią `400`.
+
+To, które odwołania się liczą, zależy od żądania:
+
+- **Tablica** oraz **lista z `cardValues=true`** (kolumna tablicy kontynuowana przez *Pokaż
+  więcej*): odwołanie do pola, którego nie ma na karcie, jest pomijane.
+- **Lista w pozostałych przypadkach**: odwołanie `custom:` filtruje, gdy opcja filtra listy pola
+  jest włączona, niezależnie od tego, czy karta pokazuje pole, a gdy nie jest — kończy się
+  odpowiedzią `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` (klucz w `details.key`); odwołania `builtin:`
+  zachowują regułę karty. Dostępne pola zwraca
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
+
+`cardValues` wybiera regułę, nigdy zakres widoczności: obie działają w obrębie szans, które możesz
+zobaczyć.
 
 ## Wiązanie zamówień
 
@@ -404,6 +511,10 @@ Istniejące zamówienie można powiązać z szansą. Zamówienie musi należeć 
 organizacji szansy, a jedno zamówienie należy do **co najwyżej jednej**
 szansy — próba powiązania zamówienia już powiązanego jest odrzucana ze
 wskazaniem szansy, do której ono należy.
+
+Ręczne powiązanie zamówienia nie przenosi żadnej wartości pola niestandardowego
+w żadną stronę — przenosi je tylko zamówienie złożone z powiązanego zapytania
+ofertowego albo utworzone z poziomu szansy (zob. *Pola niestandardowe*).
 
 Każde powiązanie ma przełącznik **podążaj za statusem szansy**, domyślnie
 włączony. Wyłącz go dla zamówienia, które ma pozostać powiązane — dla
@@ -423,6 +534,10 @@ nic poza tym — jest ono na liście jako **niedostępne**, bez numeru, statusu 
 kwoty, a odrzucona zmiana statusu zamówienia jest pokazywana bez jego numeru.
 Admin UI pokazuje wybór zamówienia i przełącznik podążania osobie, która ma oba
 uprawnienia, a pozostałym mówi, czego brakuje.
+
+Numer powiązanego zamówienia otwiera ekran zamówienia, którego przycisk
+**Wstecz** prowadzi z powrotem do tej szansy (zob. *Powrót do szansy* w sekcji
+*Ekran szansy sprzedażowej*).
 
 Przeniesienie szansy przenosi podążające za nią zamówienia **bez względu na
 to, kto ją przenosi**: o tym, jakiego statusu zamówienia wymaga dane przejście,
@@ -500,7 +615,7 @@ i się zatrzymuje:
 - gdy zamówienie przesuwa swoją szansę, żadne inne zamówienie tej szansy nie
   jest proszone o podążanie.
 
-Na ekranie **Statusy i przepływ** te mapowania to druga tabela, *Status szansy
+Na karcie **Synchronizacja zamówień** ekranu **CRM → Konfiguracja** te mapowania to druga tabela, *Status szansy
 dla każdego statusu zamówienia*: jeden wiersz dla każdego statusu zamówienia,
 wybór statusu szansy, do którego on prowadzi, oraz pole wyboru **Dopiero gdy są
 tam wszystkie powiązane zamówienia**. Pole jest zaznaczane automatycznie, gdy
@@ -554,7 +669,7 @@ karcie handlowców — ta lista należy do modułu Organizacje, a opisana wyżej
 reguła tylko ją odczytuje.
 
 **Przypisanie nie decyduje o tym, kto widzi szansę.** Handlowiec ograniczony do
-wybranych organizacji widzi każdą szansę tych organizacji, niezależnie od tego,
+wybranych organizacji widzi każdą szansę organizacji, do których ma dostęp, niezależnie od tego,
 kto ją prowadzi — i nie widzi szansy innej organizacji, nawet jeśli jest do
 niego przypisana.
 
@@ -565,9 +680,10 @@ W Admin UI:
   jest jej.
 - **Na ekranie szansy** pole *Handlowiec* — w panelu informacji po prawej —
   pokazuje, kto ją prowadzi.
-  Posiadacz uprawnienia `crm:write` zmienia to w tym samym miejscu: wybranie
-  osoby od razu przypisuje jej szansę, a wyczyszczenie pola zostawia szansę
-  nieprzypisaną. Niczego nie trzeba zapisywać.
+  Posiadacz uprawnienia `crm:write` zmienia to w tym samym miejscu ołówkiem,
+  jak każdą inną informację: wybierz osobę albo wyczyść pole, aby zostawić
+  szansę nieprzypisaną, i naciśnij **Zapisz**. Odmowa — osoba została
+  w międzyczasie dezaktywowana — pojawia się pod polem, które zachowuje wybór.
 - **Na liście** jest kolumna *Handlowiec*, a lista i tablica mają filtr
   *Handlowiec*: **Dowolny**, **Moje**, **Nieprzypisane** albo **Wybrana
   osoba…** — ta ostatnia opcja dodaje pole wyboru osoby.
@@ -626,7 +742,7 @@ Nadawanie etykiet szansie to codzienna praca i wymaga `crm:write`.
 
 W Admin UI:
 
-- **CRM → Etykiety** to lista etykiet z informacją, ile widocznych dla Ciebie
+- **CRM → Konfiguracja → Etykiety** to lista etykiet z informacją, ile widocznych dla Ciebie
   szans ma każdą z nich. Przycisk **Dodaj etykietę** otwiera krótki formularz
   z nazwą i kolorem; ołówek zmienia nazwę lub kolor; kosz usuwa etykietę — po
   potwierdzeniu, które podaje, ile szans ją straci.
@@ -671,11 +787,18 @@ rozmowie — poza nadawcą — z dzwonka powiadomień w Admin UI, z odnośnikiem
 szansy. Wpis nazywa szansę jej numerem i nie zawiera niczego z treści
 wiadomości, a nie powstaje dla osoby, która nie ma już dostępu do organizacji
 szansy. **Nikt inny nie jest powiadamiany, chyba że wiadomość o nim
-wspomina** (zob. *Wspominanie osoby, zamówienia albo produktu przez @*):
+wspomina** (zob. *Wspominanie osoby, dokumentu albo produktu przez @*):
 pierwsza wiadomość w szansie, która nie ma przypisanej osoby i nie wspomina
 nikogo, nie powiadamia nikogo. Wpis jest wyświetlany w języku czytającego,
 tak jak wpis o przypisaniu. Gdy moduł **Powiadomienia administratora** jest
 wyłączony, wiadomość jest zapisywana tak samo, a nikt nie dostaje powiadomienia.
+
+**Jedno i drugie jest tekstem sformatowanym.** Notatkę i wiadomość pisze się w
+tym samym edytorze co opis — pogrubienie, kursywa, przekreślenie, listy i
+odnośniki — i mogą one wspominać osobę, zamówienie, zapytanie ofertowe, zadanie
+albo produkt (zob. *Tekst sformatowany* oraz *Wspominanie osoby, dokumentu albo
+produktu przez @*).
+Notatka albo wiadomość mieści do 10 000 znaków.
 
 **Jedno i drugie jest wewnętrzne.** Ani notatka, ani wiadomość nie ma
 ustawienia, które pokazałoby ją klientowi, i nic, co klient może otworzyć —
@@ -726,8 +849,11 @@ wiadomość tej szansy, w przeciwnym razie odpowiedzią jest 404. To, jak daleko
 przeczytał każdy administrator, jest przechowywane w tabeli
 `crm_opportunity_message_reads` — jeden wiersz na administratora i szansę — i
 znika razem z szansą, gdy zostanie ona usunięta. Tabela
-`crm_message_read_baselines` przechowuje jedną chwilę, od której liczone są
-nieprzeczytane wiadomości dla osoby, która nie ma jeszcze znacznika.
+`crm_message_read_baselines` przechowuje jedną chwilę, od której w ogóle liczone
+są nieprzeczytane wiadomości: wiadomość jest nieprzeczytana, gdy jest nowsza
+zarówno od tej chwili, jak i od twojego znacznika, więc znacznik starszy od tej
+chwili nie sprawia, że cokolwiek znów staje się nieprzeczytane. Liczone są
+wyłącznie wiadomości, które pokazuje karta *Wiadomości*.
 
 ## Załączniki
 
@@ -758,6 +884,12 @@ odrzucany jako załącznik.
 Biblioteka odmawia i wskazuje szansę po jej numerze. Najpierw trzeba usunąć
 załącznik. Dotyczy to także czasu, gdy moduł CRM jest wyłączony — załączniki
 nadal istnieją, a ochrona razem z nimi.
+
+**Biblioteka mediów pokazuje załącznik tylko tym, którzy mogą czytać jego
+szansę**: plik używany wyłącznie przez szanse organizacji spoza zasięgu
+czyjegoś dostępu jest przed nim ukryty w bibliotece, tak jak przed każdym bez
+`crm:read`, a opisana wyżej odmowa wskazuje szansę tylko tym, którzy mogą ją
+zobaczyć.
 
 Każdy, kto może czytać szansę, może pobrać jej załączniki; żadne uprawnienie
 biblioteki mediów nie jest potrzebne. Każdy załącznik na liście ma odnośnik do
@@ -790,7 +922,7 @@ Osoba, która może tylko czytać, widzi listę i przyciski pobierania.
 | --- | --- | --- |
 | `GET /api/v1/admin/crm/opportunities/:id/attachments` | `crm:read` | Załączniki, od najstarszego: nazwa pliku, typ, rozmiar, kto załączył oraz `url`. |
 | `POST /api/v1/admin/crm/opportunities/:id/attachments/upload` | `crm:write` | Przesłanie pliku i załączenie go: `multipart/form-data` z jedną częścią `file`. |
-| `POST /api/v1/admin/crm/opportunities/:id/attachments` | `crm:write` i `assets.read` | Załączenie pliku, który już jest w bibliotece mediów jako prywatny: `{ "assetId" }`. |
+| `POST /api/v1/admin/crm/opportunities/:id/attachments` | `crm:write` i `assets.read` | Załączenie pliku, który już jest w bibliotece mediów jako prywatny: `{ "assetId" }`. Plik publiczny daje `422` `CRM_ATTACHMENT_NOT_PRIVATE` (`details`: `assetId`, `visibility`; do zgłoszenia #639 `VALIDATION_FAILED`); plik, którego nie ma w bibliotece albo którego wywołujący nie może widzieć, daje `422` `VALIDATION_FAILED`. |
 | `DELETE /api/v1/admin/crm/opportunities/:id/attachments/:attachmentId` | `crm:write` | Usunięcie załącznika. Plik zostaje w bibliotece mediów. |
 
 Odpowiedzią na przesłanie pliku jest nowy załącznik. Dla pliku większego niż
@@ -822,7 +954,9 @@ innej; nie ma wydarzenia bez szansy.
 Wydarzenie ma:
 
 - **nazwę** (wymaganą, do 200 znaków) i opcjonalny **opis** do 5000 znaków.
-  Opis jest zwykłym tekstem: skróty z `@` nie są w nim dostępne;
+  Opis jest tekstem sformatowanym, pisanym w tym samym edytorze co notatka
+  (zob. *Tekst sformatowany*), ale nie przyjmuje wzmianek: skróty z `@`
+  i przyciski wstawiania nie są w nim dostępne;
 - **jeden dzień**. Albo godzinę początku i końca tego samego dnia, przy czym
   koniec jest późniejszy niż początek, albo **Cały dzień** — samą datę, bez
   godzin. Wydarzenie nie może trwać przez północ: takie spotkanie to dwa
@@ -834,7 +968,7 @@ Wydarzenia są planem szansy, a nie własnością autora. Inaczej niż notatkę,
 `crm:write`, który tę szansę widzi — bez względu na to, kto je dodał. Gdy dwie
 osoby zapisują to samo wydarzenie, obowiązuje późniejszy zapis. Dodanie albo
 zmiana wydarzenia nie liczy się jako edycja szansy, więc nigdy nie powoduje
-odrzucenia formularza edycji, który ma otwarty ktoś inny.
+odrzucenia zapisu pola, który wykonuje ktoś inny.
 
 Usunięcie szansy usuwa jej wydarzenia i żadne z ich przypomnień nie zostaje
 wysłane. Zamknięcie szansy niczego nie usuwa — zobacz niżej *Zamknięte
@@ -934,14 +1068,22 @@ polsku, gdy odbiorca wybrał polski, a w pozostałych przypadkach po angielsku.
 Wysyłany jest z oprawą wspólną dla całej platformy, a nie z oprawą kanału
 sprzedaży.
 
-**E-mail nie zawiera odnośnika.** Wskazuje szansę jej numerem i prosi o
-otwarcie jej w Admin UI; odnośnik prowadzący do szansy ma wpis w dzwonku. Ani
-wpis w dzwonku, ani e-mail nigdy nie zawierają opisu wydarzenia ani tytułu
+**E-mail prowadzi do wydarzenia, gdy adres panelu administracyjnego jest
+znany.** Gdy ustawiono `ADMIN_BASE_URL`, e-mail ma przycisk **Otwórz
+wydarzenie**, który otwiera szansę na karcie *Wydarzenia* z zaznaczonym
+wydarzeniem, czyli tam, dokąd prowadzi wpis w dzwonku. Bez tej zmiennej e-mail
+nie ma odnośnika ani przycisku. Nadal wskazuje szansę jej numerem i prosi o
+otwarcie jej w Admin UI. Adres względny ani zgadywany nigdy nie jest wysyłany.
+Ani wpis w dzwonku, ani e-mail nigdy nie zawierają opisu wydarzenia ani tytułu
 szansy.
 
 Temat i treść e-maila operator zmienia, osobno dla każdego języka, na ekranie
 **Maile transakcyjne** (`/transactional-emails`) i tam też może go wyłączyć.
-Dostępne zmienne to `event.name`, `event.when` i `opportunity.number`.
+Dostępne zmienne to `event.name`, `event.when`, `opportunity.number` oraz
+`event.adminUrl`, czyli odnośnik do wydarzenia. Ta ostatnia jest pusta, gdy nie
+ustawiono `ADMIN_BASE_URL`, i wtedy przycisk, którego adresem jest tylko ta
+zmienna, zostaje pominięty. Szablon zmieniony, zanim odnośnik się pojawił, nie
+używa tej zmiennej i wygląda tak jak wcześniej.
 **E-mail, który nie wyszedł, nigdy nie kosztuje wpisu w dzwonku** — wyłączony
 przez operatora, brak adresu na koncie odbiorcy, serwer poczty, który
 odmawia: wpis w dzwonku i tak powstaje, przy wydarzeniu widać przypomnienie
@@ -1006,7 +1148,7 @@ wydarzenia.
 
 ### Strefy czasowe
 
-Platforma nie ma ustawienia strefy czasowej, więc wydarzenie ma własną:
+CRM nie ma ustawienia strefy czasowej dla wydarzeń, więc wydarzenie ma własną:
 strefę czasową przeglądarki, z której je zapisano.
 
 - Wydarzenie **z godzinami** to jedna chwila, ta sama dla wszystkich. Każdy
@@ -1098,7 +1240,7 @@ poleceń jako **Kalendarz CRM**.
 | Kto | Co pokazuje Kalendarz |
 | --- | --- |
 | Administrator, który może zobaczyć **każdą** organizację | Wydarzenia każdej otwartej szansy. Przełącznik **Moje / Wszystkie** zawęża Kalendarz do szans przypisanych do tej osoby. Kalendarz otwiera się na *Wszystkie*, gdzie przy każdym wydarzeniu jest też podany handlowiec szansy. |
-| Administrator ograniczony do zbioru organizacji — handlowiec | Tylko wydarzenia szans **przypisanych do tej osoby**, w obrębie tych organizacji. Przełącznika nie ma. |
+| Administrator ograniczony do zbioru organizacji — handlowiec | Tylko wydarzenia szans **przypisanych do tej osoby**, w obrębie organizacji, do których ma dostęp. Przełącznika nie ma. |
 
 Kalendarz handlowca nigdy nie pokazuje więc szansy innej osoby, nawet z
 organizacji, którą mają wspólną — choć handlowiec może taką szansę otworzyć i
@@ -1196,7 +1338,7 @@ dostęp tylko do wybranych organizacji, dostaje wskaźniki wyłącznie dla nich.
 | --- | --- | --- |
 | Średni czas obsługi szansy | Średni czas od utworzenia szansy do jej zamknięcia. Podawany łącznie dla wszystkich zamkniętych szans oraz osobno dla wygranych i przegranych. | Zamknięte w wybranym zakresie. Szansa otwarta ponownie nie jest liczona, dopóki nie zostanie znów zamknięta. |
 | Średni czas w statusie | Jak długo szansa pozostaje w statusie: od zmiany, która ją do niego wprowadziła, do jej następnej zmiany — średnio dla każdego wejścia w ten status. Szansa, która nadal jest w statusie, jest liczona do chwili obecnej. Można wybrać pokazywane statusy albo zobaczyć wszystkie. | Każde wejście w status, które nastąpiło w wybranym zakresie. |
-| Najskuteczniejsi handlowcy | Ile szans każdy handlowiec zamknął jako wygrane i ile były warte — za cały zakres oraz miesiąc po miesiącu (miesiące kalendarzowe, w czasie UTC). Handlowiec to osoba, do której szansa jest przypisana **teraz**: szansa przypisana komuś innemu już po wygranej liczy się obecnej osobie. | Zamknięte jako wygrane w wybranym zakresie i przypisane do kogoś. |
+| Najskuteczniejsi handlowcy | Ile szans każdy handlowiec zamknął jako wygrane i ile były warte — za cały zakres oraz miesiąc po miesiącu (miesiące kalendarzowe, w strefie czasowej raportów). Handlowiec to osoba, do której szansa jest przypisana **teraz**: szansa przypisana komuś innemu już po wygranej liczy się obecnej osobie. | Zamknięte jako wygrane w wybranym zakresie i przypisane do kogoś. |
 | Najcenniejsze szanse | Dziesięć szans o najwyższej wartości, każda z odnośnikiem do szansy. Można wybrać, czy zakres dotyczy daty utworzenia, czy daty zamknięcia. | Utworzone — albo zamknięte — w wybranym zakresie i mające wartość. |
 | Średnia wartość szansy | Średnia wartość szansy sprzedażowej. | Utworzone w wybranym zakresie i mające wartość. |
 
@@ -1210,8 +1352,13 @@ albo — gdy szansa ma wartość wyliczaną — kwota wyliczona z powiązanych z
 dokumentów. „Najcenniejsze” oznacza najwyższą wartość i nic więcej: moduł nie
 zna kosztów ani marży, więc żaden wskaźnik nie jest tu zyskiem.
 
-**Dni i miesiące są liczone w czasie UTC**, a zakres obejmuje obie swoje daty
-w całości.
+**Dni i miesiące są liczone w strefie czasowej raportów** — ustawieniu *Strefa
+czasowa raportów* w sekcji *Analityka* ekranu ustawień, domyślnie `UTC` — a
+zakres obejmuje obie swoje daty w całości: zaczyna się o północy jego pierwszego
+dnia i kończy o północy po ostatnim, obie w tej strefie. Gdy moduł Analityka
+jest wyłączony, dni i miesiące są liczone w `UTC`. Ekran podaje tę strefę pod
+filtrami, a gotowe zakresy (*Ten miesiąc*, …) biorą dzisiejszą datę w tej
+strefie, a nie z Twojego komputera.
 
 Czas w statusie i ranking handlowców są przedstawione na wykresach. Pod każdym
 wykresem jest tabela z tymi samymi liczbami, więc żadna informacja nie jest
@@ -1228,10 +1375,15 @@ z wyprzedzeniem.
 | `GET /api/v1/admin/crm/analytics/top-opportunities` | `crm:analytics` | Szanse o najwyższej wartości: `limit` (domyślnie 10, najwyżej 100) **dla każdej waluty**, w kolejności walut, a potem od najwyższej. `basis=created`, o ile nie podano `basis=closed`. |
 | `GET /api/v1/admin/crm/analytics/average-value` | `crm:analytics` | Wiersz dla każdej waluty: `currency`, `average`, `count`. |
 
-Każdy punkt przyjmuje `from` i `to` (`YYYY-MM-DD`) oraz opcjonalnie
+Każdy punkt przyjmuje `from` i `to` (`YYYY-MM-DD`, oba włącznie, dni w strefie
+czasowej raportów, `analytics.reporting_time_zone`, którą moduł `analytics`
+posiada i udostępnia przez bramkowany `reportingTimeZonePort` — domyślnie
+`UTC`, a gdy `analytics` jest wyłączony, też `UTC`: krawędź `degrades-without`,
+sprawdzana przed portem w `services/reporting-time-zone.ts`) oraz opcjonalnie
 `salesChannelId` i `assignedAdminUserId`. Dla zakresu, który kończy się przed
-swoim początkiem, odpowiedzią jest 422. Wskaźnik, dla którego nie ma czego
-uśredniać, ma wartość `null`, a nie zero.
+swoim początkiem, odpowiedzią jest 422. Każdy odpowiada `{ data, timeZone }`:
+wskaźnikiem i nazwą IANA strefy, w której liczono jego dni i miesiące.
+Wskaźnik, dla którego nie ma czego uśredniać, ma wartość `null`, a nie zero.
 
 ## Zapytania ofertowe i wartość wyliczana
 
@@ -1242,7 +1394,12 @@ samym punktem końcowym, z `"documentKind": "quote_request"`. Musi należeć do
 organizacji szansy i należy do co najwyżej jednej szansy. Szansa może mieć
 kilka zapytań ofertowych i kilka zamówień.
 
-Powiązane zapytanie ofertowe jest na liście z numerem, statusem i wartością.
+Powiązane zapytanie ofertowe jest na liście z numerem, statusem i wartością —
+kwotą, którą wylicza dla niego moduł Zapytania ofertowe, tą samą, którą pokazuje
+jego własna lista. Dopóki uzgodnioną cenę ma tylko część jego pozycji, wartość
+ma oznaczenie **Częściowo uzgodnione**; dopóki nie ma jej żadna — **Jeszcze
+nieuzgodnione**. Zapytanie ofertowe bez żadnej ceny jest pokazywane jako `—` i
+nic nie dodaje do wyliczanej wartości.
 **Zapytanie ofertowe pokazuje moduł Zapytania ofertowe**: powiązanie zapytania
 i lista zapytań do powiązania wymagają `rfqs:handle` — uprawnienia, z którym
 ten moduł odczytuje zapytanie — oprócz `crm:write`; bez niego odpowiedzią jest
@@ -1260,7 +1417,10 @@ szansą, zamówienie zostaje powiązane z tą samą szansą (`linkSource:
 otwarta, czy już zamknięta, i niezależnie od ustawienia
 `crm.auto_create_from_orders`: takie zamówienie nigdy nie dostaje własnej
 szansy. Od tej chwili jest powiązanym zamówieniem jak każde inne: obejmują je
-mapowania statusów zamówień, a wartość szansy je uwzględnia.
+mapowania statusów zamówień, a wartość szansy je uwzględnia. Dołączenie
+wypełnia też **puste** pola niestandardowe szansy wartościami zamówienia, dla
+każdego pola zamówienia, które przenosi wartość do szans sprzedażowych; wartość,
+którą szansa już ma, zostaje (zob. *Pola niestandardowe*).
 
 Zamówienie zapisuje swoje zapytanie ofertowe, gdy zostaje złożone z koszyka,
 który klient wypełnił przyciskiem *Złóż zamówienie z tej oferty* na stronie
@@ -1286,10 +1446,11 @@ Wartość wyliczana to suma:
   kwocie **sumy zamówienia** — kwoty brutto, którą płaci klient: towary,
   podatek, dostawa i ewentualna dopłata za płatność, pomniejszone o rabaty;
 - każdego powiązanego **zapytania ofertowego**, którego status jest statusem
-  liczonym, w kwocie **sumy ilość × cena jednostkowa** po jego pozycjach. Cena
-  jednostkowa to cena uzgodniona, a dopóki żadnej nie uzgodniono — cena, o którą
-  prosił klient. Ceny w zapytaniach ofertowych są **netto** — to kwota, którą
-  ekran zapytania ofertowego pokazuje jako sumę netto.
+  liczonym, w jego **kwocie**: sumie ilość × cena jednostkowa po jego pozycjach,
+  gdzie cena jednostkowa każdej pozycji to jej cena uzgodniona, a dopóki jej nie
+  ma — cena, o którą prosił klient. Pozycja bez żadnej z tych cen nic nie dodaje.
+  Tę kwotę wylicza moduł Zapytania ofertowe, a jego własna lista pokazuje tę
+  samą wartość. Ceny w zapytaniach ofertowych są **netto**.
 
 Te dwie kwoty nie mają tej samej podstawy i żadna nie jest przeliczana: każdy
 dokument liczy się w kwocie, którą pokazuje jego własny ekran.
@@ -1303,8 +1464,9 @@ wspólnego, są liczone oba.
 **Jedna waluta.** Szansa ma jedną walutę i nic nie jest przeliczane. Dokument w
 innej walucie, który w przeciwnym razie by się liczył, jest pomijany, a szansa
 go wskazuje: `excludedDocuments` na szansie wymienia każdy taki dokument jako
-`{ kind, id, reason: "currency_mismatch" }`. Zapytanie ofertowe z pozycjami w
-kilku walutach liczy pozycje w walucie szansy i również jest wskazywane.
+`{ kind, id, reason: "currency_mismatch" }`. Zapytanie ofertowe liczy się w
+walucie swojej kwoty, czyli pierwszej pozycji: w innej walucie jest pomijane i
+wskazywane w całości.
 
 Wartość podąża za dokumentami: jest przeliczana, gdy dokument zostaje powiązany
 albo odwiązany, gdy powiązane zamówienie zmienia status, gdy powiązane
@@ -1351,10 +1513,25 @@ CRM nie wymaga modułu Zapytań ofertowych. Gdy jest on wyłączony:
   numeru, statusu i wartości;
 - nie dodaje niczego do wartości wyliczanej;
 - próba powiązania zapytania ofertowego kończy się odpowiedzią
-  `503 MODULE_DISABLED`; istniejące powiązanie nadal można usunąć.
+  `503 MODULE_DISABLED`; istniejące powiązanie nadal można usunąć;
+- zapytanie ofertowe wspomniane w tekście jest pokazywane jako *Zapytanie
+  ofertowe niedostępne*, a lista dokumentów pod `@@` nie proponuje zapytań
+  ofertowych.
 
 Nic nie ginie: po ponownym włączeniu powiązania znów pokazują swoje dokumenty.
 Wartość wyliczana uwzględni zapytania ofertowe przy najbliższym przeliczeniu.
+
+Moduł **Zadania** jest opcjonalny w ten sam sposób. Gdy jest wyłączony, zadanie
+wspomniane w tekście jest pokazywane jako *Zadanie niedostępne*, lista
+dokumentów pod `@@` nie proponuje zadań, a ekran szansy nie pokazuje karty
+*Zadania*; po ponownym włączeniu wzmianki znów pokazują swoje zadania. Gdy moduł
+jest włączony, karta *Zadania* ekranu szansy wymienia powiązane z nią
+zadania, które możesz zobaczyć — opisuje ją strona modułu Zadania.
+
+Tak samo moduł **Projekty**: gdy jest wyłączony, projekt wspomniany w tekście
+jest pokazywany jako *Projekt niedostępny*, a lista dokumentów pod `@@` nie
+proponuje projektów; po ponownym włączeniu wzmianki znów pokazują swoje
+projekty.
 
 ### W Admin UI
 
@@ -1373,7 +1550,7 @@ Na ekranie szansy sprzedażowej:
   wyliczanej widać każdy dokument **pominięty** w sumie, wraz z powodem, oraz
   przypomnienie, że Twój własny szacunek jest zachowany.
 
-Na ekranie **CRM → Statusy i przepływ** sekcja *Statusy liczone do wartości
+Na karcie **Wartość** ekranu **CRM → Konfiguracja** sekcja *Statusy liczone do wartości
 wyliczanej* to dwie listy pól wyboru — statusy zamówień i statusy zapytań
 ofertowych — zapisywane razem. Przycisk *Ten i wszystkie kolejne* zaznacza
 status zamówienia i wszystkie następne. Po zapisaniu ekran informuje, że
@@ -1407,7 +1584,10 @@ Szansa utworzona w ten sposób:
 - ma w tytule numer dokumentu i nazwę organizacji;
 - jest powiązana z dokumentem, a jej wartość jest z niego **wyliczana** (patrz
   *Zapytania ofertowe i wartość wyliczana*), w walucie dokumentu;
-- zapisuje, skąd pochodzi: `source` ma wartość `order` albo `quote_request`.
+- zapisuje, skąd pochodzi: `source` ma wartość `order` albo `quote_request`;
+- otrzymuje wartości pól niestandardowych dokumentu dla każdego pola zamówienia
+  lub zapytania ofertowego z włączoną opcją **Przenoś wartość do: Szansa
+  sprzedażowa** (zob. *Pola niestandardowe*).
 
 Co **nie** jest tworzone:
 
@@ -1415,8 +1595,6 @@ Co **nie** jest tworzone:
 - nic dla zamówienia, które zapisuje zapytanie ofertowe powiązane z szansą —
   zamówienie dołącza do tej szansy, niezależnie od ustawień (zob. *Wiązanie
   zapytań ofertowych*);
-  zamówienie nie zapisuje swojego zapytania ofertowego, więc to jeszcze nie
-  działa (zob. *Wiązanie zapytań ofertowych*);
 - nic dla dokumentów, które istniały przed włączeniem ustawienia;
 - nic, gdy moduł CRM jest wyłączony, i nic później dla dokumentów złożonych w
   tym czasie;
@@ -1451,6 +1629,10 @@ dokument jest właśnie wiązany, a potem — że został powiązany; od tej chw
 jest na jej liście, a w historii zmian ma oznaczenie *Utworzono z tej szansy*.
 Tak utworzone zamówienie podąża za statusem szansy jak każde powiązane
 zamówienie, a oba rodzaje dokumentów liczą się do wartości wyliczanej.
+Po powiązaniu dokument otrzymuje wartości pól niestandardowych szansy dla
+każdego pola szansy z włączoną opcją **Przenoś wartość do: Zamówienie** albo
+**Przenoś wartość do: Zapytanie ofertowe**, wyłącznie do swoich pustych pól
+(zob. *Pola niestandardowe*).
 
 Czego się spodziewać:
 
@@ -1461,11 +1643,18 @@ Czego się spodziewać:
   klienta, którego widzisz. Jeśli zapiszesz dokument dla klienta innej
   organizacji, dokument powstanie, ale **nie** zostanie powiązany: po powrocie
   szansa o tym informuje i podaje odnośnik do dokumentu. W samej szansie nic
-  się nie zmienia.
+  się nie zmienia i żadna wartość pola niestandardowego nie jest przenoszona.
 - **Kto widzi przyciski.** *Utwórz zamówienie* wymaga `crm:write` i
   `orders:write`; *Utwórz zapytanie ofertowe* wymaga `crm:write` i
   `rfqs:handle`. Ekrany tworzenia wyszukują też klientów, co wymaga
   `customers:read`.
+- **Wersja zapytania ofertowego zmienia się jeszcze raz.** Wartości są
+  przenoszone tuż po tym, jak żądanie utworzenia odpowiedziało, w osobnym
+  zapisie zapytania ofertowego, a przeniesienie, które wypełnia pole, podnosi
+  `version` zapytania. Klient, który edytuje nowe zapytanie z wersją zwróconą w
+  odpowiedzi na utworzenie, dostaje wtedy `409 VERSION_CONFLICT`: odczytaj
+  zapytanie ponownie i wyślij wersję, którą zwraca teraz. Przeniesienie, które
+  niczego nie wypełnia, nie zmienia wersji.
 - **Gdy moduł Zapytań ofertowych jest wyłączony**, przycisku *Utwórz zapytanie
   ofertowe* nie ma. *Utwórz zamówienie* działa bez zmian.
 - **Gdy moduł CRM jest wyłączony**, ekrany tworzenia działają dokładnie tak
@@ -1501,7 +1690,14 @@ stan **przed** i **po**:
   (`after.cause`: `manual`, `order_status` albo `system`), zamówienie, które ją
   spowodowało, jeśli było nim zamówienie (`after.causeOrderId`), oraz wpisany
   przez kogoś powód;
-- edycja zawiera pola w brzmieniu sprzed zmiany i po niej.
+- edycja zawiera pola w brzmieniu sprzed zmiany i po niej;
+- utworzenie szansy dla dokumentu albo dołączenie zamówienia z jego zapytania
+  ofertowego, które przeniosło lub pominęło wartości pól niestandardowych,
+  zawiera `after.customFieldCarry`: `source` (`entityType` `order` albo
+  `quote_request`, `recordId`), `carried` (wypełnione klucze) i `skipped` (po
+  jednym `{ key, reason, label }` na każde nieprzeniesione pole). Same
+  przeniesione wartości są w `after.customFieldValues` — dla czytającego z
+  uprawnieniem `custom_fields:read`.
 
 | Metoda + ścieżka | Uprawnienie | Cel |
 | --- | --- | --- |
@@ -1512,8 +1708,27 @@ rozminąć się z tym, co się wydarzyło — a **każdy, kto może czytać szan
 czytać jej historię**. Uprawnienie otwierające dziennik audytu całej platformy
 nie jest potrzebne.
 
-Pięć rzeczy, o których warto wiedzieć:
+**Wartości pochodzą z samej szansy, nie z dziennika audytu.** Dziennik audytu
+całej platformy czyta każdy, kto ma `audit_log:read`, bez względu na to, które
+organizacje widzi, dlatego wpis szansy w nim mówi, co się zmieniło, i nie
+zawiera żadnych wartości: tytułu, opisu, wartości, waluty, osoby kontaktowej,
+organizacji, nazwy etykiety, wartości pola niestandardowego, powodu, nazwy
+wydarzenia ani nazwy pliku. Są one przechowywane przy szansie, zapisywane w tym
+samym kroku co wpis, a historia zmian wstawia je z powrotem do `before` i
+`after` dla czytającego, który może czytać szansę. Wpisy zapisane przed tą
+zmianą nadal mają wartości w dzienniku audytu i historia pokazuje je tak, jak
+zostały zapisane.
 
+Sześć rzeczy, o których warto wiedzieć:
+
+- **Wartości pól niestandardowych wymagają `custom_fields:read`.** `before` i
+  `after` wpisu zawierają wartości pól niestandardowych szansy
+  (`customFieldValues`) tylko dla czytającego, który ma także
+  `custom_fields:read`; dla każdego innego serwer pomija ten element w każdym
+  wpisie, a reszta wpisu jest taka, jak została zapisana. `customFieldCarry`
+  zostaje dla każdego czytającego: nazywa pola, powody i etykiety, nigdy
+  wartości. Rola z samym `crm:read` nie odczytuje więc już wartości pól
+  niestandardowych przez historię zmian.
 - Notatka albo wiadomość jest w historii jako fakt, że została napisana,
   zmieniona albo usunięta — przez kogo i jak była długa. Jej treści tam nie
   ma: czyta się ją na kartach *Notatki* i *Wiadomości*.
@@ -1532,34 +1747,117 @@ Pięć rzeczy, o których warto wiedzieć:
   to, że jest następna strona, o którą można zapytać.
 
 Na ekranie **Dziennik audytu** całej platformy te same wpisy są pokazywane
-wśród wszystkich pozostałych, jako te same zdania.
+wśród wszystkich pozostałych, jako te same zdania, z nazwami zmienionych pól
+(`changedFields`, `changedCustomFields`) tam, gdzie historia zmian pokazuje
+wartości. Szansa jest tam nazywana swoim numerem.
 
 W Admin UI historia to karta **Historia zmian** szansy sprzedażowej. Każdy
 wpis jest zdaniem — *Zmieniono status szansy sprzedażowej*, *Dodano notatkę* —
 z informacją, kto i kiedy to zrobił. Zmiana statusu pokazuje oba statusy z
 nazwy; jeśli spowodowało ją zamówienie, wpis wskazuje to zamówienie i prowadzi
 do niego. Edycja wymienia zmienione pola: jak było i jak jest. Wartości pól
-niestandardowych są wymienione po jednej w wierszu, pod własnymi etykietami pól
-— albo pod ich kodami dla osoby bez `custom_fields:read` — a status zamówienia
+niestandardowych są wymienione po jednej w wierszu, pod własnymi etykietami pól,
+osobie z uprawnieniem `custom_fields:read`; dla każdego innego historia nie
+zawiera wartości pól niestandardowych, więc nie są wymieniane. Status zamówienia
 jest pokazywany z nazwy, wyłącznie osobie z uprawnieniem `orders:read`.
-Zmieniony opis czyta się tak jak na karcie *Przegląd*: wspomniana w nim osoba,
-zamówienie albo produkt są pokazywane z nazwy, nigdy jako znacznik. Przycisk
+Zmieniony opis jest pokazywany jako same słowa, bez znaczników formatowania:
+wspomniana w nim osoba, zamówienie albo produkt są pokazywane z nazwy, nigdy
+jako znacznik. Przycisk
 *Pokaż wcześniejsze zmiany* wczytuje kolejną stronę.
 
-## Odwołania do produktów i zamówień
+**Wartości nieprzeniesione.** Wpis utworzenia albo dołączenia, w którym
+pominięto wartości pól niestandardowych, brzmi *Nie przeniesiono z
+zamówienia:* albo *Nie przeniesiono z zapytania ofertowego:*, a pod nim jest po
+jednej linii na każde pominięte pole, z powodem — szansa sprzedażowa nie ma
+pola o tym kluczu, jej pole ma inny typ, jej pole jest widoczne dla klientów, a
+pole źródłowe jest wewnętrzne, albo wartość nie pasuje do jej pola. Pole jest
+nazwane **etykietą pola zamówienia lub zapytania ofertowego z chwili
+pominięcia**, w Twoim języku, a te linie widzi
+**każdy, kto może czytać szansę** — nie potrzeba do nich `custom_fields:read` i
+nie zawierają żadnej wartości. Same wartości pozostają, jak wyżej, dostępne
+tylko z `custom_fields:read`. Wpis zapisany, zanim zaczęto przechowywać
+etykiety, nazywa pole jego obecną etykietą, gdy to możliwe, a w przeciwnym
+razie kluczem. Wartości przeniesione bez problemu widać jako linie pól
+niestandardowych wpisu, jak każdą inną ich zmianę.
 
-Opis szansy sprzedażowej, notatka i wiadomość mogą wspominać **produkt** albo
-**zamówienie**. Wzmianka to znacznik w tekście:
+## Tekst sformatowany
+
+Opis szansy sprzedażowej, notatkę, wiadomość i opis wydarzenia pisze się
+w **edytorze formatowania**. Pasek narzędzi nad polem formatuje zaznaczenie,
+a każdy jego przycisk pokazuje, czy tekst w miejscu kursora ma już dane
+formatowanie:
+
+| Przycisk | Klawiatura (**Cmd** na Macu) |
+| --- | --- |
+| **Pogrubienie** | **Ctrl+B** |
+| **Kursywa** | **Ctrl+I** |
+| **Przekreślenie** | **Ctrl+Shift+S** |
+| **Lista punktowana** | **Ctrl+Shift+8** albo `- ` na początku wiersza |
+| **Lista numerowana** | **Ctrl+Shift+7** albo `1. ` na początku wiersza |
+| **Odnośnik** | — |
+
+**Odnośnik** prosi o adres. Przyjmowany jest tylko adres zaczynający się od
+`http://`, `https://` albo `mailto:`; każdy inny jest odrzucany z komunikatem
+i nic nie zostaje podlinkowane.
+
+W opisie, notatce i wiadomości skróty z `@` oraz przyciski **Wspomnij osobę**,
+**Wstaw dokument** i **Wstaw produkt** działają jak dotąd (zob. niżej). Opis
+wydarzenia też jest sformatowany, ale nie przyjmuje wzmianek.
+
+Wszędzie, gdzie tekst się czyta — na karcie *Przegląd*, na kartach *Notatki*
+i *Wiadomości*, na karcie *Wydarzenia* — widać jego formatowanie, a odnośnik
+otwiera się w nowej karcie.
+
+**Dla integratorów.** API nadal przyjmuje i zwraca **ciąg znaków**, a nie HTML
+ani drzewo dokumentu. Formatowanie to mały podzbiór Markdown zapisany w tym
+ciągu, obok znaczników odwołań z następnej sekcji:
+
+| Zapis | Znaczenie |
+| --- | --- |
+| `**tekst**` | pogrubienie |
+| `_tekst_` | kursywa — nigdy wewnątrz słowa, więc SKU takie jak `ABC_1_X` zostaje tak, jak je wpisano |
+| `~~tekst~~` | przekreślenie |
+| `- pozycja` | pozycja listy punktowanej |
+| `3. pozycja` | pozycja listy numerowanej, zaczynającej się od tego numeru |
+| `[etykieta](https://…)` | odnośnik — tylko `http`, `https` albo `mailto`; każdy inny adres jest czytany jako zwykłe znaki |
+| `\*`, `\_`, `\~`, `\[`, `\]`, `\\` | sam znak |
+
+Każdy wiersz jest blokiem. **HTML nigdy nie jest zapisywany**, a ekran rysuje
+tekst własnymi elementami. Tekst napisany, zanim pojawiło się formatowanie, nie
+ma tych znaczników i czyta się dokładnie tak jak wcześniej — jako zwykłe
+akapity; niczego nie migrowano. Gramatyka należy do `@endora-commerce/contracts`:
+`parseOpportunityRichText` czyta tekst jako bloki, `formatOpportunityRichText`
+zapisuje bloki z powrotem, a `opportunityRichTextToPlain` zwraca same słowa bez
+znaczników — to, co pokazuje e-mail, powiadomienie albo historia zmian.
+
+Limity długości liczą zapisany ciąg razem ze znacznikami: opis do 20 000
+znaków, notatka albo wiadomość do 10 000, opis wydarzenia do 5000.
+
+## Odwołania do produktów, zamówień, zapytań ofertowych, zadań, szans sprzedażowych i projektów
+
+Opis szansy sprzedażowej, notatka i wiadomość mogą wspominać **produkt**,
+**zamówienie**, **zapytanie ofertowe**, **zadanie**, inną **szansę
+sprzedażową** albo **projekt**. Wzmianka to znacznik w tekście:
 
 ```text
 [[product:<identyfikator produktu>]]
 [[order:<identyfikator zamówienia>]]
+[[quote_request:<identyfikator zapytania ofertowego>]]
+[[task:<identyfikator zadania>]]
+[[opportunity:<identyfikator szansy sprzedażowej>]]
+[[project:<identyfikator projektu>]]
 ```
 
-Tekst jest zapisywany i zwracany dokładnie tak, jak został napisany — jako
-zwykły tekst; nic w nim nie jest traktowane jak znaczniki HTML. Obok każdego
-takiego tekstu API zwraca `references`: jeden wpis na każdy wspomniany produkt
-lub zamówienie, w kolejności występowania, każdy raz.
+To ten sam standard odwołań, którego używają moduły Projekty i Zadania, więc
+tekst czyta się tak samo na każdym ekranie. Teksty napisane, zanim można było
+wspominać zapytania ofertowe, zadania, szanse sprzedażowe i projekty, pozostają
+bez zmian: ich znaczniki są podzbiorem powyższych.
+
+Tekst jest zapisywany i zwracany dokładnie tak, jak został napisany — jako ciąg
+znaków ze znacznikami odwołań i formatowania z sekcji *Tekst sformatowany*,
+nigdy jako HTML. Obok każdego
+takiego tekstu API zwraca `references`: jeden wpis na każdy wspomniany cel,
+w kolejności występowania, każdy raz.
 
 ```json
 {
@@ -1572,12 +1870,47 @@ lub zamówienie, w kolejności występowania, każdy raz.
 ```
 
 - `label` to **aktualna** nazwa produktu w języku czytającego albo numer
-  zamówienia — sprawdzane przy każdym odczycie tekstu, więc produkt po zmianie
-  nazwy pokazuje nową nazwę.
-- `url` to miejsce, do którego wzmianka prowadzi w Admin UI.
-- Produkt, który już nie istnieje, oraz zamówienie organizacji niedostępnej dla
-  czytającego wracają z `"available": false`, **bez nazwy i bez odnośnika**.
-  Wzmianka zostaje w tekście; nic o jej celu nie jest pokazywane.
+  zamówienia, zapytania ofertowego, zadania, szansy sprzedażowej lub projektu —
+  sprawdzane przy każdym odczycie tekstu, więc produkt po zmianie nazwy pokazuje
+  nową nazwę.
+- `url` to miejsce, do którego wzmianka prowadzi w Admin UI — `/catalog/products/…`,
+  `/orders/…`, `/quote-requests/…`, `/tasks/…`, `/crm/opportunities/…` albo
+  `/projects/…`.
+- Dostępne **zamówienie** ma także obiekt `order`: to, co czytający widzi obok
+  jego numeru.
+
+  ```json
+  {
+    "type": "order",
+    "id": "9b2e…",
+    "available": true,
+    "label": "ORD-2026-000184",
+    "url": "/orders/9b2e…",
+    "order": {
+      "status": "processing",
+      "total": "12480.00",
+      "currency": "PLN",
+      "placedAt": "2026-10-14T09:12:00.000Z",
+      "customerName": "Hurtownia Nowak sp. z o.o."
+    }
+  }
+  ```
+
+  `status` to kod statusu zamówienia, `total` — jego kwota jako ciąg dziesiętny,
+  `customerName` — firma z danych do faktury, a gdy jej nie ma, odbiorca
+  z danych do faktury; `null`, gdy nie ma żadnego z nich. Produkt, zapytanie
+  ofertowe, zadanie, szansa sprzedażowa, projekt i osoba nie mają takiego
+  obiektu.
+- Produkt, który już nie istnieje, zamówienie organizacji niedostępnej dla
+  czytającego, zapytanie ofertowe albo zadanie, które zniknęło lub którego
+  czytający nie może zobaczyć, a także zapytanie ofertowe albo zadanie, gdy moduł
+  Zapytania ofertowe albo Zadania jest wyłączony, wracają z `"available": false`,
+  **bez nazwy i bez odnośnika**. Tak samo szansa sprzedażowa, która zniknęła,
+  oraz projekt, który zniknął, którego czytający nie może zobaczyć albo którego
+  moduł jest wyłączony. Wzmianka zostaje w tekście; nic o jej celu nie jest
+  pokazywane. Zadanie jest ukryte także wtedy, gdy rekord, do którego należy —
+  na przykład projekt — jest niedostępny dla czytającego, a cudze zadanie
+  prywatne i cudzy szkic — zawsze.
 
 Znacznik, który nie jest poprawny — nieznany typ, coś, co nie jest
 identyfikatorem — jest po prostu tekstem.
@@ -1586,26 +1919,53 @@ identyfikatorem — jest po prostu tekstem.
 notatce i wiadomości (dla jej `body`). Nie ma osobnego punktu końcowego.
 
 W Admin UI pole opisu oraz pola notatki i wiadomości mają pod sobą przyciski,
-wśród nich **Wstaw zamówienie** i **Wstaw produkt**. Każdy otwiera
+wśród nich **Wstaw dokument** i **Wstaw produkt**. Każdy otwiera
 wyszukiwarkę; wybranie
 wyniku wstawia go do tekstu w miejscu kursora — **jako nazwę, nigdy jako
-znacznik**: podczas pisania pole pokazuje numer zamówienia albo nazwę produktu
+znacznik**: podczas pisania pole pokazuje numer dokumentu albo nazwę produktu
 jako małą etykietę, a znacznik jest tylko tym, co zostaje zapisane. Po zapisaniu
 tekst pokazuje w tym miejscu tę nazwę jako odnośnik, a dla celu, który zniknął
 albo którego nie możesz zobaczyć — *Produkt niedostępny* /
-*Zamówienie niedostępne* — zarówno w zapisanym tekście, jak i w polu otwartym
-do edycji; to, czego nie widzisz, jest zapisywane z powrotem bez zmian. Nazwę widzi tylko osoba, która mogłaby otworzyć sam
-cel: numer zamówienia wymaga `orders:read`, a nazwa produktu —
+*Zamówienie niedostępne* / *Zapytanie ofertowe niedostępne* /
+*Zadanie niedostępne* / *Szansa sprzedażowa niedostępna* /
+*Projekt niedostępny* — zarówno w zapisanym tekście, jak i w polu otwartym
+do edycji; to, czego nie widzisz, jest zapisywane z powrotem bez zmian. Nazwę
+widzi tylko osoba, która mogłaby otworzyć sam cel: numer zamówienia wymaga
+`orders:read`, numer zapytania ofertowego — `rfqs:handle`, numer zadania —
+`tasks:read`, numer szansy sprzedażowej — `crm:read`, numer projektu —
+`projects:read` i widoczności samego projektu, a nazwa produktu —
 `catalog:read`.
 
-Obie wyszukiwarki należą do katalogu i do modułu Zamówienia, dlatego przycisk
-*Wstaw produkt* widzi rola, która ma także `catalog:read`, a *Wstaw
-zamówienie* — rola z `orders:read`; proponowane są wyłącznie zamówienia
-organizacji tej szansy. Znacznik wpisany albo wklejony ręcznie jest zapisywany
-bez żadnego z tych uprawnień, a osobie bez uprawnienia pokazuje się jako
-niedostępny.
+**Zamówienie mówi więcej przy odczycie.** W zapisanym tekście wspomniane
+zamówienie jest pokazywane jako jego numer — odnośnik otwierający zamówienie
+w tej samej karcie, którego **Wstecz** wraca do szansy — a za nim jego status,
+kwota, data złożenia i klient (firma z danych do faktury, a gdy jej nie ma,
+odbiorca). Obok jest mała, osobna ikona — nazwana *Otwórz zamówienie
+ORD-2026-000184 w nowej karcie* po wskazaniu jej kursorem i dla czytnika
+ekranu — która otwiera je w nowej karcie.
 
-## Wspominanie osoby, zamówienia albo produktu przez @
+*Wstaw produkt* przeszukuje katalog i widzi go rola, która ma także
+`catalog:read`. *Wstaw dokument* przeszukuje **jedną listę dokumentów**,
+pogrupowaną **Zamówienia · Zapytania ofertowe · Zadania · Szanse sprzedażowe ·
+Projekty** — tę samą, którą oferują moduły Projekty i Zadania:
+
+- **Zamówienia** i **Zapytania ofertowe** wyłącznie organizacji tej szansy —
+  na formularzu tworzenia organizacji tam wybranej; bez niej żadna z tych grup
+  nie jest proponowana;
+- **Zadania** — każde, które możesz zobaczyć;
+- **Szanse sprzedażowe** — każda, po numerze albo tytule — to własne rekordy
+  tego modułu;
+- **Projekty** — każdy, który możesz zobaczyć, po numerze albo tytule;
+- każda grupa poza *Szansami sprzedażowymi* tylko dla roli, która ma także
+  uprawnienie, z jakim czyta ją jej moduł — `orders:read`, `rfqs:handle`,
+  `tasks:read`, `projects:read` — i tylko wtedy, gdy ten moduł jest włączony.
+  Rola bez żadnego z tych czterech uprawnień nie widzi przycisku, a więc nie
+  widzi też grupy *Szanse sprzedażowe*.
+
+Znacznik wpisany albo wklejony ręcznie jest zapisywany bez żadnego z tych
+uprawnień, a osobie bez uprawnienia pokazuje się jako niedostępny.
+
+## Wspominanie osoby, dokumentu albo produktu przez @
 
 Te same trzy pola — opis, notatka, wiadomość — przyjmują wzmiankę prosto z
 klawiatury:
@@ -1613,15 +1973,16 @@ klawiatury:
 | Wpisz | Aby wspomnieć | Dostępne dla |
 | --- | --- | --- |
 | `@` | **osobę** — użytkownika Admin UI, który może czytać szanse sprzedażowe | każdego, kto pisze tekst |
-| `@@` | **zamówienie** organizacji tej szansy | roli, która ma także `orders:read` |
+| `@@` | **dokument** — zamówienie albo zapytanie ofertowe organizacji tej szansy, zadanie, szansę sprzedażową albo projekt — z pogrupowanej listy opisanej wyżej | każdemu, kto pisze tekst — grupa szans sprzedażowych jest oferowana zawsze; zamówienia, zapytania ofertowe, zadania i projekty tylko roli, która ma także odpowiednio `orders:read`, `rfqs:handle`, `tasks:read` albo `projects:read` |
 | `@@@` | **produkt** | roli, która ma także `catalog:read` |
 
 Wpisz `@` na początku tekstu albo po spacji, a lista otworzy się **tam, gdzie
 piszesz** — pod tym wierszem albo nad nim, gdy poniżej nie ma miejsca; pisz
-dalej, aby ją zawęzić — imię, nazwisko, numer zamówienia, nazwa albo SKU
-produktu. **Strzałki** poruszają po liście, **Enter** albo **Tab** wybiera,
+dalej, aby ją zawęzić — imię, nazwisko, numer zamówienia, zapytania ofertowego,
+zadania, szansy sprzedażowej albo projektu, tytuł zadania, szansy albo
+projektu, nazwa albo SKU produktu. **Strzałki** poruszają po liście, **Enter** albo **Tab** wybiera,
 **Escape** zamyka ją i zostawia to, co wpisano. Wybór zastępuje `@` i litery
-po nim wzmianką — pokazywaną jako **@Tomasz Nowak**, jako numer zamówienia albo
+po nim wzmianką — pokazywaną jako **@Tomasz Nowak**, jako numer dokumentu albo
 jako nazwa produktu — a zdanie pisze się dalej:
 
 ```text
@@ -1631,21 +1992,27 @@ jako nazwa produktu — a zdanie pisze się dalej:
 **Pole pokazuje nazwy, nigdy znaczniki** — dla wzmianki właśnie wybranej i dla
 każdej, która już jest w tekście otwartym do edycji. Wzmianka zachowuje się jak
 jeden znak: strzałki ją przeskakują, a **Backspace** albo **Delete** usuwa ją w
-całości. Pole jest zwykłym tekstem — wklejana treść trafia do niego jako tekst,
-z podziałem na wiersze i bez formatowania — a **Ctrl+Z** / **Ctrl+Shift+Z**
-cofają i ponawiają zmiany, przy czym wzmianka to jeden krok. Znacznik wpisany
-albo wklejony ręcznie zamienia się w nazwę, gdy pole ją zna, a w przeciwnym
-razie zostaje taki, jak go wpisano, i jest rozpoznawany przy zapisie tekstu.
+całości. Pole jest edytorem formatowania z sekcji *Tekst sformatowany*:
+wklejona treść zachowuje tylko to formatowanie, które pole potrafi przechować,
+a **Ctrl+Z** / **Ctrl+Shift+Z**
+cofają i ponawiają zmiany, przy czym wzmianka to jeden krok. Znacznik wklejony
+w postaci tekstowej (`[[order:…]]`) staje się etykietą — z nazwą, gdy pole ją
+zna, a w przeciwnym razie jako *niedostępny*, dopóki tekst nie zostanie
+zapisany i rozpoznany; wpisany znak po znaku zostaje takimi znakami, jakie
+wpisano.
 Szybko wpisane `@@` albo `@@@` otwiera tylko tę listę, o którą chodzi;
 pojedynczy `@` otwiera listę osób po krótkiej chwili.
 
 Znak `@` w środku wyrazu — adres e-mail — niczego nie otwiera, podobnie jak
 `@`, po którym następuje spacja. Skrót, którego Twoja rola nie ma, zostawia
 znaki dokładnie tak, jak je wpisano. Wiersz pod polem wymienia skróty, które
-masz, a przycisk **Wspomnij osobę** obok *Wstaw zamówienie* i *Wstaw produkt*
+masz, a przycisk **Wspomnij osobę** obok *Wstaw dokument* i *Wstaw produkt*
 robi to samo.
 
-Wzmianka o osobie jest zapisywana tak jak dwie pozostałe, jako znacznik, i
+`@@` zastępuje swoje wcześniejsze znaczenie: przed standardem odwołań wspólnym z
+Projektami wyszukiwał wyłącznie zamówienia organizacji.
+
+Wzmianka o osobie jest zapisywana tak jak pozostałe, jako znacznik, i
 wraca w `references`:
 
 ```text
@@ -1817,9 +2184,35 @@ w formularzu tworzenia zapisują się razem z szansą.
   zapisie pól niestandardowych. Zmiana czegokolwiek innego — tytułu, wartości,
   statusu — nigdy go nie wymaga, więc pole oznaczone dziś jako wymagane nie
   blokuje pracy nad wczorajszymi szansami.
-- Szansa utworzona automatycznie nie ma wartości niestandardowych, dopóki ktoś
-  ich nie uzupełni.
+- Szansa utworzona automatycznie nie ma własnych wartości niestandardowych,
+  dopóki ktoś ich nie uzupełni — poza tymi, które przeniesiono z jej dokumentu
+  (niżej).
 - Po usunięciu pola jego wartości przestają być pokazywane.
+
+**Przenoszenie wartości między szansą a jej dokumentami.** Na ekranie **Pola
+niestandardowe** pole zamówienia lub zapytania ofertowego może mieć włączoną
+opcję **Przenoś wartość do: Szansa sprzedażowa**, a pole szansy — **Przenoś
+wartość do: Zamówienie** i **Przenoś wartość do: Zapytanie ofertowe**; pole w
+drugim rekordzie musi mieć ten sam klucz oraz zgodny typ i opcje, a pole
+wewnętrzne nie może przenosić wartości do pola widocznego dla klientów. Całą
+regułę opisuje strona modułu pól niestandardowych. Wypełniane jest tylko puste
+pole, raz, w chwili połączenia rekordów:
+
+| Kiedy | Co jest przenoszone | Komu przypisane |
+| --- | --- | --- |
+| szansa jest tworzona automatycznie dla zamówienia lub zapytania ofertowego | wartości dokumentu, do nowej szansy | systemowi, we wpisie utworzenia |
+| zamówienie złożone z powiązanego zapytania ofertowego dołącza do jego szansy | wartości zamówienia, do pustych pól szansy | systemowi, we wpisie powiązania |
+| zamówienie lub zapytanie ofertowe utworzone z poziomu szansy zostaje z nią powiązane | wartości szansy, do pustych pól dokumentu | systemowi, we własnym śladzie audytowym dokumentu; utworzenie dokumentu pozostaje przypisane administratorowi |
+
+Nic nie jest przenoszone, gdy zamówienie lub zapytanie ofertowe jest wiązane
+ręcznie — na karcie *Powiązania* albo z panelu *Powiązana szansa* dokumentu —
+ani gdy rekordy należą do różnych organizacji. Wartość, której nie da się
+przenieść, jest pomijana, szansa albo dokument i tak powstaje lub zostaje
+powiązany, a pominięcie jest zapisywane **w rekordzie, który jej nie
+otrzymał**: w *Historii zmian* szansy (zob. *Historia zmian*), jako notatka
+systemowa w komentarzach zamówienia albo w historii zapytania ofertowego. Gdy
+moduł CRM jest wyłączony, nic nie jest przenoszone i nic nie jest później
+nadrabiane.
 
 **Kto je widzi.** Wartości niestandardowe widzi każdy, kto widzi szansę, i nikt
 inny: są częścią szansy. Do wyświetlenia pól potrzebne jest także uprawnienie
@@ -1843,7 +2236,8 @@ włączenie CRM przywraca definicje i wszystkie zapisane wartości.
 
 ## Szanse sprzedażowe na ekranie organizacji
 
-Ekran organizacji kończy się panelem **Otwarte szanse sprzedażowe**: szanse
+Karta **Sprzedaż** organizacji zawiera, po handlowcach, sekcję **Otwarte szanse
+sprzedażowe**: szanse
 prowadzone z tą organizacją, które nie zostały jeszcze wygrane ani przegrane, od
 najnowszej — każda z numerem i tytułem (odnośnik do szansy), statusem i
 wartością. **Nowa szansa** otwiera formularz tworzenia z wybraną już
@@ -1855,6 +2249,8 @@ organizacją.
   listy szans.
 - Osoba ograniczona do wybranych organizacji widzi panel tylko na ekranach tych
   organizacji — tak jak każdą inną listę szans.
+- Karta Sprzedaż jest widoczna dla osoby, która może przypisywać handlowców
+  albo widzi tę sekcję, więc do jej otwarcia wystarczy samo `crm:read`.
 - Gdy CRM jest wyłączony, ekran organizacji nie pokazuje niczego z CRM — ani
   panelu, ani nagłówka, ani żadnego zapytania.
 
@@ -1864,8 +2260,8 @@ wpis pozostaje, ale bez tytułu i bez odnośnika.
 
 ## Szansa na ekranie zamówienia i zapytania ofertowego
 
-Ekran zamówienia kończy się panelem **Powiązana szansa**, niezależnie od
-otwartej karty.
+Ekran zamówienia ma w panelu bocznym, obok kart, sekcję **Powiązana szansa**,
+widoczną niezależnie od otwartej karty.
 
 - **Zamówienie powiązane z szansą** pokazuje numer i tytuł szansy (odnośnik do
   niej), jej status, przypisanego handlowca i wartość.
@@ -1882,9 +2278,10 @@ otwartej karty.
     można powiązać z ekranu samej szansy.
 - Panel widzi każdy, kto ma uprawnienie `crm:read`. Bez niego oraz przy
   wyłączonym CRM ekran zamówienia wygląda dokładnie tak jak bez modułu — bez
-  panelu, nagłówka, pustego miejsca i bez żadnego zapytania.
+  panelu, nagłówka, pustego miejsca i bez żadnego zapytania. Gdy nic innego
+  nie wypełnia panelu bocznego, ekran nie ma go wcale.
 
-**Ekran zapytania ofertowego kończy się takim samym panelem**, dla zapytania
+**Panel boczny ekranu zapytania ofertowego zawiera taki sam panel**, dla zapytania
 ofertowego: pokazuje szansę, z którą jest ono powiązane, albo — osobie z
 `crm:write` — *Powiąż z szansą* i *Utwórz szansę*, które niosą zapytanie
 ofertowe zamiast zamówienia. Kto jest na tym ekranie, ma `rfqs:handle`, którego
@@ -1905,9 +2302,10 @@ tworzenia przyjmuje w adresie `linkDocumentKind=order` albo `quote_request` i
 `linkDocumentId=<id dokumentu>` obok `organizationId`.
 
 Dla autorów modułów: panel jest wkładem CRM do stref Admin UI
-`order.detail.after` i `quote_request.detail.after`, które osadzają moduły
-Zamówienia i Zapytania ofertowe i do których może wnosić każdy moduł. Żaden z
-nich nie importuje CRM ani nie deklaruje od niego zależności.
+`order.detail.sidebar` i `quote_request.detail.sidebar`, a sekcja organizacji —
+do strefy `organization.detail.sales`; osadzają je moduły Zamówienia, Zapytania
+ofertowe i Organizacje i może do nich wnosić każdy moduł. Żaden z nich nie
+importuje CRM ani nie deklaruje od niego zależności.
 
 ## Własna logika przy zmianie statusu
 
@@ -1985,26 +2383,26 @@ jest oferowane jako webhook.
 ## Odczyt i zmiana statusu szansy z innego modułu
 
 Dla programistów. Inny moduł albo nakładka wdrożenia pracuje z szansami przez
-dwa opublikowane porty — nigdy przez tabele ani klasy CRM. Oba typy eksportuje
-`@endora-commerce/contracts`.
+opublikowane porty — nigdy przez tabele ani klasy CRM: `opportunityReadPort`
+do odczytu i `opportunityCommandPort` do zapisu (zobacz *Zapisy po stronie
+serwera* niżej). Ich typy eksportuje `@endora-commerce/contracts`.
 
 | Nazwa w kontenerze | Typ | Co robi |
 | --- | --- | --- |
-| `opportunityReadPort` | `OpportunityReadPort` | `findById(id)`, `findByDocument(kind, documentId)` i `listOpenForOrganization(organizationId)`. Każda zwraca zwykłe wartości `OpportunityRecord` — id, numer, tytuł, organizację, kod i rodzaj statusu, osobę przypisaną, wartość, walutę, daty — albo `null` / pustą listę. |
-| `opportunityTransitionPort` | `OpportunityTransitionPort` | `applyStatus({ opportunityId, to, actor, reason? })` przeprowadza szansę przez skonfigurowany przepływ, razem ze strażnikami i zdarzeniami, i zwraca wynik jako wartość. |
+| `opportunityReadPort` | `OpportunityReadPort` | `findById(id)`, `findByIds(ids)`, `findByDocument(kind, documentId)`, `listOpenForOrganization(organizationId)` i `search({ q, limit })` (numer lub tytuł, najwyżej 20). Każda zwraca zwykłe wartości `OpportunityRecord` — id, numer, tytuł, organizację, kod i rodzaj statusu, osobę przypisaną, wartość, walutę, daty — albo `null` / pustą listę. `statusName(code, language)` nazywa status tak jak ekrany CRM: jego nazwą w tym języku, a w razie jej braku nazwą domyślną albo kodem. `listNotes({ organizationId?, authorAdminUserId?, createdFrom?, createdBefore?, cursor?, limit })` wypisuje notatki zapisane przy szansach, od najstarszej, stronami po najwyżej 100 — zobacz *Odczyt notatek* niżej. |
+| `opportunityTransitionPort` | `OpportunityTransitionPort` | **Przestarzały od 0.113.0, usuwany w 0.114.0.** `applyStatus({ opportunityId, to, actor, reason? })` wywołuje teraz `opportunityCommandPort.transition(opportunityId, { to, reason })` i zwraca ten sam wynik; przekazany `actor` nie jest już odczytywany. |
 
 ```ts
-import type { OpportunityTransitionPort } from '@endora-commerce/contracts';
+import type { OpportunityCommandPort } from '@endora-commerce/contracts';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 
-const opportunities = lazyPort<OpportunityTransitionPort>(ctx, 'opportunityTransitionPort');
+const opportunities = lazyPort<OpportunityCommandPort>(ctx, 'opportunityCommandPort');
 
-const outcome = await opportunities.applyStatus({
+const outcome = await opportunities.transition(
   opportunityId,
-  to: 'won',
-  actor: { kind: 'system' },
-  reason: 'Contract signed in the ERP',
-});
+  { to: 'won', reason: 'Contract signed in the ERP' },
+  { source: 'erp' },
+);
 if (!outcome.applied && outcome.reason !== 'already_there') {
   // 'not_found' | 'unknown_status' | 'not_permitted' | 'vetoed', with `detail`
 }
@@ -2020,17 +2418,104 @@ if (!outcome.applied && outcome.reason !== 'already_there') {
 - **Odczyty i zmiany działają w zakresie organizacji wywołującego.** Wywołujący
   ograniczony do wybranych organizacji nie odczyta ani nie przesunie szansy
   innej organizacji.
+- **Odczyt notatek.** `listNotes` zwraca `{ items, nextCursor }`. Każdy element
+  to `OpportunityNoteRecord`: `id` notatki, jej `opportunityId`,
+  `organizationId` szansy, `author` (`id` i `name`), `body` w zapisanej postaci,
+  `createdAt` i `editedAt`. Każdy filtr jest opcjonalny, a filtry się łączą:
+  organizacja, autor i czas utworzenia od `createdFrom` (włącznie) do
+  `createdBefore` (bez tej chwili). Następną stronę pobierasz, przekazując
+  `nextCursor` strony jako `cursor`; na ostatniej stronie jest `null`. Port
+  wypisuje wyłącznie notatki — nigdy wewnętrznych wiadomości ani usuniętych
+  notatek — i tylko przy szansach, do których sięga zakres organizacji
+  wywołującego, więc przedstawiciel handlowy czyta notatki organizacji ze
+  swojego zakresu. Kursor, którego port nie wydał, albo niepoprawna data
+  kończą się odmową `422 VALIDATION_FAILED`. Port nie sprawdza uprawnień:
+  zapytaj o `crm:read` sam, zanim go wywołasz.
 - **Zadeklaruj zależność w manifeście.** Moduł, który nie może działać bez CRM,
   wpisuje `crm` w `dependencies`. Moduł, który może, wpisuje go w
   `nonBindingDependencies` z `kind: 'degrades-without'`, nazwą portu i zdaniem
   `whenAbsent`, które operator przeczyta przed wyłączeniem CRM.
-- **Gdy CRM jest wyłączony, oba porty odmawiają**: pobranie któregokolwiek
+- **Gdy CRM jest wyłączony, każdy port odmawia**: pobranie któregokolwiek
   rzuca `ModuleDisabledError` (HTTP `503 MODULE_DISABLED`). Nie otaczaj
   wywołania gołym `catch` — moduł, który ma działać dalej, pyta najpierw
   `effectiveState.isPresent('crm')`.
 
 Aby reagować na zmianę statusu, a nie ją wywoływać, subskrybuj zdarzenia albo
 zarejestruj strażnika — opisuje to sekcja o własnej logice przy zmianie statusu.
+
+## Zapisy po stronie serwera
+
+Dla programistów. Inny moduł, moduł nakładki albo proces integracyjny
+(konektor CRM lub ERP) zapisuje szansę przez **`opportunityCommandPort`**, port
+zapisu szansy, zadeklarowany jako `OpportunityCommandPort` w
+`@endora-commerce/contracts`. Pobieraj go przy każdym użyciu przez
+`lazyPort<OpportunityCommandPort>(ctx, 'opportunityCommandPort')`, z `crm` w
+`dependencies` manifestu modułu wywołującego (albo w `nonBindingDependencies` z
+`kind: 'refuses-without'`).
+
+| Metoda | Akcja audytu | Co w panelu robi to samo |
+| --- | --- | --- |
+| `create(input, options?)` | `crm.opportunity.create` | `POST /api/v1/admin/crm/opportunities` |
+| `update(id, patch, options?)` | `crm.opportunity.update` | `PATCH /api/v1/admin/crm/opportunities/:id` |
+| `setCustomFieldValues(id, merge, options?)` | `crm.opportunity.update` | `PATCH /api/v1/admin/crm/opportunities/:id` z samym `customFieldValues` |
+| `assign(id, { adminUserId }, options?)` | `crm.opportunity.assign` | `POST /api/v1/admin/crm/opportunities/:id/assign` |
+| `transition(id, { to, reason? }, options?)` | `crm.opportunity.transition` | `POST /api/v1/admin/crm/opportunities/:id/transition` |
+| `setTags(id, { tagIds }, options?)` | `crm.opportunity.tag_set` | `PUT /api/v1/admin/crm/opportunities/:id/tags` |
+| `link(id, { documentKind, documentId, syncStatus? }, options?)` | `crm.opportunity.link_add` | `POST /api/v1/admin/crm/opportunities/:id/links` |
+| `unlink(id, linkId, options?)` | `crm.opportunity.link_remove` | `DELETE /api/v1/admin/crm/opportunities/:id/links/:linkId` |
+| `addComment(id, { kind, body }, options?)` | `crm.opportunity.note_add`, `crm.opportunity.message_add` | `POST /api/v1/admin/crm/opportunities/:id/comments` |
+| `delete(id, options?)` | `crm.opportunity.delete` | `DELETE /api/v1/admin/crm/opportunities/:id` |
+
+**Jedna ścieżka zapisu.** Każda metoda uruchamia to samo polecenie (Command) co
+endpoint panelu, tym samym kodem, więc oba zapisy nie mogą się różnić: jeden
+wpis audytu z tym samym stanem, te same zdarzenia i te same dalsze kroki —
+powiadomienie osoby przypisanej i osób wspomnianych, przeliczenie wartości po
+zmianie powiązania albo po przejściu na wartość wyliczaną. Zmiana statusu
+uruchamia strażników, prosi powiązane zamówienia o podążenie za szansą i
+ogłasza zmianę, dokładnie tak jak z panelu. Dane wejściowe to ciała żądań
+endpointów, walidowane w tych samych granicach; dane poza nimi kończą się
+odmową `422 VALIDATION_FAILED`. Odmowy to błędy endpointów z ich kodami
+(`404 CRM_OPPORTUNITY_NOT_FOUND`, `422 CRM_ASSIGNEE_INVALID`,
+`422 CUSTOM_FIELD_VALUE_INVALID`, `409 CRM_DOCUMENT_ALREADY_LINKED` i własne
+kody każdej operacji), z jednym wyjątkiem: **`transition` zwraca odmowę jako
+wartość**, wynik pokazany wyżej, więc sprzeciw strażnika to `vetoed` z jego
+zdaniem, a nie błąd. Metody zmieniające szansę zwracają jej `OpportunityRecord`
+razem z wartościami pól własnych; `link` zwraca powiązanie, a `addComment`
+notatkę albo wiadomość.
+
+**Wartości pól własnych.** `setCustomFieldValues` przekazuje twojej funkcji
+`merge` kopię bieżących wartości, gdy szansa jest zablokowana, i zapisuje to, co
+funkcja zwróci. Waliduj wewnątrz niej przez `CustomFieldValuePort.validateAndMerge`;
+CRM nie waliduje za ciebie, a odmowa, którą rzucisz, niczego nie zapisuje.
+
+**Kto zapisał.** Autorem jest bieżący kontekst, nigdy parametr: administrator
+w żądaniu panelu albo w `withSystemScopeActingFor`; aktor **systemowy** w
+`withSystemScope` w procesie w tle. Zmiana statusu bez administratora jest
+zapisywana z przyczyną *system*. **Notatka i wiadomość potrzebują autora**, więc
+`addComment` bez administratora kończy się odmową `403 FORBIDDEN`; proces w tle
+zapisuje ją w `withSystemScopeActingFor`. Port nie sprawdza uprawnień — to
+wywołujący jest bramką — więc nigdy nie pobieraj go dla trasy dostępnej
+klientowi. Wywołuj go po własnym zatwierdzeniu transakcji: każde wywołanie jest
+osobną transakcją.
+
+**Opcje** (ostatni parametr każdej metody):
+
+- `source` — kod pisany małymi literami, nazywający integrację (`erp`,
+  `crm.connector`, najwyżej 64 znaki), zapisywany jako `source` we wpisie
+  audytu obok aktora. Każda inna wartość kończy się odmową
+  `422 VALIDATION_FAILED`, zanim cokolwiek zostanie odczytane lub zapisane.
+  Historia zmian szansy go nie pokazuje; dziennik audytu tak.
+- `expectedVersion` — `version` szansy, którą odczytałeś. `update` go
+  przestrzega, tak jak `If-Match` w panelu, i odmawia zapisu szansy, która się
+  zmieniła, kodem `409 VERSION_CONFLICT`. Pozostałe metody go pomijają.
+- `extensions` — żaden zapis CRM nie jest zadeklarowany jako dostępny dla
+  hooków, więc każdy klucz kończy się odmową `422 COMMAND_EXTENSION_UNCLAIMED`,
+  zanim cokolwiek zostanie odczytane lub zapisane.
+
+**Czego port nie oferuje**: załączników, wydarzeń i ich przypomnień, ponawiania
+ani odrzucania zmiany zamówienia, której odmówiono, przeliczania wartości ani
+tego, czy powiązane zamówienie podąża za szansą. Przepływ, tagi i mapowania
+statusów zamówień to konfiguracja, a nie część szansy.
 
 ## Włączanie i wyłączanie
 
@@ -2096,6 +2581,7 @@ której się wybiera.
 | `GET /api/v1/admin/crm/lookups/mentionable?q=…&organizationId=…` | `crm:write` | Aktywni administratorzy z uprawnieniem `crm:read` — osoby, które można wspomnieć w tekście: `id`, `name`. |
 | `GET /api/v1/admin/crm/lookups/contacts?organizationId=…&q=…` | `crm:write` | Członkowie jednej organizacji widocznej dla pytającego: `id`, `name`, `email`. |
 | `GET /api/v1/admin/crm/lookups/quote-requests?organizationId=…&q=…` | `crm:write` i `rfqs:handle` | Zapytania ofertowe jednej organizacji widocznej dla pytającego, które można powiązać: otwarte oraz to, którego numer wpisano w całości. `id`, `number`, `status`. Gdy moduł Zapytania ofertowe jest wyłączony, odpowiedzią jest `503`. |
+| `GET /api/v1/admin/crm/lookups/documents?opportunityId=…&q=…` | `crm:write` | Lista dokumentów pod `@@`: `{ "groups": [{ "kind": "order" \| "quote_request" \| "task" \| "opportunity" \| "project", "items": [{ "id", "label", "sublabel"? }] }] }`, najwyżej dziesięć w grupie, w tej kolejności. Zamówienia i zapytania ofertowe organizacji szansy (`organizationId=…` zamiast tego, zanim szansa powstanie); zadania, szanse sprzedażowe i projekty widoczne dla pytającego, z tytułem w `sublabel`. Grupa `opportunity` jest obecna zawsze; każda inna tylko dla pytającego z odpowiednio `orders:read`, `rfqs:handle`, `tasks:read` albo `projects:read` i tylko wtedy, gdy jej moduł jest włączony. Szansa niedostępna dla pytającego daje `404`. Ten sam kształt co `GET /api/v1/admin/projects/lookups/documents` modułu Projekty. |
 
 Waluty proponowane przy tworzeniu szansy to te, w których sprzedają aktywne
 kanały sprzedaży.
@@ -2120,7 +2606,7 @@ wyłącznie po angielsku.
 | `crm.enabled` | włączone | Przełącznik opisany powyżej. |
 | `crm.auto_create_from_orders` | wyłączone | Każde zamówienie złożone od tej chwili dostaje własną szansę. Ustawienie może być różne dla kanałów sprzedaży; decyduje kanał zamówienia. |
 | `crm.auto_create_from_quote_requests` | wyłączone | Każde zapytanie ofertowe utworzone od tej chwili — przesłane przez klienta albo przygotowane przez administratora — dostaje własną szansę. Wymaga włączonego modułu Zapytań ofertowych. |
-| `crm.board_card_fields` | numer, organizacja, wartość, handlowiec, etykiety | Pola widoczne na karcie na tablicy, w kolejności, jako lista odwołań do pól. Zmieniaj je w sekcji **Karta na tablicy** na ekranie **CRM → Statusy i przepływ**, która proponuje istniejące pola, a nie tutaj. |
+| `crm.board_card_fields` | numer, organizacja, wartość, handlowiec, etykiety | Pola widoczne na karcie na tablicy, w kolejności, jako lista odwołań do pól. Zmieniaj je na karcie **Karta na tablicy** ekranu **CRM → Konfiguracja**, która proponuje istniejące pola, a nie tutaj. |
 
 Wydarzenia, przypomnienia i kalendarz nie dodają żadnego ustawienia. E-mail z
 przypomnieniem zmienia się i wyłącza na ekranie **Maile transakcyjne**, pod
@@ -2150,15 +2636,11 @@ Rzeczy, których operator może szukać, a których w tym wydaniu nie ma:
 - **Wydarzenia bez szansy** — kalendarz osobisty.
 - **Synchronizacja z innym kalendarzem.** Nie ma synchronizacji z Google
   Calendar ani z Outlookiem i nie ma eksportu iCalendar.
-- **Odnośnik w e-mailu z przypomnieniem.** E-mail wskazuje szansę jej
-  numerem; odnośnik do niej ma wpis w dzwonku.
 - **Ustawienie strefy czasowej.** Kalendarz podąża za przeglądarką każdej
   osoby.
 - **Wydarzenia w innych miejscach modułu.** Wydarzenia nie są oferowane
   webhookom wychodzącym, nie pojawiają się w analityce i nie są polem karty na
   tablicy.
-- **Wyszukiwanie globalne.** Szanse znajduje się na ich liście i tablicy, a nie
-  przez wyszukiwarkę Admin UI.
 - **Zysk.** Każdy wskaźnik jest wartością; kosztów ani marży nie ma.
 
 ## Dane demonstracyjne

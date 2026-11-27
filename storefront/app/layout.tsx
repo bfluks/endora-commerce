@@ -16,6 +16,8 @@ import { CheckoutHeader } from '../components/checkout/CheckoutHeader';
 import { HeaderSwitch } from '../components/HeaderSwitch';
 import { getActiveMegamenu } from '../lib/api/megamenu';
 import { getServerContext } from '../lib/server-context';
+import { LocalePathProvider } from '../lib/i18n/localized-link';
+import { localizePath } from '../lib/i18n/locale-path';
 import { blockPresenceOf } from '../lib/page-builder/presence';
 import { BlockRenderScope } from '../components/BlockRenderScope';
 import { siteUrl } from '../lib/seo/site-url';
@@ -23,7 +25,14 @@ import { StorefrontDocument } from '../lib/theme/StorefrontDocument';
 import { fetchDictionary } from '../lib/dictionary/client';
 import { DictionaryProvider } from '../lib/dictionary/DictionaryProvider';
 import { getCartItemCount } from '../lib/api/cart';
-import { getMe } from '../lib/api/account';
+import { getUnreadNotificationCount } from '../lib/api/customer-notifications';
+import { format } from '../lib/i18n/format';
+import { getMe, type MeResult } from '../lib/api/account';
+import { StorefrontApiError } from '../lib/api/client';
+import { getSalesChannelAccess } from '../lib/api/sales-channel';
+import { signOutAction } from '../lib/actions/sign-out';
+import { ChannelAccessDenied } from '../components/ChannelAccessDenied';
+import { redirect } from 'next/navigation';
 import { getSpeculationRulesConfig } from '../lib/api/speculation-rules';
 import { getGoogleAnalyticsConfig } from '../lib/api/analytics-config';
 import { GoogleAnalytics } from '../components/analytics/GoogleAnalytics';
@@ -39,6 +48,7 @@ import { ConsentBanner } from '../components/analytics/ConsentBanner';
 import { CookieConsentMessage } from '../components/analytics/CookieConsentMessage';
 import { getAnonCartCookie, getSessionCookie } from '../lib/session';
 import { headers } from 'next/headers';
+import { isSecretBearingPath } from '../lib/analytics/secret-paths';
 import { DEFAULT_STOREFRONT_THEME_CODE } from '../lib/theme/instance-themes';
 import { UNAVAILABLE_HEADER } from '../lib/service-unavailable';
 import {
@@ -81,18 +91,64 @@ async function defaultRobotsDirective(): Promise<RobotsDirective | null> {
 }
 
 /**
+ * Who is signed in, and whether this store serves them
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §4).
+ *
+ * The identity read is the one call of every page that answers for the buyer
+ * rather than for the store, so it is where a refusal of the buyer is met:
+ *
+ *  - `not_permitted` — the account's Organization may not use this store. The
+ *    page is replaced by `ChannelAccessDenied`; every read under it would be
+ *    refused.
+ *  - `sign_in_required` — the store is closed to anonymous visitors and the
+ *    session cookie no longer names a customer. The middleware let the cookie
+ *    through; the buyer is sent to sign in again rather than shown a shop built
+ *    from refused reads.
+ *
+ * Any other failure is the signed-out state, as it always was: the header must
+ * render whatever the identity read did.
+ */
+interface ViewerRead {
+  me: MeResult | null;
+  refusal: 'not_permitted' | 'sign_in_required' | null;
+}
+
+async function readViewer(session: string): Promise<ViewerRead> {
+  try {
+    return { me: await getMe(session), refusal: null };
+  } catch (err) {
+    if (err instanceof StorefrontApiError && err.code === 'SALES_CHANNEL_NOT_PERMITTED') {
+      return { me: null, refusal: 'not_permitted' };
+    }
+    if (err instanceof StorefrontApiError && err.code === 'SALES_CHANNEL_SIGN_IN_REQUIRED') {
+      return { me: null, refusal: 'sign_in_required' };
+    }
+    return { me: null, refusal: null };
+  }
+}
+
+/**
  * `metadataBase` is what makes every route's `alternates.canonical` a **path**
  * (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-012). The deployment's origin
  * is declared once, here; a route that spelled its own absolute URL would go on
  * naming the old origin after a move, with nothing to notice.
+ *
+ * The default title and description are in the page's language (issue #85).
+ * During an outage the language comes from the request alone, as the layout's
+ * bare-document branch takes it: every backend read would fail.
  */
-export const metadata: Metadata = {
-  metadataBase: siteUrl(),
-  title: 'B2B Platform',
-  description:
-    'A B2B commerce platform supporting Quote Requests and direct purchase for business customers.',
-  manifest: '/manifest.webmanifest',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = (await isUnreachableBackendRender())
+    ? await outageLocale()
+    : (await getServerContext()).locale;
+  const t = tForLocale(locale);
+  return {
+    metadataBase: siteUrl(),
+    title: t('chrome.layout.title'),
+    description: t('chrome.layout.description'),
+    manifest: '/manifest.webmanifest',
+  };
+}
 
 /**
  * Feature 044 — the mobile experience uses fixed top/bottom chrome (bottom
@@ -152,8 +208,11 @@ export default async function RootLayout({
     );
   }
 
-  const { config, locale, currency, ctx, theme, modules } = await getServerContext();
+  const { config, locale, currency, ctx, theme, modules, brandTokens, urlState } = await getServerContext();
   const t = tForLocale(locale);
+  // `specs/181-guest-complaints/` design review F-2 — the guest's tracking and verification
+  // pages carry a bearer token in their address: no third-party tag is loaded on them.
+  const trackers = !isSecretBearingPath((await headers()).get('x-pathname'));
   // Feature 036 US5 — checkout uses a minimal, logo-only header. The full vs
   // minimal switch is decided per-route by the <HeaderSwitch> client component
   // (`usePathname`), because this Server-Component layout is NOT re-run on
@@ -169,12 +228,13 @@ export default async function RootLayout({
     megamenu,
     dictionary,
     cartItemCount,
-    me,
+    viewer,
     speculation,
     gaConfig,
     linkedInConfig,
     metaConfig,
     gtmConfig,
+    sessionUnread,
   ] = await Promise.all([
     getActiveMegamenu(ctx),
     fetchDictionary({ ctx }),
@@ -182,8 +242,9 @@ export default async function RootLayout({
     // swallows all errors and returns 0 on the worst case.
     session || anon ? getCartItemCount(cartJar) : Promise.resolve(0),
     // Header user pill. Best-effort — a missing/expired session must render the
-    // signed-out state, never crash the layout, so swallow all errors → null.
-    session ? getMe(session).catch(() => null) : Promise.resolve(null),
+    // signed-out state, never crash the layout. A channel refusal is the one
+    // failure it acts on (see `readViewer`).
+    session ? readViewer(session) : Promise.resolve<ViewerRead>({ me: null, refusal: null }),
     // Speculation Rules toggle (Settings module). Best-effort — defaults to
     // enabled + 'moderate' on any read error.
     getSpeculationRulesConfig(),
@@ -197,7 +258,25 @@ export default async function RootLayout({
     // Feature 066 — per-channel Google Tag Manager config, same best-effort
     // contract again.
     getGoogleTagManagerConfig(ctx),
+    // `specs/179-rfq-and-customer-notifications/` FR-051 — the account entry's
+    // unread count, beside the cart count: only with a session and while the
+    // centre is present. Never blocks the render — a failed read is 0, logged.
+    // Re-rendered by the centre's writes (`revalidatePath('/', 'layout')`); no polling.
+    session && modules.isPresent('customer_notifications')
+      ? getUnreadNotificationCount(session, ctx.salesChannelCode, ctx.locale)
+      : Promise.resolve(0),
   ]);
+  const me = viewer.me;
+  // Read beside the identity, counted only for a buyer the identity read confirmed.
+  const unreadNotificationCount = me ? sessionUnread : 0;
+  if (viewer.refusal === 'sign_in_required') {
+    // Feature 167 — `x-pathname` is the logical path; the visitor comes back to it
+    // under the current prefix, through the prefixed session-expired page.
+    const pathname = (await headers()).get('x-pathname') ?? '/';
+    redirect(localizePath(`/session-expired?next=${encodeURIComponent(localizePath(pathname, urlState))}`, urlState));
+  }
+  // Asked only on a refusal: it is the viewer's own answer and is never cached.
+  const access = viewer.refusal === 'not_permitted' ? await getSalesChannelAccess(ctx) : null;
   return (
     // <html lang> + <html data-theme>. Both are server-stamped: the locale for
     // crawlers, the theme because the channel's token set has to be in the
@@ -208,8 +287,14 @@ export default async function RootLayout({
     // carries `data-theme-requested` when the channel named a theme this
     // storefront does not have, and deriving that inside the component is what
     // stops a caller from forgetting it (feature 102).
-    <StorefrontDocument lang={locale} theme={theme}>
+    // `brandTokens` (feature 163): the channel's brand as `<style id="cmsb">` in
+    // the head, server-rendered so the first paint is already on brand.
+    // `locale` is the path language (feature 167, FR-022): `<html lang>` follows the URL.
+    <StorefrontDocument lang={locale} theme={theme} brandTokens={brandTokens}>
       {robotsDefault !== null ? <meta name="robots" content={robotsDefault} /> : null}
+      {/* Feature 167 — every link below gets the current language's prefix through
+          `LocalizedLink` / `useLocalizedPath`, which read this. */}
+      <LocalePathProvider value={urlState}>
       {/* Feature 141 — every Page Builder tree below renders the installed
           modules' blocks under one presence answer: the modules the backend
           reports as not present, resolved once here. */}
@@ -253,9 +338,9 @@ export default async function RootLayout({
                   cartItemCount={cartItemCount}
                   megamenu={megamenu}
                   user={me}
-                  {...(ctx.salesChannelCode !== undefined
-                    ? { salesChannelCode: ctx.salesChannelCode }
-                    : {})}
+                  salesChannelCode={ctx.salesChannelCode}
+                  modules={modules}
+                  unreadNotificationCount={unreadNotificationCount}
                 />
                 <Hook code="header.bottom" />
               </>
@@ -269,27 +354,49 @@ export default async function RootLayout({
             <CartMergeToast />
             {/* Feature 046 — PWA install prompt + push opt-in. Both render to
                 null unless supported and enabled (graceful degradation). */}
-            <InstallPrompt />
-            <PushOptIn />
+            <InstallPrompt locale={locale} />
+            <PushOptIn locale={locale} />
             <Hook code="page.top" />
-            <RouteTransition>{children}</RouteTransition>
+            {viewer.refusal === 'not_permitted' ? (
+              <ChannelAccessDenied locale={locale} access={access} signOut={signOutAction} />
+            ) : (
+              <RouteTransition>{children}</RouteTransition>
+            )}
             <Hook code="page.bottom" />
           </main>
           {/* Footer is shown on every route, including checkout (the buyer
               still needs the legal/support links). */}
           <Hook code="footer.before" />
           <Footer
+            locale={locale}
+            modules={modules}
             top={<Hook code="footer.top" />}
             bottom={<Hook code="footer.bottom" />}
             copyright={<Hook code="footer.copyright" />}
           />
           <Hook code="footer.after" />
-          {/* Feature 044 / US1 — fixed bottom tab bar (md:hidden). Renders on
-              every route; the body reserves its height on the mobile band so
-              it never covers content (globals.css). */}
+          {/* Feature 044 / US1 — fixed bottom tab bar, shown up to 876px like
+              the compact header (feature 179, WP-09a). Renders on every route;
+              the body reserves its height while it is shown so it never covers
+              content (globals.css). */}
           <MobileTabBar
             cartItemCount={cartItemCount}
+            present={{
+              quoteRequests: modules.isPresent('quote_requests'),
+              quickOrder: modules.isPresent('quick_order'),
+            }}
+            {...(unreadNotificationCount > 0
+              ? {
+                  accountUnread: {
+                    count: unreadNotificationCount,
+                    label: format(t('chrome.header.accountUnread'), {
+                      count: unreadNotificationCount.toLocaleString(locale),
+                    }),
+                  },
+                }
+              : {})}
             labels={{
+              navigation: t('chrome.mobileTabBar.label'),
               home: t('nav.home'),
               quoteRequest: t('nav.quoteRequest'),
               quickOrder: t('nav.quickOrder'),
@@ -299,25 +406,31 @@ export default async function RootLayout({
           />
         </div>
       </DictionaryProvider>
-      <PwaRegister />
+      <PwaRegister locale={locale} />
       <SpeculationRules enabled={speculation.enabled} eagerness={speculation.eagerness} />
-      {/* Feature 049 — Google Analytics 4. Renders nothing for untracked
-          channels; page views are emitted per navigation by the provider. */}
-      <GoogleAnalytics config={gaConfig} />
-      <AnalyticsProvider config={gaConfig} />
-      <LinkedInInsightTag config={linkedInConfig} />
-      <MetaPixel config={metaConfig} />
-      {/* Feature 066 — the operator's GTM container plus the client-side
-          bootstrap for the platform's own dataLayer vocabulary. */}
-      <GoogleTagManager config={gtmConfig} />
-      <GtmProvider config={gtmConfig} />
+      {trackers ? (
+        <>
+          {/* Feature 049 — Google Analytics 4. Renders nothing for untracked
+              channels; page views are emitted per navigation by the provider. */}
+          <GoogleAnalytics config={gaConfig} />
+          <AnalyticsProvider config={gaConfig} salesChannelCode={ctx.salesChannelCode} />
+          <LinkedInInsightTag config={linkedInConfig} />
+          <MetaPixel config={metaConfig} />
+          {/* Feature 066 — the operator's GTM container plus the client-side
+              bootstrap for the platform's own dataLayer vocabulary. */}
+          <GoogleTagManager config={gtmConfig} locale={locale} />
+          <GtmProvider config={gtmConfig} salesChannelCode={ctx.salesChannelCode} />
+        </>
+      ) : null}
       {/* The prompt is owed whenever any enabled integration on the channel
           requires consent — not only Google Analytics (FR-015). */}
       <ConsentBanner
         platforms={[gaConfig, linkedInConfig, metaConfig, gtmConfig]}
         message={<CookieConsentMessage ctx={ctx} />}
+        locale={locale}
       />
       </BlockRenderScope>
+    </LocalePathProvider>
     </StorefrontDocument>
   );
 }

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ERROR_CODES,
+  isUuidShape,
   MFA_SETTING_CODES,
   AdminModulePresenceResponseSchema,
   ModuleActivationRequestSchema,
@@ -9,7 +10,15 @@ import {
   ModuleListQuerySchema,
   ModuleListResponseSchema,
   apiInterceptorListSchema,
+  CommandHookPlanResponseSchema,
+  CommandOutboxListQuerySchema,
+  CommandOutboxListResponseSchema,
+  CommandOutboxRetryParamsSchema,
+  CommandOutboxRetryResponseSchema,
   type AdminModulePresenceResponse,
+  type CommandHookPlanResponse,
+  type CommandOutboxListResponse,
+  type CommandOutboxRetryResponse,
   type ApiInterceptorList,
   type MfaDeactivationGuardPort,
   type MfaEnrolmentCountPort,
@@ -19,6 +28,9 @@ import {
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '../commands/index.js';
 import type { ApiInterceptorRegistry } from '../http/interceptors/index.js';
+import type { CommandHookRegistry } from '../commands/hooks/registry.js';
+import { listCommandOutbox, makeRetryCommandOutboxCommand } from '../commands/outbox/admin.js';
+import type { EntityManager } from '@mikro-orm/postgresql';
 import { HttpError } from '../http/error-envelope.js';
 import type { ModuleLifecycleOrchestrator } from './services/orchestrator.js';
 import { effectiveState, toModulePresenceDto } from '../kernel/lifecycle/effective-state.js';
@@ -29,6 +41,7 @@ import {
   type ActivationPropagation,
 } from './commands/activation.commands.js';
 import type { RequireAdminFactory } from '../kernel/ports/require-admin.js';
+import { localizeModuleListItem, type ModuleBundleTranslate } from './module-text.js';
 
 /**
  * Read-only admin surface for the lifecycle subsystem (feature 018 / E-1).
@@ -53,6 +66,11 @@ const toPresenceDto = toModulePresenceDto;
 export interface LifecycleAdminDeps {
   orchestrator: ModuleLifecycleOrchestrator;
   requireAdmin: RequireAdminFactory;
+  /**
+   * Issue #1809 — each module's own bundle, for its name, description and lock
+   * reason in the reader's language. Absent: the manifests' English.
+   */
+  translate?: ModuleBundleTranslate;
 }
 
 export async function registerLifecycleAdminRoutes(
@@ -78,7 +96,10 @@ export async function registerLifecycleAdminRoutes(
       if (query.flag) {
         modules = modules.filter((m) => m.flags.includes(query.flag!));
       }
-      return { modules };
+      const language = await request.responseLanguage();
+      return {
+        modules: await Promise.all(modules.map((m) => localizeModuleListItem(m, language, deps.translate))),
+      };
     },
   );
 }
@@ -102,8 +123,9 @@ export interface ModulePresenceAdminDeps {
   mfaEnrolmentCount: MfaEnrolmentCountPort;
   /**
    * `mfa`'s answer to "is a second factor required of administrators right
-   * now?", asked before `mfa` is switched off. Resolved lazily like the count;
-   * unlike the count, a failed read refuses the switch-off.
+   * now?" — by the setting or by a role's flag — asked before `mfa` is switched
+   * off. Resolved lazily like the count; unlike the count, a failed read
+   * refuses the switch-off.
    */
   mfaDeactivationGuard: MfaDeactivationGuardPort;
 }
@@ -114,10 +136,17 @@ export interface ModulePresenceAdminDeps {
  *
  * Off means no second factor at all (D-96), so the switch-off would take the
  * administrator requirement with it in one step, as a side effect of a module
- * toggle. The requirement is a setting of its own (`mfa.admin.totp_enforced`)
- * and is turned off first, as its own change; the switch-off then goes through
- * exactly as before. Voluntary enrolments do not block it — the deactivation
- * dialog shows how many there are (D-96.5).
+ * toggle. The requirement has two sources since issue #349 — the setting
+ * `mfa.admin.totp_enforced` and any admin role whose `requiresTwoFactor` is
+ * set — and each is turned off first, as its own change; the switch-off then
+ * goes through exactly as before. Voluntary enrolments do not block it — the
+ * deactivation dialog shows how many there are (D-96.5).
+ *
+ * The refusal names what to turn off. `details.roleCodes` is the list a client
+ * reads; `details.roles` is the same list as text for the sentence, and
+ * `details.code` is the token that picks the sentence
+ * (`errors.MFA_DEACTIVATION_BLOCKED.<token>`): none when the setting alone
+ * requires it, which keeps the sentence it always had.
  *
  * Asked only while `mfa` is present: the port is read through an open gate,
  * and a module that is already off has no requirement left to protect. Only
@@ -129,15 +158,36 @@ export async function assertMfaMayBeSwitchedOff(
   guard: MfaDeactivationGuardPort,
 ): Promise<void> {
   if (moduleId !== 'mfa' || active || !effectiveState.isPresent('mfa')) return;
-  if (await guard.isAdminSecondFactorRequired()) {
+  const setting = MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED;
+  const requirement = await guard.requirement();
+  const roleCodes = [...requirement.roleCodes];
+  if (!requirement.setting && roleCodes.length === 0) return;
+  if (roleCodes.length === 0) {
     throw new HttpError(
       409,
       ERROR_CODES.MFA_DEACTIVATION_BLOCKED,
       'Two-factor authentication cannot be switched off while administrators are required to ' +
-        `use it. Turn off "${MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED}" first, then switch the module off.`,
-      { moduleId, setting: MFA_SETTING_CODES.ADMIN_TOTP_ENFORCED },
+        `use it. Turn off "${setting}" first, then switch the module off.`,
+      { moduleId, setting, roleCodes },
     );
   }
+  const roles = roleCodes.join(', ');
+  const turnOff = requirement.setting
+    ? `"${setting}" and the two-factor requirement of the roles ${roles}`
+    : `the two-factor requirement of the roles ${roles}`;
+  throw new HttpError(
+    409,
+    ERROR_CODES.MFA_DEACTIVATION_BLOCKED,
+    'Two-factor authentication cannot be switched off while administrators are required to ' +
+      `use it. Turn off ${turnOff} first, then switch the module off.`,
+    {
+      moduleId,
+      setting,
+      roleCodes,
+      roles,
+      code: requirement.setting ? 'setting_and_role_requirement' : 'role_requirement',
+    },
+  );
 }
 
 /**
@@ -207,6 +257,16 @@ export function registerModulePresenceRoutes(
     },
     async (request): Promise<ModuleDeactivationImpact> => {
       const moduleId = request.params.id;
+      // An id neither the registry nor a manifest knows has no deactivation to
+      // describe — the activation write's answer for it (issue #793). Unchecked,
+      // it reached the response schema, whose module-id pattern turned it into a 500.
+      if (!effectiveState.presence(moduleId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.MODULE_NOT_FOUND,
+          `No module "${moduleId}" is registered on this deployment.`,
+        );
+      }
       if (moduleId !== 'mfa' || !effectiveState.isPresent('mfa')) {
         return { moduleId, activeSecondFactorUsers: null };
       }
@@ -297,5 +357,79 @@ export function registerApiInterceptorAdminRoutes(
         moduleEnabled: deps.registry.isModuleEnabled(item.module),
       })),
     }),
+  );
+}
+
+export interface CommandHookAdminDeps {
+  registry: CommandHookRegistry;
+  requireAdmin: RequireAdminFactory;
+}
+
+/**
+ * `specs/176-command-hooks-outbox/` FR-026 — the read-only execution plan for
+ * command hooks, the interceptor screen's sibling: every action a composed
+ * module declares hookable, and every registered hook at its position, with
+ * `moduleEnabled` read live from the effective state. Hooks are shipped module
+ * code, so there is no write surface. Behind `platform.modules.read`, as the
+ * interceptor plan is.
+ */
+export function registerCommandHookAdminRoutes(app: FastifyInstance, deps: CommandHookAdminDeps): void {
+  app.get(
+    '/api/v1/admin/command-hooks',
+    {
+      preHandler: deps.requireAdmin('platform.modules.read'),
+      schema: { response: { 200: CommandHookPlanResponseSchema } },
+    },
+    async (): Promise<CommandHookPlanResponse> => deps.registry.plan(),
+  );
+}
+
+export interface CommandOutboxAdminDeps {
+  requireAdmin: RequireAdminFactory;
+  commandBus: CommandBus;
+  /** A fresh EntityManager for a read; the retry runs on the Command's own. */
+  em: () => EntityManager;
+}
+
+/**
+ * `specs/176-command-hooks-outbox/` FR-040 — the operator surface over
+ * `command_outbox`: the rows by status, and the retry of a dead one.
+ *
+ * The list is behind `platform.command_outbox.read` and never returns a row's
+ * `data` (`../commands/outbox/admin.ts`). The retry is behind
+ * `platform.command_outbox.manage` and runs as the audited Command
+ * `command_outbox.retry` (Principle XIII): `404` for an unknown id,
+ * `409 COMMAND_OUTBOX_NOT_DEAD` for a row that is not dead.
+ */
+export function registerCommandOutboxAdminRoutes(app: FastifyInstance, deps: CommandOutboxAdminDeps): void {
+  app.get(
+    '/api/v1/admin/command-outbox',
+    {
+      preHandler: deps.requireAdmin('platform.command_outbox.read'),
+      schema: {
+        querystring: CommandOutboxListQuerySchema,
+        response: { 200: CommandOutboxListResponseSchema },
+      },
+    },
+    async (request): Promise<CommandOutboxListResponse> =>
+      listCommandOutbox(deps.em(), CommandOutboxListQuerySchema.parse(request.query)),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/command-outbox/:id/retry',
+    {
+      preHandler: deps.requireAdmin('platform.command_outbox.manage'),
+      schema: {
+        params: CommandOutboxRetryParamsSchema,
+        response: { 200: CommandOutboxRetryResponseSchema },
+      },
+    },
+    async (request): Promise<CommandOutboxRetryResponse> => {
+      const { id } = CommandOutboxRetryParamsSchema.parse(request.params);
+      // A value that is not a uuid names no row: the unknown id's own `404`,
+      // before the database sees it (issue #1269).
+      if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `No command outbox row "${id}".`);
+      return { item: await deps.commandBus.run(makeRetryCommandOutboxCommand(id)) };
+    },
   );
 }

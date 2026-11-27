@@ -1,5 +1,1494 @@
 # @endora-commerce/mod-quote-requests
 
+## 0.112.0
+
+### Minor Changes
+
+- 074f500: Admin zone contributions now choose a tab or a sidebar by naming the zone for that place (issues #1452 and #1526). Four zones are new: `organization.detail.sales` is the body of the organization's Sales tab, after the sales representatives, and carries `{ organizationId }` with no save session; `order.detail.sidebar`, `quote_request.detail.sidebar` and `opportunity.detail.sidebar` are sidebar cards, and each contribution is a section of the card. The order and quote request screens draw their sidebar only while something fills it. The organization's Sales tab is shown to someone who may assign sales representatives or who sees one of its panels. CRM opportunities and projects moved from the organization's Commerce tab to its Sales tab. The linked opportunity, the project and the tasks moved from the end of the order, quote request and opportunity screens into their sidebars. No zone was removed or renamed: contributions to the `.detail.after` zones keep working unchanged.
+- bfab5bd: **Breaking:** `GET /api/v1/admin/quote-requests` now answers one page instead of every quote request. The server applies `assignmentScope`, `organizationId`, `status`, `q` (a fragment of the business id, the organization name or the customer's name, or a whole id), `sort` (`updatedAt:desc` by default, `updatedAt:asc`, `total:desc`, `total:asc`) and the page (`page`, default 1; `pageSize`, default 25, at most 200). The `pagination` block is now true for the response: it adds `page`, `pageSize` and `total`, and `limit` and `hasMore` describe the page returned (`nextCursor` stays `null`; ask for the next `page`). An invalid `pageSize`, `page`, `sort`, `assignmentScope` or `organizationId` is refused with 400.
+
+  To migrate, a client that read the whole list from one call must page through it with `page` and `pageSize`, or read `pagination.total` when it only needs the count. The contracts publish the query and the envelope as `adminQuoteRequestListQuerySchema` and `adminQuoteRequestListResponseSchema`.
+
+  `SalesRepAssignmentPort` gains `listOrganizationIdsWithAssignments()`; an implementation of the port outside this repository must add it. The admin Quote Requests list now asks the server for each page, filter and sort, and offers a lowest-total sort. The home page's pending-quotes tile and the project link picker read the paged list.
+
+### Patch Changes
+
+- c878440: Un-awaited Promises found by the typed lint rules now enabled for the whole repository (issue #1027) are awaited, handled or marked as deliberate fire-and-forget. No behaviour changes:
+
+  - `resumeWorkersFor` no longer awaits BullMQ's synchronous `Worker.resume()`; the API interceptor pre-handler is typed as Fastify's async hook.
+  - The breakpoint video hook ignores a refused autoplay through `Promise.resolve(video.play()).catch(...)`.
+  - Admin screens wrap async form and button handlers in `void` (each handler catches its own errors), and the admin-search matchers of catalog, orders and quote requests are typed as returning `unknown`, because a Knex builder is thenable.
+
+- e78d27d: Admin screens show translated labels (EN and PL) where they used to show raw codes:
+
+  - Quote requests: the status badge in the list and the detail, the status filter and its chips. The status keys are now `rfq.status.<value>` in the `core` catalogue, which replace the unused `rfq.list.statusFilter.<value>` keys. `rfq.list.statusFilter.all` stays.
+  - Cart detail: the actor, the action and both states in the history feed (`carts.audit.actor.*`, `carts.audit.actionLabel.*`).
+  - Customer detail: the status of each order, quote request and cart in the history panels, and the address kind.
+  - Availability notifications: the status badge. Asset detail: the kind of each record that references the asset.
+
+  Technical values are gone from the order, quote request and cart screens. The order and quote request detail headers no longer repeat the UUID next to the copyable business ID. The order detail names the delivery and payment methods instead of showing their codes. When the Organization or customer details are missing, it says so instead of printing a UUID (`orderDetail.org.unavailable`, `orderDetail.customer.unavailable`). The carts list starts each row with the cart's owner, linked to the cart, instead of the first eight characters of its UUID. The cart detail header names the owner and the Organization, and an anonymous owner is now labelled "Guest" (`carts.owner.anonymous`). The `carts.column.id` key is removed.
+
+- 988436f: Sales admin screens drop the page descriptions that repeated their title or addressed developers (issue #1436, UX audit 2026-11-17, DS-02). The Orders, Customers, Returns, Quote requests, Carts and Organizations lists, the order and quote-request create screens, Order statuses, Return statuses, Payment methods, Credit limits, the promotion editor, Promotion statistics, Order on behalf, New organization, Change tax ID and Convert to company no longer show a description. The payment and delivery method Integrations cards drop their one-line intro.
+
+  Kept descriptions are now one line: Return delivery methods ("A return cost of 0 means the shop pays for the return."), Delivery methods ("Price changes don't affect orders already placed."), Promotion rules, Online customers and Customer groups ("A customer's own group overrides their organization's."). New organization says that members are invited from the organization's page beside its Save, as `create.hint.inviteMembers`.
+
+  Translation keys removed from both `en` and `pl`: `core` `orders.page.description`, `orderCreate.description`, `orderStatusConfig.description`, `rfq.list.description`, `rfqCreate.description`, `organizations.page.description`, `returns.description`, `returns.statuses.description`, `legacyMethods.payment.description`, `legacyMethods.integrations.description`, `legacyMethods.integrations.shippingDescription`, `creditLimits.page.description`, `promotions.edit.description`, `promotionStats.description`, and the unused `rfq.detail.convert.description` and `rfq.detail.approveDescription`; customers `list.description`; carts `carts.page.description`; quick_order `onBehalf.page.description`; organizations `create.description`, `changeTaxId.page.description` and `convertToCompany.page.description`. A deployment that overrides one of these keys can drop the override.
+
+- 932821f: Editor panels render as sections of the card they sit in, not as cards inside it (issue #1437, UX audit DS-03).
+
+  New in `@endora-commerce/admin-kit/ui`: `EditorSection`, a heading (`h2` by default, `as` like `CardTitle`), an optional one-line `description`, an `action`, and a rule between consecutive sections. It has a `chrome` prop: `'section'` (the default) or `'card'` for a section that stands alone on a page. Also new: `EditorSectionChromeProvider`, `useEditorSectionChrome`, and the types `EditorSectionChrome`, `EditorSectionHeading`, `EditorSectionProps` and `EditorSectionChromeProviderProps`. `Section` now renders through `EditorSection` without the divider; it looks and reads as before.
+
+  **Breaking visual change for modules (0.x, so released as a minor):**
+
+  - `CustomFieldValuesPanel` no longer draws its own `Card`. It renders as a section of the host's card. A panel mounted on its own, between cards, must pass `chrome="card"` to keep its card: `<CustomFieldValuesPanel chrome="card" … />`. It also takes `titleAs` (`'h3'` inside a titled card).
+  - `RecordHistory` and `CommentThread` list their entries as rows divided by a rule instead of a bordered box per entry. Both take `chrome="card"` to draw a titled card around themselves.
+  - `<AdminZone>` takes `chrome`. A contribution built on `EditorSection` renders as a section by default, and as a card of its own under `<AdminZone … chrome="card" />`. Use that prop for a zone mounted at page level. A contribution that draws its own `Card` is unchanged.
+
+  The CRM, Projects, Tasks, quote-request and quick-order panels contributed to the order, quote-request, opportunity, task, organization and customer screens are now built on `EditorSection`. Those screens mount their zones with `chrome="card"`, so the panels look as they did. The custom-field panels on the customer, organization, order-create, quote-request-create, opportunity-create, project-create and task screens keep their card. Project stages, template stages and project-create members are listed as divided rows.
+
+- 28181ed: One card implementation with density tokens (issue #1438, UX audit DS-04; SHELL-18 #1502). This
+  changes how every admin card looks, including the cards third-party modules render.
+
+  - `theme.css` declares `--card-pad` (16px), `--card-pad-sm` (12px), `--card-gap` (16px),
+    `--section-gap` (24px), `--fs-page-title` (20px), `--fs-section-title` (14px) and `--fs-hint`
+    (12px). A client can redeclare them after the import like any other token.
+  - `Card`, `CardHeader`, `CardContent` and `CardFooter` pad with `--card-pad` (16px) instead of
+    `p-6` (24px). `CardContent` drops its top padding only when it follows a `CardHeader`, so a
+    card without a header no longer needs `className="pt-6"`. Every part carries a `data-slot`.
+  - `CardTitle` renders an `h2` by default and takes `as` (`h2`–`h6`, or `div` to stay out of the
+    heading outline); its size is `--fs-section-title` (14px, was 16px). A `CardTitle` that wrapped
+    its own `<h2>` now nests a heading in a heading: pass the `id` to `CardTitle` and drop the inner
+    element. A test that found a card title with `getByText` still does; one that counted headings
+    now counts the card titles too.
+  - `<Card flush>` removes the content padding and clips the corners, for a table that runs to the
+    card's edge. New types: `CardProps`, `CardTitleProps`, `CardTitleElement`.
+  - `.b2b-card`, `.b2b-card--clickable` and `.b2b-card__head` / `__title` / `__sub` / `__body` /
+    `__body--flush` / `__foot` are **deprecated** but still published; they read the same tokens.
+    The only visible change there is the header's vertical padding, 14px to 12px. Use `Card`.
+
+  Every module's card call sites drop the `pt-6` workaround and the redundant `text-base` on
+  `CardTitle`, and the 14 titles that wrapped their own `<h2>` carry the `id` themselves.
+
+- 61bdc2a: The order and quote-request detail screens draw their sections with the kit's `RecordTabs` instead of hand-written tab strips (issue #1445, UX audit DS-12). The strip is named ("Order sections", "Quote request sections"). Only the selected tab is in the tab order. ←/→ move between tabs and select them, Home/End jump to the first or last tab, and every tab is linked to its panel. The ids are `order-detail-tab-*` / `order-detail-tabpanel` and `rfq-detail-tab-*` / `rfq-detail-tabpanel`. The quote request's Modify draft still stays mounted across tab switches.
+
+  `TabItem` gains `unsaved?: string`. It draws a dot after the label and adds the words to the tab's accessible name, so the colour is never the only signal. The Modify tab now uses it.
+
+  The status-graph toolbar's Connect toggle and its layout buttons, and the order-create address source buttons (saved or new), now report their state with `aria-pressed`. The layout buttons are a group named "Layout". New copy: `core` `orderStatusConfig.graph.layout`, `orders` `detail.tabs.label`, `quote_requests` `detail.tabs.label`, in English and Polish.
+
+- 58ae62f: The quote-request detail keeps the Modify (negotiation) draft across tab switches (issue #1469, UX audit SALES-03). The Modify card stays mounted while the other tabs are shown, its tab carries an "unsaved changes" mark, and while the draft differs from the stored request Approve, Prepare the customer's basket and the PDF export and send wait — they act on the stored revision — with a note that says so and leads back to the tab. A link away asks Save / Discard / Stay through the kit's unsaved-changes guard, and a reload after a save no longer blanks the screen. New `core` copy: `rfq.detail.modify.unsaved.body|blocked|open`, `rfq.detail.tabs.modifyUnsaved`, in English and Polish.
+- e9af4f0: The bulk order-status dialog, the order-status delete confirmation, the quote-request cancel dialog, the organization moderation reason dialog and the credential configuration preview are the kit's `ModalDialog` / `ConfirmDialog` instead of hand-drawn overlays (issue #1474, SALES-09; #1444): each is named by its title, holds focus and returns it to the control that opened it, and closes on Escape. The bulk status dialog opens with no status chosen each time and announces a failure inside the dialog; the cancel dialog keeps a typed reason on a stray click on the scrim and shows a refused cancellation inside the dialog; the moderation reason field has a visible label, is marked required for a rejection, and a refusal is announced inside the dialog; the delete confirmation opens on _Cancel_; the credential preview's button reads _Close_.
+- 89dc3b1: Screen readers now read the admin's visible labels, in the admin's language, instead of developer ids (issue #1475). Before, some controls had an `aria-label` that replaced their visible label, such as `customerNote`, `select-all` or `deliveryAddress-street`.
+
+  - **New order** and **new quote request**: the customer, sales channel, payment and delivery method pickers, the customer note and the new-address fields are now named by their labels through `FormField`. Each address side is a group named "Delivery address" or "Billing address", and its saved-address picker carries the same name.
+  - **Order detail**: the comment box has a visible label, "Add a comment".
+  - **Orders** and **Returns** lists: the selection checkboxes read "Select all orders on this page" and "Select order ORD-…", with the returns equivalents.
+  - **Order statuses**: the edit and delete icon buttons read "Edit status …" and "Delete status …". The actions column has a hidden heading, and the delete confirmation is named by its title.
+
+  A new lint rule (`no-restricted-syntax` in the root `eslint.config.js`, admin sources only) rejects an `aria-label` or `ariaLabel` written as a camelCase or hyphenated id. The two sites left in the catalog attribute manager are tracked in #1590.
+
+  Tests that found these controls by their developer ids now find them by their accessible name, or by `id` where two controls share a name.
+
+- 998ac87: Banners that appear as the result of an action keep being announced now that the kit's `Alert` no longer interrupts for every variant (issue #1484). A refused or partly rejected action (activating a price book, a stale price-book save, a taxonomy revision, quick-order lines, quote-request lines unavailable on the channel) is announced at once, and so is the shell's notice to an administrator without a role. An import, undo, PDF or save result, a template-preview verdict, a brand contrast warning, a changed refund method, the organization-attribution scope notice and the information notices after an action are announced politely. Static banners present when a page loads, such as the modules screen's degraded-mode warning or a quote request's lapsed validity, are shown but no longer announced as an interruption.
+- 7329865: The order, invoice, quote request, organization and customer detail screens and the promotion editor no longer replace the whole page with "Loading…" when they re-read their record after an action (issue #1496, UX audit SALES-06). The first load shows a skeleton of the page; a status change, a payment change, a custom-field save, an approve or cancel, a regenerated PDF or a member change keeps the page, its open tab, the scroll position and the focus on screen and marks the content `aria-busy` while it re-reads. A first load that fails now shows its error and a Retry button instead of "not found", and the promotion editor no longer shows an empty form over a promotion it could not read. On the organization screen a member change refused as stale now keeps its explanation on screen after the re-read. New string: `orderDetail.errors.load` (en, pl).
+- 447e829: The order and quote-request headers have one primary action (issue #1497, UX audit SALES-12).
+
+  - `@endora-commerce/admin-kit/components`: `DetailHeaderActions` takes `moreBusy`, which disables the "More" trigger, marks it `aria-busy` and shows a spinner while an entry of the menu runs. An entry that opens a dialog (a `useConfirmDialog` question, a `ModalDialog`) now runs only after the menu has given focus back to its trigger, as `RowActionMenu` already did, so the dialog keeps focus and returns it to "More" when it closes. Before, focus went back to the trigger behind the dialog.
+  - `@endora-commerce/mod-orders`: on the order detail, **Issue invoice** is the one filled button while the order has no invoice, and the header has no primary once it has one. **Reorder**, **Clone to quote**, the **Invoice PDF** download and a repeat **Issue invoice** are in the "More" menu. While one of these requests runs, every header action is disabled and the control that started it shows a spinner, so a double press no longer sends the request twice.
+  - `@endora-commerce/mod-quote-requests`: on the quote-request detail, the next step of the status is the one filled button: **Approve** on a Pending request, **Prepare the customer's basket** on an Approved one, none otherwise. **Export PDF**, **Send PDF** and **Cancel RFQ** are in the "More" menu, with Cancel last, after a separator. **Approve** now asks for confirmation first, because it locks the agreed prices and notifies the customer.
+  - `@endora-commerce/mod-i18n`: `core`'s `rfq.detail.approveConfirm.title` and `rfq.detail.approveConfirm.message`, in English and Polish.
+
+- 0eae592: Sales screens draw no frame inside a card (UX audit SALES-13, #1498). On the order detail, the comments tab lists the comments as rows divided by a rule. The quote-request history tab does the same with its entries. Neither draws a bordered box per item any more. On order create, a new address's fields sit in the Parties card with no frame around them. The order's comment and note boxes use the kit `Textarea`.
+- 2040ae9: Action results beside the control that caused them, and at most one banner above a detail screen (issue #1499, UX audit SALES-17; owner decision DEC-12 a).
+
+  - `@endora-commerce/admin-kit/components`: `DetailHeaderActions` takes `status` — normally `useInlineStatus().props` — and mounts an always-present polite `InlineStatus` before the header's buttons, so the last header action's result is said there. Given `status`, the group renders even when the record has no action left. `@endora-commerce/admin-kit/ui`: `InlineStatus` gains a `warning` tone (icon and warning colour) for a result that went through only in part.
+  - `@endora-commerce/mod-quote-requests`: the quote-request detail no longer stacks up to six banners. Approve, Cancel, the customer's basket, the PDF outcome and a copied number are said beside the header's buttons; a stored revision in the Modify save bar. The cancellation reason leads the header's meta line. Above the tabs there is at most one banner: an error, else the lapsed deadline with its remedy, else the unsaved draft — the last only away from the Modify tab, where the save bar already says "Unsaved changes".
+  - `@endora-commerce/mod-orders`: Issue invoice (a warning when the e-mail was not sent), Reorder, Clone to quote and a copied order number are said beside the header's buttons. A status or payment-status change adds no banner: the control announces it and its badge shows it.
+  - `@endora-commerce/mod-organizations`: "Saved" and the results of the header's dialogs are said beside the header's buttons, a member write right above the Members section.
+  - `@endora-commerce/mod-i18n`: `core`'s `rfq.detail.validity.lapsed.remedyEditable` and `remedyLocked` shortened to one sentence; `orderDetail.messages.orderMoved` and `orderDetail.messages.paymentMoved` removed.
+
+- fc7f669: The six sales lists now have one shape (issue #1500, UX audit SALES-24). Each is the kit `ListPage` with the kit `ListToolbar`, so the toolbar is a named `search` landmark in a plain row, not a card. Below it is one results card that holds the bulk bar, the table and the pager. The kit `EmptyState` tells "nothing here yet" apart from "nothing matches these filters", and the second one offers _Clear filters_.
+
+  - **Orders**: _New order_ is in the header for an operator holding `orders:write`. The toolbar, bulk-bar and results cards are now one card. While rows are selected, the bulk _Change status_ button is outline, so _New order_ stays the one filled primary. Each row has a menu with _Change status…_ and _Print invoice_ for that one order, plus _Open organization_. The pager offers only the page sizes the endpoint serves.
+  - **Quote requests**: the hand-built toolbar, filter toggle and chips are replaced by the kit toolbar, so the advanced filters sit behind _More filters (n)_. Each row's menu has _Open organization_.
+  - **Returns**: the four configuration links (workflow, reasons, return methods, clauses) are one _Settings_ menu next to _Export CSV_. The search is no longer listed as a chip. _Clear all filters_ empties the search too. When a case has an order, its row menu has _Open order_.
+  - **Customers**, **Organizations**, **Carts**: these use the kit toolbar and the kit empty state. Each filter is named by its label, and its first option says what it is ("All statuses"). Customers and Carts rows have _Open organization_.
+
+  Removed unused translation keys: `orders.open`, `orders.loading`, `orders.empty`, `rfq.list.open`, `rfq.list.loading`, `rfq.list.filter.toggle`, `rfq.list.filter.clearAll`, `returns.loading`, `returns.empty`, `returns.action.open`, `returns.filter.clearAll`, `organizations.filter.all` (core); `list.search.chip` (returns); `list.clearFilters` and `list.filter.all` (customers); `list.clearFilters` (organizations); `carts.clearFilters` and `carts.filter.all` (carts). The admin-kit README documents how the two compose.
+
+- df16345: The Settings screen shows less on every row (UX audit SHELL-09, SHELL-23). A row no longer carries a value-type badge, a source badge or a "Default … · 0 per-channel overrides" footer: one muted line appears only when the value in force differs from the default or channels override it. A changed row is marked by a bar at its edge, a switched-off module's group states its read-only reason once, the "Editing for" channel picker sits in the toolbar beside the search, and the hard-coded "system" group badge is gone. Single-line controls sit to the right of the setting's name.
+
+  A setting's description is now at most 120 characters (`check:text-budget`), with the long explanations left to each module's documentation page, and it never falls back to another language: in Polish the screen shows the Polish description or none. Every module that declares settings now ships `settingLabels.<code>.name` and `.description` in English and Polish, so the screen no longer shows English names in Polish. Where a manifest declared one of the shortened descriptions, its `description` is the same shorter sentence.
+
+- 229856d: The Modify tab of the admin quote request is easier to scan (issue #1542). Its title, which repeated the tab name, is gone: the tab now holds two sections, _Terms_ (header note and validity) and _Lines_. The first line column reads "Product" and names each line's product picker, and the reference price and the typed price's difference from it share one cell ("120.00 PLN · −16.67 %"), so a line has seven columns instead of eight. The price-negotiation panels on the organization and customer screens have shorter descriptions and read-only hint.
+
+  In the `core` bundle, `rfq.detail.modify.productId` is renamed `rfq.detail.modify.product`, `rfq.detail.modify.title` is removed, and `rfq.detail.modify.referenceDifference`, `rfq.detail.modify.section.terms` and `rfq.detail.modify.section.lines` are new. A deployment that overrides the old keys must rename or drop them.
+
+- 306a659: The back link above an admin page title now names the screen it leads to, in the words that screen uses for its own title — _Organizations_, _Price books_, _CMS pages_ — instead of _Back to organizations_, _All warehouses_, _Back to list_ or a bare _Back_ (follow-up of issue #1549). A generic _Back_ remains only where a screen was opened from somewhere else and leads back there. The rule is described under `PageHeader` in the admin-kit README.
+
+  The back-only translation keys these screens no longer read are removed: `categoryEditor.backToTree` and `postEditor.backToList` (blog), `bulkOperations.detail.back` and `categoryContent.action.back` (catalog), `common.back` (cms, megamenu), `detail.backToList` (comparisons), `entry.back` (forms), `priceBooks.common.backToList` (price lists), `detail.back` (returns), and `inventory.import.back`, `warehouses.editor.backToList`, `organizations.detail.back` and `rfqCreate.back` (core bundle). A deployment that overrides one of them overrides the destination screen's title key instead. `taxIdScope.back` (organizations) and `productContent.action.back` (catalog, now the fallback while the product name loads) keep their keys with new text; `runs.detail.feedFallback` (product feeds) is new.
+
+- bfc21d3: Shorter admin copy on the order, quote-request, organization, promotion, invoice and return screens (UX audit text-to-cut pass, issue #1567):
+
+  - Removed lines that repeated what the screen already shows: the description on the invoices list, the line under the customer's price-negotiation override, the line above the default payment / delivery / address fields, and the description of the organization's Roles section.
+  - Shortened to one line: the read-only note on price negotiation, the warehouse-precedence hint, the order-confirmation e-mails hint, the parent-organization hint, the empty sales-reps note, the sales-channel hints on order and quote-request creation, the saved-rule copy hint on promotions, and the pending-effects notice on an order.
+  - Shortened notices: the "carrier not contacted" shipment notice and the "different refund method" warning on a return.
+
+  Removed translation keys (EN and PL): `invoices.description`, `defaultPreferences.description` (core bundle), `negotiation.customer.description` (quote requests), `roles.tab.description` (organizations). A theme or overlay that overrode them can drop the override.
+
+- 0686447: Always pass the admin UI language to `formatDate(value, language)` and `formatDateTime(iso, language)` (`@endora-commerce/admin-kit/lib`), taking it from `useTranslationContext()` or `useAppLanguage()` (`@endora-commerce/admin-kit/i18n`). **Upgrade note:** calling either without a language is now `@deprecated`. It still falls back to the browser's locale, but that fallback will be removed in a later release, so `formatDateTime(order.placedAt)` should become `formatDateTime(order.placedAt, language)` now. The kit's field-protection summary reads the language without requiring `AppLanguageContext`, so an integration zone rendered without it keeps working.
+
+  Every admin date now goes through them, so a screen no longer mixes `17.11.2026`, `11/25/2026` and `Nov 22, 2026`: the lists, detail pages and panels of every module that called `formatDateTime` without a language, and the screens that called `toLocaleDateString` / `toLocaleString` directly (the CRM board card, the Projects stage bar and templates list, the Organization sales reps tab — which wrote every date in Polish — the blog post editor, comparisons, the dictionaries audit, display-mode overrides, the feed schedule's next run, the online-customers refresh time, the product list's update date, and the kit's comment thread, record history, field-protection summary and order reference). `endora new module` scaffolds its list's date the same way.
+
+- 5fb3cd3: Six small Admin defects from the demo click-through are fixed (issue #1808).
+
+  - The Inventory stock overview shows each product's name in the Product column, not its SKU.
+  - Custom-field labels are shown in the admin's language. A host that does not set the language (order, customer and organization detail, among others) used to show a Polish operator the field's default label, which may be its code.
+  - The "New channel" button no longer reads "+ + New channel". The blog category tree's "Add subcategory" button and the quote's "Add line" button show a plus icon instead of a typed "+".
+  - On the opportunities list the two filters say what they filter: "Open and closed" (the outcome) and "All workflow statuses" (the stage in the workflow). The Number and Organization columns stay on one line; a long organization name is cut with an ellipsis.
+  - The product editor's low-stock threshold placeholder reads "Inherited" and fits its input. The help text under it still explains the inheritance.
+  - The newsletter subscriber search shows "Search by e-mail" in the box.
+
+- 9eee781: The Admin UI in Polish no longer shows four kinds of text in English (issue #1809).
+
+  - **Order statuses** are named in the admin's language on the Orders list, the order detail, the bulk status dialog and the Order statuses screen. The names were always stored per language; the screens read the English one.
+  - **CMS hooks**: the 23 seeded hooks, such as "Search Page Bottom", are named and described in the admin's language until an operator renames them. A renamed or custom hook keeps the operator's text.
+  - **Transactional e-mails**: each e-mail's name, description and the reason it cannot be switched off come from the sending module's bundle (`transactionalEmails.<code>.name`, `.description`, `.reason`), in the language the response is read in.
+  - **Platform → Modules**: each module's name, description and the reason it cannot be switched off come from the module's own bundle (`module.name`, `module.description`, `module.nonDeactivatableReason`). `GET /api/v1/admin/modules` gains an optional `nonDeactivatableReason` field on each row. `auth`, `currencies`, `email` and `languages` now ship translation bundles.
+
+  Each of these falls back to the English declared in code when a bundle has no entry. `endora new module` now writes `module.description` into the scaffolded bundles.
+
+- 8cd03b3: A re-submitted quote request draws its number from the business-id generator like any other request. It used to keep the entity's `QR-<uuid>` placeholder, which then appeared in the admin notifications, the request lists, its PDF and its e-mails.
+
+  **Behaviour change on upgrade.** A migration gives every request still named by a `QR-<uuid>` placeholder a number from the sequence, oldest first, wrapped in the configured prefix and suffix. Numbers that are not the placeholder are never touched. Texts already rendered from a placeholder — sent e-mails, downloaded PDFs, stored notification titles — keep it.
+
+- Updated dependencies [c878440]
+- Updated dependencies [c878440]
+- Updated dependencies [65f9a7b]
+- Updated dependencies [3fdbe86]
+- Updated dependencies [bfc68c7]
+- Updated dependencies [9eaa409]
+- Updated dependencies [d908737]
+- Updated dependencies [1042e2a]
+- Updated dependencies [3872f3d]
+- Updated dependencies [bbfcd80]
+- Updated dependencies [41b598c]
+- Updated dependencies [f5b8275]
+- Updated dependencies [467b075]
+- Updated dependencies [a56109e]
+- Updated dependencies [84b89ed]
+- Updated dependencies [b2cd2d3]
+- Updated dependencies [e5b17ae]
+- Updated dependencies [e78d27d]
+- Updated dependencies [596ce81]
+- Updated dependencies [b2b41eb]
+- Updated dependencies [932821f]
+- Updated dependencies [28181ed]
+- Updated dependencies [c15eb60]
+- Updated dependencies [33db45a]
+- Updated dependencies [cec9beb]
+- Updated dependencies [d4bda8d]
+- Updated dependencies [8e7684c]
+- Updated dependencies [87fb9c3]
+- Updated dependencies [998ac87]
+- Updated dependencies [d0a6c2c]
+- Updated dependencies [35e0829]
+- Updated dependencies [3f66b6f]
+- Updated dependencies [61bdc2a]
+- Updated dependencies [649d662]
+- Updated dependencies [38adf84]
+- Updated dependencies [7329865]
+- Updated dependencies [84ed7b6]
+- Updated dependencies [1064839]
+- Updated dependencies [d2d9d79]
+- Updated dependencies [f687479]
+- Updated dependencies [074f500]
+- Updated dependencies [7624db6]
+- Updated dependencies [cec9beb]
+- Updated dependencies [7be07f6]
+- Updated dependencies [2614e4f]
+- Updated dependencies [90320fd]
+- Updated dependencies [bb21b86]
+- Updated dependencies [79a17a3]
+- Updated dependencies [3dab0be]
+- Updated dependencies [e22b612]
+- Updated dependencies [cb75825]
+- Updated dependencies [a4455db]
+- Updated dependencies [f3b2ec8]
+- Updated dependencies [f093a02]
+- Updated dependencies [d5a077f]
+- Updated dependencies [86b9b39]
+- Updated dependencies [42febee]
+- Updated dependencies [447e829]
+- Updated dependencies [2040ae9]
+- Updated dependencies [fc7f669]
+- Updated dependencies [40b76aa]
+- Updated dependencies [eeed5c8]
+- Updated dependencies [63a657b]
+- Updated dependencies [0ecb287]
+- Updated dependencies [9a27b93]
+- Updated dependencies [2f0b69f]
+- Updated dependencies [87b9b60]
+- Updated dependencies [50d451b]
+- Updated dependencies [98c0411]
+- Updated dependencies [9f4eae3]
+- Updated dependencies [a8261aa]
+- Updated dependencies [f64646d]
+- Updated dependencies [306a659]
+- Updated dependencies [7ea72af]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [bfbcac2]
+- Updated dependencies [ee6062c]
+- Updated dependencies [820f089]
+- Updated dependencies [f33ffed]
+- Updated dependencies [4e668b5]
+- Updated dependencies [843ed42]
+- Updated dependencies [0d4c134]
+- Updated dependencies [3f7b5ae]
+- Updated dependencies [b98739c]
+- Updated dependencies [6155f4b]
+- Updated dependencies [bdcc9a4]
+- Updated dependencies [7b8006e]
+- Updated dependencies [5850aac]
+- Updated dependencies [c042024]
+- Updated dependencies [8a5725e]
+- Updated dependencies [ed3feda]
+- Updated dependencies [99042ee]
+- Updated dependencies [52d0617]
+- Updated dependencies [f915a24]
+- Updated dependencies [8688a1f]
+- Updated dependencies [95e5082]
+- Updated dependencies [31c0430]
+- Updated dependencies [0686447]
+- Updated dependencies [691414b]
+- Updated dependencies [8a06dc5]
+- Updated dependencies [e118ee4]
+- Updated dependencies [5fb3cd3]
+- Updated dependencies [9eee781]
+- Updated dependencies [bd47236]
+- Updated dependencies [bd47236]
+- Updated dependencies [79d15cf]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [398e6d2]
+- Updated dependencies [51c5072]
+- Updated dependencies [0e81803]
+- Updated dependencies [2e287a5]
+- Updated dependencies [fbc6c7c]
+- Updated dependencies [9d6f006]
+- Updated dependencies [49328cf]
+- Updated dependencies [b3d4843]
+- Updated dependencies [f74fe34]
+- Updated dependencies [19eb7c0]
+- Updated dependencies [0fbf186]
+- Updated dependencies [27b977d]
+- Updated dependencies [5e2a12a]
+- Updated dependencies [5518a09]
+- Updated dependencies [5e380e3]
+- Updated dependencies [bfab5bd]
+- Updated dependencies [8a0ec92]
+- Updated dependencies [81fcc3f]
+- Updated dependencies [12c63fa]
+- Updated dependencies [2d6d031]
+- Updated dependencies [72637e0]
+  - @endora-commerce/page-builder-core@0.112.0
+  - @endora-commerce/platform@0.112.0
+  - @endora-commerce/contracts@0.112.0
+  - @endora-commerce/admin-kit@0.112.0
+  - @endora-commerce/email-components@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- aa3e255: The `quote_request_operator_submitted` and `quote_request_operator_resubmitted` e-mails link into
+  the admin panel (issue #1204, spec 179 OQ-1). With `ADMIN_BASE_URL` set, they send the new
+  variable `quote.adminUrl`. That is `<ADMIN_BASE_URL>/quote-requests/<id>`, the address of the bell
+  entry. The default templates, in English and Polish, show an **Open the quote request** /
+  **Otwórz zapytanie ofertowe** button to it. With `ADMIN_BASE_URL` unset the variable is not sent
+  and the button is left out. A relative or guessed link is never sent. A customised template that
+  does not name `quote.adminUrl` renders as before. The manifest declares the variable for the
+  template editor.
+- f39d37f: The admin create on behalf accepts custom-field values (`specs/175-buyer-input-custom-fields/`).
+
+  - `POST /api/v1/admin/quote-requests` validates `customFieldValues` with the administrator's rules before the request is numbered or anything is written, and stores them on the new quote request; a refusal answers the existing `422 CUSTOM_FIELD_VALUE_INVALID` (`details` entries `{ path, issue }`) and creates nothing, and the `quote_request.create_on_behalf` audit after-state names the stored keys, sorted, as `changedCustomFields` — never their values. The create on behalf now enforces `required` quote-request definitions, **also when the request sends no values**. A buyer's own submission is unchanged. With the module switched off the route answers as absent, as before.
+  - The create-quote-request screen embeds the custom-field panel (shown with `custom_fields:read`), sends its bag as `customFieldValues` and shows a refusal at the field it names (read through `@endora-commerce/admin-kit`'s `customFieldErrorsOf`).
+  - The manifest exports `customFieldWrites`: the create on behalf and the update `PATCH /api/v1/admin/quote-requests/:id`.
+
+- 1ea60b3: Quote request changes now reach the buyer's storefront notification centre (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-08). A new delivery channel, `customer_in_app`,
+  writes one entry per recipient into the `customer_notifications` module through its published
+  `customerNotificationRecordPort`.
+
+  - **Who gets an entry.** The requester and every member of the request's Organization who may
+    open it, at every change except completion. The buyer whose own action caused the change
+    (submitting, re-submitting, accepting or rejecting an offer) gets the e-mail but no entry.
+  - **What it says.** One sentence that names the request by number only, with a link to the
+    request's storefront page (`/quote-requests/<id>`). The sentence is stored in English and as
+    the key `customerNotifications.<change>.title` of this module's bundle (new keys, en and pl),
+    and the centre translates it into the language the buyer reads in.
+  - **Where it shows.** On the request's own sales channel only, or on every channel when the
+    request has none. The entry belongs to the request's Organization.
+  - **Delivery.** The worker writes the entry in the delivery record's own transaction, so it is
+    recorded exactly once. The 24-hour freshness window and the retry ladder are the same as for
+    the other channels. A recipient who has been deleted, blocked or anonymised, has left the
+    Organization or may no longer open the request is skipped (`skipped_no_recipient`).
+  - **Module off.** A new `degrades-without` edge on `customer_notifications`. While the centre is
+    switched off, quote requests keep working and the record closes as `skipped_module_off`. No
+    entry is written then or later, after the centre is switched back on.
+
+- eedda68: Quote request changes now push to the buyer's devices (issue #238, `specs/179-rfq-and-customer-notifications/` WP-10). A new delivery channel, `customer_push`, goes through `pwa`'s published `customerPushPort`. It is the last channel of the notification matrix to get a delivery, so every channel is now recorded.
+
+  - **Who gets a push.** The requester and every member of the request's Organization who may open it, at every change except completion. These are the same people the customer e-mail and the notification centre reach. The buyer whose own action caused the change (submitting, re-submitting, accepting or rejecting an offer) gets the e-mail but no push.
+  - **What it says.** The title is the new bundle key `customerPush.title` ("Quote request update", en and pl). The body is the notification centre's sentence, `customerNotifications.<change>.title`, which names the request by number only. Both are rendered in the request's sales channel default language, or the system default channel's for a request raised with none (Polish or English; English for any other language). The push opens `/quote-requests/<id>`.
+  - **Delivery.** The worker re-checks the recipient as it does for the centre. It then hands `pwa` the push with the delivery record's id as the idempotency key, so a retry after a crash writes no second push. `pwa`'s answer closes the record: `sent`; `skipped_preference` (quote updates turned off); `skipped_no_subscription` (no device on the channel); `skipped_no_recipient` (account gone); `skipped_deactivated` (push or quote pushes switched off for the channel). The 24-hour freshness window and the retry ladder are the same as for the other channels. The History shows each push's outcome.
+  - **Module off.** A new `degrades-without` edge on `pwa`. While `pwa` is switched off, quote requests keep working and the record closes as `skipped_module_off`. No push is sent then or later, after `pwa` is back.
+
+- ac56d6d: The admin _History_ of a quote request lists the notifications each entry sent (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-06).
+
+  - **API.** `GET /api/v1/admin/quote-requests/:id/history` now returns a `deliveries` array on
+    every entry that has notification records. It still requires `rfqs:handle`. Each delivery has
+    the recipient (kind, id, and a display name read when the History is loaded, or `''` once the
+    person is gone), the channel, the status, the number of attempts, the last error and when it
+    closed. An entry with no records has no `deliveries` key. The buyer's
+    `GET /api/v1/quote-requests/:id` never returns any of this.
+  - **Admin screen.** Under such an entry, the History tab shows who was told, through which
+    channel, and the outcome: sent, pending, failed, or skipped with the reason. A failed delivery
+    shows its last error behind _Show error_.
+  - **Labels.** `rfq.detail.history.delivery.*` keys are added to the `core` bundle in English and
+    Polish.
+
+  Until the delivery worker ships in a later release, every new record shows as _Pending_.
+
+- 2b90026: Quote request notifications are delivered (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-05). Until now the records were written and
+  nothing read them. A new worker delivers them through the admin bell and e-mail, and every
+  outcome is stored on the record and shown on the request's _History_.
+
+  - **Worker.** It runs on the BullMQ queue `quote_requests.notifications.deliver`, on a schedule
+    every minute and whenever a transition kicks it after committing. Each tick delivers up to 200
+    due records. Each record is delivered in its own transaction, locked
+    `for update skip locked`, so several worker processes can share the table. A tick with nothing
+    due opens no system scope. The consumer is registered through `ctx.worker`, so while
+    `quote_requests` is off nothing is delivered and the records stay `pending`.
+  - **Outcomes.** A record whose change is more than 24 hours old closes as `skipped_stale` and
+    nothing is sent. A record whose channel's module is off closes as `skipped_module_off`. A
+    recipient who no longer qualifies closes as `skipped_no_recipient`: an inactive administrator
+    or one without `rfqs:handle`, or a deleted, blocked or anonymised account, one that left the
+    Organization, or one that may no longer open the request. A failed attempt is retried after
+    1 minute, 5 minutes, 30 minutes and 2 hours. The fifth failure closes the record as `failed`
+    with its last error.
+  - **Admin bell.** Operators get a bell entry when a buyer submits or re-submits a request,
+    accepts or rejects an offer, and when a request expires. The entry names the request by number
+    only and links to its admin screen. It is written in the record's transaction, so it is
+    recorded exactly once. The entry's title uses the new keys `notifications.<change>.title` (en,
+    pl) of this module's bundle. A new `degrades-without` edge on `admin_notifications`: with the
+    bell off, quote requests keep working and nobody gets a bell entry.
+  - **E-mail.** Eleven new operator-editable e-mails, in English and Polish, in the
+    _Quote requests_ group. The buyer side gets one at every change except completion:
+    `quote_request_customer_submitted`, `_resubmitted`, `_offer_accepted`, `_offer_rejected`,
+    `_expired`, `_prepared`, `_revised`, `_approved` and `_canceled`. These are written in the
+    default language of the request's sales channel and link to the request on that channel's
+    storefront address (`sales_channels.storefront_url`). Without a storefront address there is no
+    link. The approval e-mail carries no PDF. Operators get `quote_request_operator_submitted` and
+    `quote_request_operator_resubmitted`, in their preferred admin language, with no link for now.
+    Each message uses the record's id as its message id, so a retry after a crash is refused by the
+    transport as a duplicate. An e-mail switched off on the templates screen closes its records as
+    `skipped_deactivated`. A platform with no mail server closes them as `skipped_no_transport` or
+    `skipped_logged`.
+
+  **Behaviour change on upgrade.** All eleven e-mails are switched on by default. From this release
+  on, buyers and the operators who handle their requests are e-mailed about quote request changes.
+  Switch off any e-mail you do not want on the e-mail templates screen before upgrading. The
+  customer notification centre and push notifications follow in later releases.
+
+- e0bc2b6: Quote request notification records name new recipients (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-03). The records are still not delivered; the
+  delivery worker comes with a later release.
+
+  - **Buyer side.** The account that raised the request, and every member of its Organization who
+    may open the request on the storefront. Today that is a member holding the Organization's
+    _Administrator_ role. A member who holds only _Member_ rights and did not raise the request is
+    not recorded. Deleted, blocked and anonymised accounts are skipped. A requester who is also an
+    _Administrator_ is recorded once per channel. In a personal Organization only the requester is
+    recorded.
+  - **Operator side.** The administrator the request is assigned to, plus the representatives
+    assigned to the Organization. Each one is kept only while active and holding `rfqs:handle`. The
+    full-access role counts. When nobody remains, every active administrator holding `rfqs:handle`
+    is recorded. Before this change every administrator was recorded, whatever their permissions.
+  - The storefront check that lets a member see every quote request of their Organization uses the
+    same rule. It reads the Organization's _Administrator_ role through `organizationRoleReadPort`
+    and no longer asks `organizationPermissionPort.isAdministrator`. Who sees what is unchanged.
+
+  The module now resolves `organizationRoleReadPort` (`organizations`) and `permissionService`
+  (`admin_roles`). Both owners are already among its dependencies.
+
+- 8bab40b: Quote request notification records are redesigned (issue #238,
+  `specs/179-rfq-and-customer-notifications/` WP-02). The migration
+  `Migration20261113T081826QuoteRequestsNotificationsRedesign` drops the table
+  `quote_request_notification_events` and creates `quote_request_notifications`, which holds one
+  delivery record per history entry, recipient and channel. **The rows of the old table are
+  discarded.** Nothing ever delivered them, and none of them would still be sent under the 24-hour
+  limit. Its `down()` re-creates the old table, empty.
+
+  The entity `QuoteRequestNotificationEvent` is replaced by `QuoteRequestNotification`. Its channel
+  and status vocabularies are new: five channels (`customer_email`, `customer_in_app`,
+  `customer_push`, `admin_in_app`, `admin_email`) and a `pending` status with one closing status per
+  outcome.
+  `RfqNotificationService.enqueue(input, within?)` is replaced by `record(within, { change,
+sourceEvent, rfq, actor })`. It writes one record for each cell of the notification matrix and
+  writes only into the caller's EntityManager.
+
+  The channels each change records follow the notification matrix: the buyer's e-mail for every
+  change except completion, and the admin bell and admin e-mail where the matrix names the operator
+  side. A buyer now also gets a confirmation e-mail record for their own submission, re-submission,
+  acceptance or rejection. A request an operator prepares is announced from its `created` history
+  entry, no longer from the automatic note. A completed request records nothing. The recipients are
+  the same people as before. Nothing delivers the records yet; the delivery worker comes with a
+  later release.
+
+- 4e2ed36: Quote request notification records now commit in the same transaction as the change they announce
+  (issue #238, `specs/179-rfq-and-customer-notifications/` WP-04). If a transition fails, nothing it
+  wrote is kept: not the status change, not its history entries, not its revision and not its
+  records. If it commits, all of them are there. Before this change the status was committed first,
+  and the history entry and the records were written after it on connections of their own. A failure
+  in between left a changed request with no history entry or no records.
+
+  - Submitting, re-submitting and creating a request on a buyer's behalf write the request, its
+    lines, revision 1, its history entries and its records in one transaction.
+  - Accepting or rejecting an offer, and an operator's approval, cancellation or revision, write
+    their history entries, their revision (for a revision) and their records while holding the
+    request's row lock. The approval's optional note is written there too, so a failed approval
+    leaves no note.
+  - An order completing its quote request writes the status and the `completed` history entry in one
+    transaction. Completion still records no notification.
+
+  After each such commit the module adds one job to the BullMQ queue
+  `quote_requests.notifications.deliver` (fixed job id `quote_requests.notifications.kick`). The job
+  wakes the delivery worker of a later release. It is added without waiting, and a failure to add it
+  is logged at `warn` and never fails the transition. Without a module queue connection nothing is
+  added. Until the delivery worker ships, at most one such job waits in Redis.
+
+  `RfqRevisionService.record(input, within?)` accepts the caller's EntityManager. A
+  `transition-lock.ts` helper, `inTransaction(em, change)`, runs a write with no row to lock in one
+  transaction on `em`.
+
+- 577e94c: On the customer detail screen, the price-negotiation panel is part of the page's one Save (issue #407, `specs/180-one-save-zone-editors/` FR-060), as it already is on the organization detail screen. Choosing "As organization", "Allowed" or "Not allowed" no longer writes at once. It stages the part "Price negotiation", and the page's Save writes it through the same `PUT /api/v1/admin/customers/:id/quote-price-negotiation`. While a change is staged, the "Effective: …" line is hidden, because it describes the stored option; the Save's answer brings it back. A holder of `customers:read` without `customers:manage` still sees the value and stages nothing. Neither panel writes on change any more, so the panel's own "Saved." status and its string `negotiation.saved` (English and Polish) are removed.
+- 75027ef: On the organization detail screen, the price-negotiation panel is part of the page's one Save (issue #407, `specs/180-one-save-zone-editors/` WP-7). Ticking "Members may propose prices" no longer writes at once. It stages the part "Price negotiation" (`negotiation.partLabel`, English and Polish), and the page's Save writes it through the same `PUT /api/v1/admin/organizations/:id/quote-price-negotiation`. A holder of `customers:read` without `customers:manage` still sees the value and stages nothing.
+- 65f7abc: Issue #455 — a Project's _Linked records_ tab and its link picker name each record's status the way the record's own module names it, in the reader's language, instead of showing the stored code (`new`, `proposal`, `Pending`).
+
+  - **`@endora-commerce/contracts`** adds `statusName(code, language)` to `OpportunityReadPort` and `statusName(status, language)` to `QuoteRequestReadPort`, each answering a `Promise<string>`, and the optional `statusName` to `ProjectLinkSchema` beside `status`. A test double that implements either port in full needs the new method.
+  - **`@endora-commerce/mod-crm`** implements `OpportunityReadPort.statusName` by its own rule: the configured name in that language, else the status's default name, else the code.
+  - **`@endora-commerce/mod-quote-requests`** implements `QuoteRequestReadPort.statusName` in the wording its global-search results already use (a code outside the six statuses answers as it is), and each row of `GET /api/v1/admin/quote-requests` now also carries `statusName` in the response language.
+  - **`@endora-commerce/mod-projects`** serves `statusName` on `GET` and `POST /api/v1/admin/projects/:id/links` (an Order's name from `orderReadPort.findStatusDefinition`), and the admin tab and picker show it.
+
+  **On upgrade.** Nothing to migrate; `status` keeps answering the code.
+
+- a998fee: Issue #457 — a Project with many linked Quote Requests and Opportunities no longer reads them one at a time.
+
+  - **`@endora-commerce/contracts`** adds two batched reads to `QuoteRequestReadPort`: `findByIds(ids)`, which answers what `findById` answers for each id in one read (a missing, out-of-scope or malformed id is absent), and `amountsOf(quoteRequestIds)`, a `Map` keyed by quote id holding what `amountOf` answers for each (a quote `amountOf` answers `null` for has no entry). Every implementation of the port must provide both; consumers are unaffected.
+  - **`@endora-commerce/mod-quote-requests`** implements both under the caller's tenant scope: `findByIds` in one statement, `amountsOf` in two (the quotes, then their lines), whatever the number of ids.
+  - **`@endora-commerce/mod-projects`** reads a Project's linked Quote Requests through `findByIds` and `amountsOf`, and its linked Opportunities through `OpportunityReadPort.findByIds`, one batch per kind. `GET /api/v1/admin/projects/:id/links` now costs the same number of statements for one linked record of each kind as for many; what it shows is unchanged.
+
+- 7124778: Issue #470 (D-288): a quote request's audit entries carry names and structure, never its values. The platform audit log is one table read under `audit_log:read` without organization reach, so a tenant's quote data no longer reaches it.
+
+  - `quote_request.cancel` records `hasReason` instead of the free-text `reason`.
+  - `quote_request.modify` and `quote_request.create_on_behalf` record `groups` as one `{ lineCount }` per group, without the group's `name`.
+  - `quote_request.send_document` records `recipientCount` and `failedRecipientCount` instead of the `recipients` / `failedRecipients` addresses.
+  - `quote_request.prepare_customer_basket` no longer records `customerAccountId` (the request's tenant anchor). It keeps `cartId` and `itemCount`.
+  - `quote_request.custom_fields.carry` records the carried keys as `changedCustomFields` instead of the custom field values before and after.
+  - `QUOTE_REQUEST_AUDIT_KEYS` lists the keys a quote request audit state may hold, and a sentinel test holds the recorded states to it.
+  - No new value store: the values already live in the module's own revisions, history events and request row, which the request's **History** reads under its own visibility. Nothing read them back from the audit log. Audit entries written before the upgrade are not rewritten.
+
+  **Behaviour change on upgrade.** On the platform **Audit log** screen and in `audit_logs read`, new quote request entries show names and counts instead of values. The **History** tab is unchanged. See _Quote request values leave the platform audit log_ in the upgrade guide.
+
+- d4475e8: Only a sales representative is reach-scoped on the admin quote-request surfaces (issue #957, product-owner ruling 2026-11-08). The list, global search, the detail and history, every action, the create on a customer's behalf and the quote PDF used to narrow every role except `platform_admin` by the sales-representative assignment rule; a custom admin role holding `rfqs:handle` is now platform-wide there, as on every other surface. A sales representative's reach is unchanged.
+
+  `RfqAdminService.searchForAdmin(query)` no longer takes an `AdminContext`: the request's tenant scope is the whole of its visibility.
+
+  **Behaviour change on upgrade.** An administrator with a custom role holding `rfqs:handle` sees and handles the quote requests of every Organization, not only those assigned to them or to nobody.
+
+- 42a9a4b: One sales-representative reach rule on every admin surface (issue #305, owner ruling 2026-11-07). A sales representative reaches every Organization not governed by another representative — the ones assigned to them (with `organizations:rollup`, their subtrees, the nearest assignment winning) and every Organization nobody is assigned to. `adminTenantScopePort` answers that reach as its complement, computed in one statement per request (`SalesRepAssignmentService.reachOf`), so the tenant-scoped reads and writes of every module, the Organizations list and its pickers, admin search and the Organization screens answer by the same rule. Every module that read the reach as a list of assigned ids now reads it through the platform's helpers.
+
+  `mod-orders`: `resolveAdminOrdersScope` answers `{ allowAll: boolean }` (was `{ allowAll: false, allowedOrganizationIds }`); the list's reach is the ambient tenant context's. `mod-customers`: `ResolveModerationActor` answers `{ adminUserId, isPlatformAdmin }` (was with `allowedOrganizationIds`).
+
+  **Behaviour change on upgrade.** Every sales representative gains the tenant data of every unassigned Organization — members, customers, orders, invoices, carts, returns, quote requests and customer-level settings — and, since no representative can be assigned to a personal Organization, of every B2C customer (confirmed by the owner on 2026-11-08). The Organizations list, its pickers and admin search stop showing Organizations assigned to other representatives. A sales representative with no assignment used to be treated as a platform administrator by the quick-order default-preference routes; they now manage only the Organizations they reach, and a write naming an Organization that does not exist answers `404 NOT_FOUND`. The read-only query in _Upgrading an instance_ ("One sales-representative reach rule on every surface") counts, per representative, what they gain and what leaves their lists.
+
+- 8ae3f58: **Behaviour change: a line quantity has an upper bound, refused with a new error code, `LINE_QUANTITY_EXCEEDED`; and the quote request and return line arrays have a line-count bound** (issue #351). A quantity past the integer column it is stored in used to pass validation and answer `500`; it is now refused, in the reader's language.
+
+  New in `@endora-commerce/contracts`: `LINE_QUANTITY_MAX` (`1 000 000`, the same value as `ORDER_MINIMUM_MAX`, so the largest minimum stays orderable), `lineQuantitySchema` (a whole number in 1…`LINE_QUANTITY_MAX`), `boundedLineQuantity(schema)`, `isLineQuantityExceededIssue(issue)`, `LINE_QUANTITY_EXCEEDED` (also in `ERROR_CODES`) and `REQUEST_LINE_ITEMS_MAX` (`200`). `ADMIN_ORDER_MAX_ITEMS` and `QUICK_ORDER_BUILD_MAX_ITEMS` are now that constant under their own names; their value does not change.
+
+  **The new code.** Every request schema carrying a line quantity uses `lineQuantitySchema`: `addCartItemRequestSchema`, `updateCartItemRequestStrictSchema`, `createQuoteRequestSchema` / `patchQuoteRequestSchema` lines, `adminCreateQuoteRequestSchema` / `adminPatchQuoteRequestSchema` lines, `adminCreateOrderRequestSchema` / `adminOrderPreviewRequestSchema` items, `apiPlaceOrderRequestSchema` lines, `quickOrderBuildRequestSchema` items, `quickOrderOneClickRequestSchema`, `addShoppingListItemRequestSchema`, `updateShoppingListItemRequestSchema`, `createReturnCaseRequestSchema` lines, `catalogBulkPriceRequestSchema` lines, `cartSnapshotSchema` lines, and the packaging unit's `baseQuantity` in `createPackagingUnitRequestSchema` / `updatePackagingUnitRequestSchema`. A quantity past the bound is a Zod issue tagged `LINE_QUANTITY_EXCEEDED`. The error envelope in `@endora-commerce/platform` answers a request whose only failures are that issue with `400 LINE_QUANTITY_EXCEEDED` and a translated sentence (`@endora-commerce/mod-i18n` ships it in English and Polish), with `details` naming the field. A request that fails anything else as well stays `400 VALIDATION_FAILED`, with the issue among its details. `POST /api/v1/external/orders` and `POST /api/v1/external/catalog/prices` parse their bodies themselves and keep answering `422 VALIDATION_FAILED`; the detail's `issue` there is `LINE_QUANTITY_EXCEEDED`.
+
+  `@endora-commerce/mod-carts`: two cases are refused with `422 LINE_QUANTITY_EXCEEDED`, `details: { quantity, maximum }`, and write nothing: an add onto an existing basket line whose sum would pass the bound, and a packaging-unit add whose pieces (`baseQuantity × units`) would pass it. This covers the single and batch add, reorder and shopping list to cart. Signing in sums the anonymous basket into the customer's and keeps a summed line at the bound instead of failing the sign-in. `updateCartItemRequestSchema` (the line edit) now accepts any quantity from `0` (remove) to the bound; it stopped at `999`.
+
+  **Line counts.** The line arrays of `adminCreateQuoteRequestSchema`, `adminPatchQuoteRequestSchema` and `createReturnCaseRequestSchema` are bounded at `REQUEST_LINE_ITEMS_MAX`, as the customer's quote request create and edit already were: one line more is `400 VALIDATION_FAILED`. The value is shared but the refusal is not. The order intakes (admin create and preview, `POST /api/v1/external/orders`) and the quick-order build keep refusing more than 200 items with `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`, and the basket's own cap stays `422 CART_LINE_CAP_EXCEEDED`.
+
+  `@endora-commerce/admin-kit`: `parsePositiveInt` returns `null` past `LINE_QUANTITY_MAX`, so the admin order and quote request create screens mark such a line invalid before sending it. `@endora-commerce/mod-quick-order`: an imported row past the bound, and every row of a duplicate whose sum passes it, is rejected as `quantity_invalid` instead of being recognised into a build that would be refused. `@endora-commerce/mod-quote-requests`: the Modify tab's quantity input carries the bound as its `max`.
+
+### Patch Changes
+
+- 4fd93ae: **A buyer's quote request judges its lines in the channel language `Accept-Language` asks for, read as a q-weighted list** (issue #1011). `POST /api/v1/quote-requests`, the draft edit `PATCH /api/v1/quote-requests/:id` and `POST /api/v1/quote-requests/:id/resubmit` took the header's first tag alone as the language a line's availability and snapshotted names are judged in, so `Accept-Language: en;q=0.2, pl-PL;q=0.9` asked about English and `de-DE, pl;q=0.5` about the channel default, and a request naming a product available only in Polish was refused with `404`. The language is now resolved through `requestScopeLanguage` from `@endora-commerce/contracts`, as the catalogue does since #397: the tags in descending `q`, each matched against the channel's languages (exactly, then by base language), the first one the channel offers winning, else the channel's default. The language messages are worded in is unchanged. A request without the header behaves as before.
+- f8382b4: `Migration20260503T141344QuoteRequestsWorkflow` now creates `organization_sales_rep_assignments`
+  with `create table if not exists`, and no longer creates the table's two indexes
+  `orgsa_admin_user_idx` and `orgsa_organization_idx` (issue #1033,
+  `specs/178-extensible-columns/` D-291 R-A8). The table belongs to `organizations`, which now
+  creates the table and both indexes itself. On a platform that migrated `organizations` first and
+  installs `quote_requests` later, this migration used to fail with
+  `relation "organization_sales_rep_assignments" already exists`. It now leaves the table and its
+  rows as they are. A database that has already applied the migration does not run it again. On a
+  fresh database the table ends up with the same columns, constraints and indexes as before.
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- b918cf6: Readers of an organization's tax ID handle a personal organization, which has no tax ID since this release (`taxId: null`). An order placed by a personal organization carries no `billingAddress.taxId`, a quote document prints no tax ID for its buyer, and the push-audience organization picker shows no hint for it — each as before, now by data rather than by recognising the old placeholder. The demo composition finds the demo organisation by its tax ID with the tree's root first, as `organizationDetailsPort.findByTaxId` does, so a branch sharing that tax ID is never taken for it.
+- 307c5d5: `module:uninstall quote_requests --hard` no longer drops `organization_sales_rep_assignments` (`specs/178-extensible-columns/` D-291 R-A7). The table was created by `Migration20260503T141344QuoteRequestsWorkflow`, but `organizations` maps it and outlives `quote_requests`, so the migration's `down()` destroyed a live `organizations` table and its sales-representative assignments. The `drop table` is removed from that `down()`; no applied history changes.
+- 0f96ced: The module page's _Notifications_ section now documents what is delivered, to whom and when
+  (issue #238, `specs/179-rfq-and-customer-notifications/` WP-11), in English and Polish: the two
+  recipient sides, the change-by-channel table, what each channel carries, the eleven e-mails and
+  their variables, the 24-hour freshness limit, retries, switched-off e-mails and modules, the
+  deliveries on the request's _History_, and the recording and delivery worker for developers. The
+  _Background jobs_, _Data model_, _History_ and _Conversion to order_ sections are brought in line:
+  a completed request notifies nobody, and `quote_request_notifications` replaces
+  `quote_request_notification_events`.
+
+  **Upgrading to the release that ships quote request notification delivery** (the changes of
+  #238 taken together):
+
+  - The migration `20261113T081826_quote_requests_notifications_redesign.ts` drops
+    `quote_request_notification_events` and **discards its rows**. Nothing ever delivered them, and
+    none would still be sent under the 24-hour limit. Its `down()` re-creates the old table, empty.
+  - **Eleven new e-mails are switched on by default** — nine to the buyer side
+    (`quote_request_customer_submitted`, `_resubmitted`, `_offer_accepted`, `_offer_rejected`,
+    `_expired`, `_prepared`, `_revised`, `_approved`, `_canceled`) and two to operators
+    (`quote_request_operator_submitted`, `_resubmitted`). From the first change after the upgrade,
+    buyers and the operators who handle their requests are e-mailed. Switch off any you do not want
+    on the e-mail templates screen. Bell entries, storefront notification centre entries and quote
+    pushes start at the same time, each subject to its own module being on.
+  - The other #238 entries in these release notes were written one work package at a time; where
+    one says that delivery, the notification centre or push "follows in a later release", read it as
+    the order the work landed in. They all ship in this release.
+  - The buyer side's links point at `sales_channels.storefront_url`; set it per channel, or the
+    e-mails go out without a link.
+
+  **Follow-up, not in this release:** the two operator e-mails, `quote_request_operator_submitted`
+  and `quote_request_operator_resubmitted`, carry no link to the request in the Admin UI. They name
+  the request number, and the bell entry carries the link. The platform now offers the Admin UI's
+  address (`ADMIN_BASE_URL`, read through `configuredAdminBaseUrl()`, issue #185), and the `crm` and
+  `tasks` e-mails already use it. Adding the same link (`quote.adminUrl`) to these two e-mails is the
+  next step.
+
+- c684302: The buyer e-mails about a quote request now link to the request whenever the channel's storefront
+  address resolves: the channel's `sales_channels.storefront_url` setting, then the
+  `STOREFRONT_BASE_URL` environment variable when the setting is empty, blank, not registered or not
+  readable for the channel. This is how the setting defines itself and how `seo` and `product_feeds`
+  already read it. Before, an empty setting meant no link even with `STOREFRONT_BASE_URL` set. With
+  neither configured the e-mail still carries no link; no local development address is ever guessed.
+- 2e603f7: Admin screens confirm destructive and consequential actions in the kit's `ConfirmDialog` rather
+  than the browser's `window.confirm()` (issue #313). This covers deleting, revoking, removing and
+  resetting across these modules, switching a module off on the Modules screen, undoing a bulk
+  edit, making a sales channel the default, and preparing a customer's basket from a quote. The
+  dialog names the action on its confirm button (for example _Delete_, _Revoke_, _Unassign_), and a
+  destructive question opens with focus on Cancel.
+
+  The three native `alert()` calls are now notices on the page: deleting an attachment type that is
+  still in use (`catalog`), unassigning a channel's default warehouse (`inventory`), and activating a
+  megamenu binding that replaces another (`megamenu`, announced through a live region). Renaming a
+  setting group (`settings`) uses a one-field dialog instead of `prompt()`. Removing a colour from
+  the page builder's palette (`page-builder-admin`) is confirmed inline in its row, because the
+  palette is already a modal.
+
+  Several of these questions were untranslated English literals. They are now bundle keys in
+  English and Polish: the country, currency and language deletes (`dictionaries`), the e-mail block
+  and template deletes (`transactional_emails`), the setting-group delete and rename and the setting
+  reset (`settings`), and the sales-channel delete and rebind questions (`sales_channels`). The
+  assets-library folder delete no longer says "OK = … / Cancel = …". `mod-i18n` adds
+  `common.confirm.title` and the subscription-cancel button labels.
+
+  Two native dialogs stay on purpose: the unsaved-changes navigation guard
+  (`use-unsaved-changes-prompt`), which has to answer synchronously inside the click it intercepts,
+  and the settings screen's discard-on-channel-switch guard, which is the same kind of guard. They
+  will be replaced together in a later change.
+
+- 4d0a26d: Documentation only (issue #407). The shipped `docs/` pages, in English and Polish, now describe the one Save on every editor with zone panels. Each page says what Save covers, what is checked before anything is written, the order the parts are written in, what a partial save reports and that the next Save writes only the part that failed. It also says how the leave guard works and which sections carry the "Applies immediately" badge.
+
+  - catalog: "Editing a product at a scope" covers the base prices and the Inventory tab's product settings under Save, plus the actions that apply immediately. A new "Editing a category" section on the module page covers the category editor's Save.
+  - price_lists: the display-mode override saves with the organization and category editors. The base-price panel's **Discard changes** is described.
+  - organizations, customers: a section on each screen's one Save and its immediate actions.
+  - quick_order, quote_requests: their panels save with the host screen's Save.
+  - sales_channels: the edit page's Save and its count. Deactivate and Re-activate keep unsaved edits, and warehouse routing applies immediately.
+
+  No code, API or string changes.
+
+- 4efb051: The module page documents custom-field values on the admin Create quote request screen. Documentation only.
+- Updated dependencies [baa0dae]
+- Updated dependencies [ee0698d]
+- Updated dependencies [9c8efbe]
+- Updated dependencies [3de70b4]
+- Updated dependencies [2ee4923]
+- Updated dependencies [e9df6b5]
+- Updated dependencies [1937bed]
+- Updated dependencies [3254098]
+- Updated dependencies [7616ef1]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [644739b]
+- Updated dependencies [c58acd1]
+- Updated dependencies [fc91398]
+- Updated dependencies [feaa40b]
+- Updated dependencies [d2f179f]
+- Updated dependencies [d16b343]
+- Updated dependencies [34b3387]
+- Updated dependencies [e283396]
+- Updated dependencies [4ecb155]
+- Updated dependencies [ff7bd10]
+- Updated dependencies [097b599]
+- Updated dependencies [761d9c4]
+- Updated dependencies [8e7f794]
+- Updated dependencies [8e7f794]
+- Updated dependencies [f39d37f]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [695636f]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [f5caa4e]
+- Updated dependencies [d14a4fd]
+- Updated dependencies [86a92af]
+- Updated dependencies [ee2a111]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [bfa1ac4]
+- Updated dependencies [8a4ca9c]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [52831b7]
+- Updated dependencies [a2d306f]
+- Updated dependencies [aaa50ff]
+- Updated dependencies [6e528ad]
+- Updated dependencies [eedda68]
+- Updated dependencies [2e603f7]
+- Updated dependencies [73e8e8c]
+- Updated dependencies [bf257b8]
+- Updated dependencies [d591709]
+- Updated dependencies [577e94c]
+- Updated dependencies [e435bad]
+- Updated dependencies [7bdf512]
+- Updated dependencies [5c148de]
+- Updated dependencies [e435bad]
+- Updated dependencies [5c148de]
+- Updated dependencies [036865c]
+- Updated dependencies [0beb869]
+- Updated dependencies [37532da]
+- Updated dependencies [bfdbeaf]
+- Updated dependencies [65f7abc]
+- Updated dependencies [a998fee]
+- Updated dependencies [54ae028]
+- Updated dependencies [20cda0c]
+- Updated dependencies [48b2505]
+- Updated dependencies [c24bd3c]
+- Updated dependencies [6b664cd]
+- Updated dependencies [cd05402]
+- Updated dependencies [91272e6]
+- Updated dependencies [eb4dbc6]
+- Updated dependencies [e2669cd]
+- Updated dependencies [aec841a]
+- Updated dependencies [da2b459]
+- Updated dependencies [77904b3]
+- Updated dependencies [4ab926c]
+- Updated dependencies [a3b1da5]
+- Updated dependencies [28fc1c7]
+- Updated dependencies [2b12d58]
+- Updated dependencies [9110863]
+- Updated dependencies [2905024]
+- Updated dependencies [ae1cedf]
+- Updated dependencies [6f0debc]
+- Updated dependencies [d6e7a55]
+- Updated dependencies [62d3e2d]
+- Updated dependencies [0b2f558]
+- Updated dependencies [dc9bbea]
+- Updated dependencies [1acf873]
+- Updated dependencies [edf46c9]
+- Updated dependencies [ef656f9]
+- Updated dependencies [71ec1f8]
+- Updated dependencies [7a3673f]
+- Updated dependencies [1c3366d]
+- Updated dependencies [ea965bb]
+- Updated dependencies [fc08f90]
+- Updated dependencies [d34fe02]
+- Updated dependencies [59b5246]
+- Updated dependencies [c55dcf5]
+- Updated dependencies [3e7b0b6]
+- Updated dependencies [d68aa70]
+- Updated dependencies [0b991d6]
+- Updated dependencies [9af7a64]
+- Updated dependencies [ecbebe2]
+- Updated dependencies [e61a12b]
+- Updated dependencies [d362c3c]
+- Updated dependencies [ef9630f]
+- Updated dependencies [b7a9c8e]
+- Updated dependencies [75f89d2]
+- Updated dependencies [ca66684]
+- Updated dependencies [b6fd6df]
+- Updated dependencies [6658f0f]
+- Updated dependencies [877477b]
+- Updated dependencies [767d5de]
+- Updated dependencies [d0c5dc8]
+- Updated dependencies [ac094f5]
+- Updated dependencies [61a6edf]
+- Updated dependencies [dd869ee]
+- Updated dependencies [ff6b599]
+- Updated dependencies [ac65359]
+- Updated dependencies [49b43de]
+- Updated dependencies [5f8eede]
+- Updated dependencies [de28088]
+- Updated dependencies [44529a4]
+- Updated dependencies [af88938]
+- Updated dependencies [9aff446]
+- Updated dependencies [42a9a4b]
+- Updated dependencies [8ae3f58]
+- Updated dependencies [65cdd0e]
+  - @endora-commerce/admin-kit@0.111.0
+  - @endora-commerce/contracts@0.111.0
+  - @endora-commerce/platform@0.111.0
+  - @endora-commerce/email-components@0.111.0
+  - @endora-commerce/page-builder-core@0.111.0
+
+## 0.110.0
+
+### Minor Changes
+
+- 79a4554: Quote requests gated by organization permissions (`specs/170-organization-roles/`, WP-05). Breaking for a composition or a caller of the changed shapes:
+
+  - The manifest declares the organization permission `quote_requests.create` (_Create quote requests_, held by the _Member_ role by default), with EN and PL labels. `POST /api/v1/quote-requests` and `POST /api/v1/quote-requests/:id/resubmit` require it, and `POST /api/v1/quote-requests/:id/convert-to-order` requires `carts.create`; a member lacking the code is refused `403 ORGANIZATION_PERMISSION_REQUIRED` before the body is validated.
+  - Seeing every quote request of the Organization (`GET /api/v1/quote-requests`, the detail and every action on one) is judged by `organizationPermissionPort.isAdministrator` — the _Administrator_ role the member holds — instead of the legacy `role` column.
+  - `CustomerContext` (the shape `CustomerContextResolver` answers) loses `isOrgAdmin: boolean` and gains the optional `organizationRoleId?: string | null`; the default `rfqCustomerContextResolver` no longer reads `customerAccountReadPort`.
+  - `QuoteRequestsModuleOptions` and `QuoteRequestsCustomerDeps` gain the required `organizationPermissions: () => OrganizationPermissionPort`; `RfqServiceDeps` gains the required `organizationPermissions: () => Pick<OrganizationPermissionPort, 'isAdministrator'>`.
+  - `RfqService.listForCustomer` (the `RfqCustomerPort` method) always answers the account's own quote requests; the storefront list is the new `RfqService.listVisibleForCustomer`.
+
+- ff60e93: `quoteRequestReadPort.amountOf(id)` returns the quote's amount by the one rule of issue #456, and the admin quote list's rows carry `amount` and `agreement`.
+
+  The admin list now shows that amount (per line, the agreed price or else the asked one) instead of the agreed total when every line was agreed and otherwise the asked total. It is marked:
+  - "Partially agreed" while some lines are agreed;
+  - "Not yet agreed" while none is.
+
+  A quote without any price shows `—`.
+
+  `totalAtAgreedPrice` and `totalAtCustomerPrice` are unchanged.
+
+### Patch Changes
+
+- 3f020ba: Product names, descriptions, alt texts, attachment and packaging-unit names are read at the document's sales channel and language — Channel × language → Channel → Global — through `catalogProductAvailabilityPort.effectiveTexts`, or as the Global string where there is no channel (feature 174). Basket, quote and order snapshots take the effective name when the line is created; a deliberately empty packaging-unit name at the scope keeps the Global name. The back-in-stock e-mail shows the Global name.
+- b46ce21: Quote request lines carry the currency of the sales channel the request was raised on, instead of always `PLN` (issue #303). The currency is decided once, when the request is created by a customer or by an operator on their behalf (`createOnBehalf`), from the channel's default currency; a draft edit, a seller revision (`modify`) and a resubmission copy the currency the request already has, so one request never mixes currencies. `QuoteRequestLineRecord.lineCurrency` therefore names the channel's currency for anything that exports quote requests. The customer and admin list summaries of a request with no lines use the channel's currency; `PLN` remains only for a legacy request recorded on no channel. Existing rows are not backfilled: see _Quote request lines carry their channel's currency_ in the upgrade guide for a query that lists the requests raised on a non-PLN channel.
+- 45c9893: The organization role form, on the storefront and in the admin Roles tab, heads the Addresses, Carts, Orders, Quote Requests and Returns permission groups in the reader's language. The five modules now ship `module.name` in English and Polish ("Adresy", "Koszyki", "Zamówienia", "Zapytania ofertowe", "Zwroty"); before this, Polish pages showed the English manifest name.
+- b2db8c3: English module names and admin sidebar labels are now sentence case, like the rest of the UI. The manifest `name` changes for 22 modules and for the platform's `_lifecycle` module ("Quote Requests" becomes "Quote requests", "API Keys" becomes "API keys", "Module Lifecycle" becomes "Module lifecycle"). The English `module.name` for Quick order, Quote requests and Shopping lists changes the same way. That string heads their permission groups on the organization role form and appears on the modules screen. The admin sidebar labels in blog ("Blog posts", "Blog categories", "Blog tags"), cms ("CMS pages", "CMS blocks", "CMS templates", "CMS hooks"), custom_fields ("Custom fields"), import_export ("Import / export"), newsletter ("Tags & fields") and transactional_emails ("Transactional emails", "Email blocks", "Email templates") change the same way. Product names (Google Analytics, Google Tag Manager, LinkedIn Ads, Meta Ads) keep their capitals. Polish strings do not change. If your code compares a manifest `name` against the old title-case string, update the comparison. Better, compare the module `id`.
+- 75b053f: A customer record read by an id that is not a UUID answers `404` with the route's own not-found code, exactly as a well-formed id that names nothing does, instead of `500` (issue #753). This covers `GET /api/v1/orders/:id` (`ORDER_NOT_FOUND`), `GET /api/v1/returns/:id`, `GET /api/v1/quote-requests/:id`, `GET /api/v1/shopping-lists/:id` and `GET /api/v1/organization/carts/:id` (`NOT_FOUND`), and every other route that reads its record through the same lookup.
+- d591bbe: A personal (B2C) Organization is labelled for what it is rather than by its placeholder tax id (issue #767, owner ruling of 2026-11-05). The admin Organizations list and the Organization detail header show "Personal account" ("Konto osobiste") in place of the tax id. The admin order and quote request screens' _Organization_ panel show "Individual customer" ("Klient indywidualny") where the tax-id line was. The three strings are new core keys: `organizations.personalAccount`, `orderDetail.org.individualCustomer` and `rfq.detail.org.individualCustomer`.
+- 5bbb389: A personal (B2C) Organization's placeholder tax id is no longer shown anywhere outside `organizations` (issue #767). The quote request PDF prints the person as the buyer, with no tax-id line and no placeholder head office. `GET /api/v1/admin/orders/:id` and `GET /api/v1/admin/quote-requests/:id` answer `organization.taxId: null` for it, and the admin order and quote request screens' _Organization_ panel then print no tax-id line. The price-book (`…/price-books/targets/organizations`) and push audience (`…/pwa/rule-targets/organizations`) organization pickers answer `taxId: null` for it, so the picker shows no hint. A company Organization's tax id is shown as before.
+- 0b64c13: English page titles, dialog titles, command-palette action labels, settings group names and
+  documentation page titles now use sentence case, like the module names and sidebar labels
+  before them. For example, "Quote Requests" becomes "Quote requests", "CMS Pages" becomes
+  "CMS pages" and the "Quick Order" settings group becomes "Quick order". Polish strings are
+  unchanged. Product names keep their capitals: Page Builder, Google Analytics, LinkedIn and
+  Meta among them.
+
+  The admin search group labels change the same way: "Quote Requests" becomes "Quote requests"
+  and "Sales Opportunities" becomes "Sales opportunities". The demo megamenu's English button
+  label becomes "Quick order". The demo seed does not rewrite a menu it has already created, so an
+  existing demo database keeps "Quick Order" until it is seeded afresh or the label is edited on
+  the megamenu screen.
+
+  The settings group names are updated in the database the next time the settings manifest
+  reconciler runs at boot. Nothing has to be migrated.
+
+- d69e765: A path parameter that is not a UUID is answered exactly as a well-formed id that names nothing, on every customer- and admin-facing id route, mutations included, instead of `500` (issue #781). The shape is checked with `isUuidShape` from `@endora-commerce/contracts` before the database is asked, so a malformed id gets the route's own answer for an unknown record: its own not-found code (`404`), or the empty list or `204` the route gives an unknown id. Examples: `POST /api/v1/orders/:id/cancel` answers `404 ORDER_NOT_FOUND`; the returns comment, delivery-method and cancel routes and `POST /api/v1/organization/carts/:id/approve` and `/reject` answer `404 NOT_FOUND`.
+
+  Routes whose params schema demanded a UUID answered a malformed id `400 VALIDATION_FAILED`; they now answer `404` like an unknown id (owner ruling of 2026-11-05): `/api/v1/organizations/mine/roles/:id`, `/api/v1/admin/organizations/:id/roles[/:roleId]` and `…/permission-catalogue`, `/api/v1/organizations/mine/members/:id[/role]`, every `/api/v1/admin/product-feeds/:id…`, `/api/v1/admin/feed-templates/:id` and `/api/v1/admin/feed-taxonomies/revisions/:taxonomyId…` route, `/api/v1/admin/document-templates/:id…`, `/api/v1/admin/quote-requests/:id/document-templates`, `…/document-template` and `…/pdf`, the blog `url-redirects/:redirectId` and `addresses/:id` deletes, `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId`, and `GET`, `PATCH` and `DELETE /api/v1/admin/import-export/profiles/:id` (`404 IMPORT_PROFILE_NOT_FOUND`). A client that told a malformed id from an unknown one by the `400` can no longer do so.
+
+  Every private copy of the UUID pattern is replaced by `isUuidShape`, `UUID_SHAPE_PATTERN` or, where a filter has always asked for RFC 9562 version and variant bits (the CRM board filters), `uuidSchema`; what each check accepts is unchanged, except that the invoice-ledger delivery retry now accepts any uuid-shaped id and answers an unknown one `404` from the lookup.
+
+- d24be0e: The module documentation pages have readable titles instead of the module id (for example _Carts_ instead of `carts`), in the docs sidebar, the module map and the browser tab, in English and Polish. Page headings and screen names in the page text are sentence case, as in the Admin UI (#795). File names and URLs are unchanged.
+- cc1496f: The remaining English Page Builder block labels now use sentence case: "Simple Text" becomes
+  "Simple text", "Rich Content" becomes "Rich content", "Insert Block" becomes "Insert block",
+  "Insert Template" becomes "Insert template" and "Spacer / Divider" becomes "Spacer / divider".
+  The quote request field in the admin search configuration becomes "Quote request number".
+  The Polish import and export navigation label and page title become "Import / eksport". Other
+  Polish strings are unchanged. Product names keep their capitals: Page Builder among them.
+
+  The documentation pages that quote these labels are updated to match, and the admin search
+  page now writes its group labels as "Quote requests" and "Sales opportunities", as the screen
+  has shown them since the previous release.
+
+- ca120cc: Every settings group a module declares now has a translated heading on the Settings screen (#884). Each module's bundle gains `settingGroups.<group code>.name` in English and Polish, so a Polish operator no longer reads group headings such as _Orders_, _Carts_ or _Security / MFA_ in English. `@endora-commerce/mod-admin-notifications` and `@endora-commerce/mod-shipments` ship translation bundles for the first time: their manifests declare `i18n: { bundlesDir: 'i18n' }` and their tarballs carry `i18n/`.
+- 3e31881: The quote template editor's canvas draws a label the template leaves out in the language of the tree being edited, as the PDF prints it, and no longer in the administrator's language (#902). It reads that language from `useBlockRenderEnvironment()` and, when it is not the administrator's, loads that language's bundle. A label the operator typed is drawn as typed. In the editor this takes effect once the document-template editor provides the edited language to its canvas (#888).
+- Updated dependencies [18cce2e]
+- Updated dependencies [18cce2e]
+- Updated dependencies [9cfb28b]
+- Updated dependencies [a206da9]
+- Updated dependencies [34485ae]
+- Updated dependencies [34485ae]
+- Updated dependencies [0f1717c]
+- Updated dependencies [86e8761]
+- Updated dependencies [9bfb0b8]
+- Updated dependencies [ed5cf6a]
+- Updated dependencies [2da23d2]
+- Updated dependencies [2da23d2]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [5303aab]
+- Updated dependencies [16f85f4]
+- Updated dependencies [270aa2b]
+- Updated dependencies [3f020ba]
+- Updated dependencies [3f020ba]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [bf1cc2d]
+- Updated dependencies [ff60e93]
+- Updated dependencies [6f19230]
+- Updated dependencies [06cf85b]
+- Updated dependencies [77b8c37]
+- Updated dependencies [65104b8]
+- Updated dependencies [7acaa33]
+- Updated dependencies [7019c71]
+- Updated dependencies [4eee98b]
+- Updated dependencies [14ac256]
+- Updated dependencies [248bf1b]
+- Updated dependencies [b2db8c3]
+- Updated dependencies [4cf529d]
+- Updated dependencies [5e4dd48]
+- Updated dependencies [75b053f]
+- Updated dependencies [54fc8f1]
+- Updated dependencies [dac5795]
+- Updated dependencies [5bbb389]
+- Updated dependencies [d69e765]
+- Updated dependencies [dbc1cef]
+- Updated dependencies [d69e765]
+- Updated dependencies [a6bc891]
+- Updated dependencies [8ad737c]
+- Updated dependencies [a9398c8]
+- Updated dependencies [0b56038]
+- Updated dependencies [717e4c6]
+- Updated dependencies [cea1470]
+- Updated dependencies [cea1470]
+- Updated dependencies [d46d414]
+- Updated dependencies [73e2eec]
+- Updated dependencies [29d7e90]
+- Updated dependencies [7f2fa6e]
+- Updated dependencies [57145f7]
+- Updated dependencies [58a1632]
+- Updated dependencies [e46d233]
+- Updated dependencies [e46d233]
+- Updated dependencies [58a1632]
+- Updated dependencies [b476f44]
+- Updated dependencies [14fe4fb]
+- Updated dependencies [76d89ab]
+- Updated dependencies [5cbffb9]
+- Updated dependencies [6bd2ab7]
+- Updated dependencies [a3502c0]
+- Updated dependencies [7a73cc8]
+- Updated dependencies [5ff8302]
+- Updated dependencies [fc7db4c]
+- Updated dependencies [c34b405]
+- Updated dependencies [5af8c25]
+- Updated dependencies [48f055e]
+- Updated dependencies [bf50b85]
+- Updated dependencies [2c6fba0]
+- Updated dependencies [0801f69]
+- Updated dependencies [d1c0d13]
+- Updated dependencies [6d1d284]
+- Updated dependencies [974be57]
+- Updated dependencies [99c075e]
+- Updated dependencies [32b4d0c]
+- Updated dependencies [3355e60]
+- Updated dependencies [7ce9b8a]
+  - @endora-commerce/contracts@0.110.0
+  - @endora-commerce/platform@0.110.0
+  - @endora-commerce/admin-kit@0.110.0
+  - @endora-commerce/email-components@0.110.0
+  - @endora-commerce/page-builder-core@0.110.0
+
+## 0.109.0
+
+### Minor Changes
+
+- e64ed74: **BREAKING — a `POST /api/v1/admin/quote-requests` that omits `salesChannelId`, for an Organization not assigned to the channel the admin request resolves to (the system default, or `X-Sales-Channel`), now answers `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` where it answered `201`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. The server is the sole enforcer of the channel (owner decision 2026-10-29 "A"): the channel the request lands on, named or not, must be one of the Organization's active channels. A caller with no request scope — a worker, a CLI script, an in-process call to `RfqAdminService.createOnBehalf` — has no resolved channel and must name `salesChannelId`; without it the call is refused with the same code (`details.code: 'no_channel'`).
+
+  An operator names the sales channel a quote request is created on for a customer. `adminCreateQuoteRequestSchema` gains an optional `salesChannelId`; `POST /api/v1/admin/quote-requests` stores the request on that channel, snapshots its line names in the channel's default language, and reports `PRODUCT_UNAVAILABLE_IN_SCOPE` warnings for that channel, refusing — before anything is written — a channel that is not one of the Organization's active channels (read through the kernel's `SalesChannelMembershipPort.listChannelsForEntity`; `RfqAdminServiceDeps` gains `channelMembership`) with the new `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`. Absent, the request is raised where the admin request resolves (the system default, or `X-Sales-Channel`) — and that channel is checked the same way, as above. The _Create quote request_ screen offers the customer's organization's active channels — preselecting the only one, else requiring a choice —, prefills agreed prices on the chosen channel (`PricePrefillRequest.salesChannelId`), and, when the answer warns, lists the unavailable products before leaving the screen. Until a channel is settled it neither prefills prices nor sends anything: a failed or refused read says so (`rfqCreate.channelsLoadError`) with a retry, inactive while it runs.
+
+- 22604fa: Attachments per sales channel and language, packaging-unit names per language (product data scopes, FR-078, FR-079).
+
+  - **Attachments:** create and update (`POST` / `PATCH /api/v1/admin/catalog/products/:productId/attachments…`) accept `nameTranslations` and `descriptionTranslations` (language → text; `''` removes a language) and `hiddenInChannels` (replaces the set). A newly hidden channel the product is not a member of is refused with `422 SCOPE_INVALID`; clearing is always allowed. The admin DTO carries all three. The product page leaves out an attachment hidden in the request's channel and serves its name and description in the request's language, else the global ones.
+  - **Packaging units:** create and update accept `nameTranslations` (the admin schemas stay strict). The admin DTO and `CatalogPackagingUnitRecord` carry it. The product page's `packagingUnits[].name` is the name in the request's language, else the global name.
+  - **Basket snapshot:** a basket line ordered by a packaging unit stores the unit's name in the basket's language (`effectivePackagingUnitName`) and keeps it after a rename; the order line copies it. A buyer's quote-request line (create and draft edit) appends the unit's name in the request's language on its channel, else the global name, and keeps it; a line naming its unit by name and base quantity is still matched on the global name.
+  - **Auditing:** these writes run the existing Commands `product_attachment.create` / `.update` and `packaging_unit.create` / `.update`, one audit entry per request. The route-level `attachment.create`, `attachment.update` and `product_packaging_unit` rows are no longer written beside them. The projections carry `productId`, the translations and `hiddenInChannels`; re-sending `before` without `productId` restores the row. They emit `product.updated.v1` with `changedFields: ['attachments']` / `['packagingUnits']`; a request that changes nothing writes and emits nothing. EN/PL audit labels added.
+  - **Scope overview:** lists `attachments:hidden` per channel and `attachments:name`, `attachments:description`, `packagingUnits:name` per language.
+  - **Contracts:** `ATTACHMENT_DESCRIPTION_TRANSLATION_MAX`.
+  - **Migration** `catalog` `attachment_packaging_translations`: columns `product_attachments.name_translations`, `.description_translations`, `product_packaging_units.name_translations`, table `product_attachment_channel_hidden`. No backfill.
+
+- 145ab33: Quote requests refuse an archived product (product data scopes). A product archived with catalog's Archive action can no longer be put on a quote request through any path:
+
+  - **Buyer:** create, draft edit and resubmit — and so cart conversion, the quick order build, shopping-list conversion and order clone, which all create through the same path — answer `404 PRODUCT_NOT_FOUND`, exactly as for a product that does not exist. This now also holds outside a request (no sales channel), where only the audience rule used to run.
+  - **Behaviour change for API clients — operator:** `POST /api/v1/admin/quote-requests` and `PATCH /api/v1/admin/quote-requests/:id` refuse a line whose product is archived with `409 PRODUCT_ARCHIVED` ("Product is archived.") and write nothing; a product id that does not exist still answers `404 PRODUCT_NOT_FOUND`. Before, the create accepted it and answered a `PRODUCT_UNAVAILABLE_IN_SCOPE` warning; that warning still covers every other reason a line is unavailable.
+  - **Convert:** converting an approved quote whose product has been archived since answers the existing `409 PRODUCT_NOT_FOUND` before the basket is touched (the line would have been refused at order placement anyway).
+
+  Price lists are unchanged: an archived product can still be priced.
+
+- d50b874: A discount that is real but rounds to no cent is no longer shown as 0,00 (issue #430).
+
+  - **`DocumentValue`** (contracts): a `money` value may carry `belowMinorUnit: true`. `formatDocumentValue` prints it as `DOCUMENT_BELOW_MINOR_UNIT_TEXT` ("—"), and `sumDocumentValues` keeps the mark while the sum is zero.
+  - **Quote document** (quote_requests): `lineDiscount` and `discountTotal` carry the mark when a line has a unit discount but its rounded line discount is 0.00, so the PDF prints "—"; the amount stays 0, so list value − discount = net.
+  - **Admin quote screen** (quote_requests): the _Difference_ column keeps a difference of unit prices at four places (`referenceDifference(...).amount`) and shows its significant places (`RfqNumberFormat.signedUnitAmount`), instead of rounding it to 0.00.
+
+### Patch Changes
+
+- bdd04a7: The acquisition seams ask `catalogProductAvailabilityPort` (product data scopes per sales channel and language) instead of testing membership, audience or status themselves.
+
+  - **Behaviour change for API clients — basket:** adding a product to the basket (single add and the batch add behind quick order, shopping-list and quote conversions) is refused with `404 PRODUCT_NOT_FOUND` — the answer an absent product gets — when the product is not effectively available at the basket's channel and the request's language (switched off there, outside its publication window, or outside the channel's audience rule). The add path used to test no status at all, so a `draft` member product could be put in a basket. A line whose product goes off after it was added stays in the basket and reads `unavailable` (`unavailableReason: 'not_purchasable'`); submitting the basket for approval and placing the order refuse it with `404 PRODUCT_NOT_FOUND` and its `cartItemIds`, and the checkout preview lists it as `product_unavailable`. The cart's up-sell strip shows only available products.
+  - **Orders:** the admin order preview reports a member product that is not available in the chosen channel (at its default language) as `PRODUCT_NOT_IN_SALES_CHANNEL`. Reorder and quote conversion are unchanged (their lines are refused at placement as above).
+  - **Quote requests:** a buyer's request (create, draft edit, resubmit) naming a product not available at the request's channel and language is refused with `404 PRODUCT_NOT_FOUND`. `POST /api/v1/admin/quote-requests` still accepts such a line and answers `warnings: [{ productId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }]` beside `data` (only when there is one).
+  - **Comparisons and shopping lists:** a product not available at the request's channel and language cannot be added or saved (`404 PRODUCT_NOT_FOUND`); a comparison column reads `available` from the same answer; a saved line whose product went off is skipped on conversion as `product_not_found`.
+  - **Quick order:** a pasted SKU of a product not available in the request's channel is rejected as `product_not_found`; the operator's import arm is unchanged.
+  - **Effective names (FR-017):** basket line names and batch below-minimum outcomes, quote-request line snapshots (buyer: request language; operator: channel default) and comparison names and compared values follow the channel's overrides at the request language.
+
+- 07f3764: Minimum order quantity and "returnable" per sales channel (product data scopes, FR-100).
+
+  - **Behaviour change:** a product's channel override of its minimum order quantity or its returnable flag (`product_channel_scopes`, written through `PATCH /api/v1/admin/catalog/products/:id/scopes`) now applies in that channel. Adding to the basket (single, batch and quick-order build), the basket view, submitting a basket for approval, the checkout preview, placement, the admin order preview, quote requests (create, draft edit, resubmit, the operator's per-line warning) and the buyer's quick-order import judge the minimum of the basket's, order's or request's channel; a channel minimum of 1 means no minimum there. Placement stamps `order_items.returnable_at_purchase` from the order channel's flag, so returns follow it. Without an override nothing changes.
+  - **Storefront read model:** `minOrderQuantity` on the product detail and listing summaries is the request channel's value.
+  - **Contracts:** new `withChannelOrderRules(records, rules)` puts the rules of `catalogProductAvailabilityPort.effectiveOrderRules` into a set of product records for one seam; `CatalogProductRecord.minOrderQuantity` / `returnable` keep meaning the global values.
+
+- d9a4759: An operator's quote create or edit refused with `409 PRODUCT_ARCHIVED` names the archived products in `details.productIds`; the message stays catalog's `Product is archived.`.
+- df0a90e: A buyer's quote line is judged at the request's scope language, as a basket line is. `CreateForCustomerOptions` gains `languageTag` — the request's first `Accept-Language` tag, resolved against the channel's own languages — and `RfqService.createForCustomer`, `patchDraft` and `resubmit` ask `catalogProductAvailabilityPort` and snapshot line and unit names at it; absent, at the channel's default language. `language` is now a message language only: it used to decide the scope too, so a buyer asking in a language the message bundles do not carry (`de-DE` answered in Polish) was quoted a product switched off in that language. The customer quote routes, the basket's conversion to a quote request (`CartConversionService.convertToQuoteRequest`'s options gain `languageTag`) and the buyer's quick-order build to a quote request (`QuickOrderBuildOptions.languageTag`) pass the tag.
+- dde1f3e: Creating a quote request in the admin no longer offers archived products: the product browser has no Archived tab and leaves archived products out of All, and the quick search lists them disabled with the reason — as on the order create screen.
+- f148418: The storefront probes that take a bare product id follow product data scopes per sales channel and language.
+
+  - **Behaviour change for API clients — price and stock probes:** `GET /api/v1/storefront/products/:id/resolved-price`, `GET /api/v1/storefront/pricing/display-mode/:productId`, `GET /api/v1/storefront/inventory/stock/:id` and both notify-when-available routes (`POST /api/v1/storefront/inventory/notify-when-available`, `POST /api/v1/catalog/products/:id/notify-when-available`) answer only about a product available at the request's channel and language to the caller now. A product that is switched off there, outside its publication window, sold on another channel or outside the channel's audience rule gets each route's existing `404`, the same body an id nobody sells gets; a notify-when-available request for such a product can no longer reach `409 PRODUCT_UNMANAGED_STOCK` or `422 PRODUCT_IN_STOCK`.
+  - **Composition:** `price_lists`' plugin options and `inventory`'s plugin options take `catalogAvailability` (`catalogProductAvailabilityPort`), required; `AvailabilityNotificationService` takes it in place of the sales-channel membership port, and `SubscribeInput` gains `languageTag`.
+  - **Caching:** `markPersonalisedPricing` now marks every response for an authenticated caller `private, no-store`, not only one naming an organisation; `GET /api/v1/catalog/filters` and `GET /api/v1/catalog/categories` call it, since their counts and tree follow the caller's audience. Anonymous responses stay unstamped.
+  - **Product page:** an archived product answers `410` only where it would be available with the archive taken away; otherwise (switched off in that channel or language, outside its window) it answers the absent product's `404`.
+  - **Buyer seams name their channel:** `CreateForCustomerOptions.salesChannelId` (and the draft-edit and resubmit options) carry the channel the buyer's route resolved; quick order's pasted-SKU lookup takes it too; the basket asks availability at its own channel. The audience-only answer remains only for callers outside a request.
+  - **Helpers:** `@endora-commerce/contracts` exports `toScopeChannel`, `scopeLanguageOf` and `firstLanguageTag`. `BundleService.validateConfiguration` requires its availability filter.
+
+- eba4fd8: A quote's validity date now binds order placement, not only the conversion into a basket (issue #167). A basket line filled by `convert-to-order` names its quote (`CartItemRecord.quoteRequestId`, column `cart_items.quote_request_id`, backfilled from the basket's `source_quote_request_id`), and placement refuses every line still priced at its agreement with `410 QUOTE_VALIDITY_ENDED` once that quote's `expiresAt` has passed (`details.code: 'lapsed'`), once it no longer applies — re-opened, cancelled, expired or gone (`'withdrawn'`) — or while `quote_requests` is off and nothing can confirm the prices (`'unavailable'`, fail-closed; this used to place the basket at the agreed prices). The order-total preview answers the same verdict as `quoteCommitmentRefusal` (`quoteCommitmentRefusalSchema` in `@endora-commerce/contracts`), `null` when nothing is refused. `QUOTE_VALIDITY_ENDED` declares the three reasons as refusal tokens, with sentences in English and Polish.
+- bec2e83: Polish error messages are Polish sentences. 137 `errors.*` entries in these modules' `i18n/pl.json`
+  bundles were placeholders — the word "Błąd:" followed by the error code lowercased, for example
+  "Błąd: product not found." — and a request with `Accept-Language: pl` received them verbatim as
+  `error.message`. Each is now a sentence in Polish, for example "Nie znaleziono produktu."
+
+  Error codes, HTTP statuses and the English sentences are unchanged; a client matching on the code
+  sees no difference.
+
+- 1a88646: English error messages are English sentences. 137 `errors.*` entries in these modules'
+  `i18n/en.json` bundles were the error code in Title Case with a full stop, for example
+  "Product Not Found." or "Asset Legacy Locator Cannot Harden.", and a request in English received
+  them verbatim as `error.message`. Each is now a sentence in sentence case, for example
+  "Product not found." or "This file cannot be made private because it is stored at an address the
+  platform did not issue. Upload it again first."
+
+  Two Polish sentences were corrected to match what the code refuses: `CANNOT_MODIFY_SYSTEM_DEFAULT`
+  (`mod-sales-channels`) now says the default sales channel can be neither deactivated nor deleted,
+  and `MEGAMENU_TARGET_OUT_OF_SCOPE` (`mod-megamenu`) now names a page as well as a category.
+
+  Error codes and HTTP statuses are unchanged; a client matching on the code sees no difference. A
+  client that matched on the English message text must match the new sentences.
+
+- b80812d: `QuoteRequestPdfDialog` (_Export PDF_ / _Send PDF to customer_) picks the language in the same update that loads the template choices or changes the template, instead of in a following effect. A click on _Download PDF_ or _Send_ the moment the dialog finished loading could otherwise go out with no `language` while the select already showed one, leaving the server to fall back to the channel's language even where the preselected template does not offer it.
+- c99b4cd: The command-palette actions of the commerce modules (`carts`, `catalog`, `comparisons`, `credit_limits`, `customer_accounts`, `customers`, `custom_fields`, `delivery_methods`, `dictionaries`, `document_templates`, `import_export`, `inventory`, `invoice_ledger`, `invoices`, `payment_methods`, `price_lists`, `product_feeds`, `promotions`, `quote_requests`, `sales_channels`, `taxes`) keep only English `keywords` in their manifests. Their Polish search words moved to each module's `i18n/pl.json` under the action's new `keywordsKey`, with an English entry in `i18n/en.json` (issue #573, following #560), and the ones that had been written without diacritics now carry them (`utwórz cennik`, `wyjaśnienie ceny`, `kolejność cen`). A Polish operator finds the same screens by the same words; an English-language admin is no longer offered the Polish ones.
+- Updated dependencies [42b1038]
+- Updated dependencies [5d192d3]
+- Updated dependencies [9b45768]
+- Updated dependencies [d2acc82]
+- Updated dependencies [22604fa]
+- Updated dependencies [c3165da]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [e64ed74]
+- Updated dependencies [e03e6a9]
+- Updated dependencies [50338a6]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [22604fa]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [9ff8307]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [07f3764]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [ea892d5]
+- Updated dependencies [678fed1]
+- Updated dependencies [dcbd154]
+- Updated dependencies [a76d6ee]
+- Updated dependencies [22604fa]
+- Updated dependencies [9a38360]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [bdef54c]
+- Updated dependencies [1b4f2b7]
+- Updated dependencies [d560d58]
+- Updated dependencies [dd6deb2]
+- Updated dependencies [3f697a3]
+- Updated dependencies [df0a90e]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [774d23e]
+- Updated dependencies [4cb0a7d]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [f148418]
+- Updated dependencies [3ea1249]
+- Updated dependencies [476c5aa]
+- Updated dependencies [8ef189b]
+- Updated dependencies [4bc5c7f]
+- Updated dependencies [eba4fd8]
+- Updated dependencies [61fc321]
+- Updated dependencies [9b3e7f0]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [b7baf8a]
+- Updated dependencies [1b1c43e]
+- Updated dependencies [56e237d]
+- Updated dependencies [d50b874]
+- Updated dependencies [a166cfd]
+- Updated dependencies [0a816a0]
+- Updated dependencies [f261ed3]
+- Updated dependencies [302e5ce]
+- Updated dependencies [d68fb89]
+- Updated dependencies [c73366c]
+- Updated dependencies [b0a1e48]
+- Updated dependencies [b25d8be]
+- Updated dependencies [5038a3a]
+- Updated dependencies [eeed924]
+- Updated dependencies [df95f59]
+- Updated dependencies [1fd4822]
+- Updated dependencies [9cb3c8d]
+- Updated dependencies [0f5bcde]
+- Updated dependencies [c72a83e]
+- Updated dependencies [42189ce]
+- Updated dependencies [d9053a7]
+- Updated dependencies [23489bf]
+- Updated dependencies [f40ce92]
+- Updated dependencies [55864a1]
+- Updated dependencies [ed85493]
+- Updated dependencies [3174251]
+- Updated dependencies [55864a1]
+- Updated dependencies [11b0eb8]
+- Updated dependencies [b8b6eed]
+- Updated dependencies [2aa2c9b]
+- Updated dependencies [883d192]
+- Updated dependencies [5114576]
+- Updated dependencies [8f7c38e]
+- Updated dependencies [1846755]
+  - @endora-commerce/admin-kit@0.109.0
+  - @endora-commerce/platform@0.109.0
+  - @endora-commerce/contracts@0.109.0
+  - @endora-commerce/page-builder-core@0.109.0
+  - @endora-commerce/email-components@0.109.0
+
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Quote requests validate packaging units by id and apply minimum order quantities — refused for buyers, flagged for sales reps.
+
+  - **Behaviour change for API clients — packaging validation.** A customer line (create, draft edit, cart → quote request) may carry `packagingUnitId`; it must be a current unit of the line's product, and the server stores that unit's catalogue name and base quantity. A line sending a packaging name and base quantity without an id is accepted only when both match one of the product's units. Anything else is refused whole with `422 PACKAGING_UNIT_MISMATCH`, `details.lines[]` with `index` and `reason`; every failure of an id has the single reason `unknown_unit` (a name gives `name_unknown` or `base_quantity_mismatch`). **A buyer request with a non-matching packaging label is now refused, including a draft edit of an existing request whose stored label no longer matches a catalogue unit.** `packagingUnitId` is returned on the admin and customer reads.
+  - **Behaviour change for API clients — buyer writes refused below a minimum.** Customer create (`POST /api/v1/quote-requests`, also from the cart, quick order, a shopping list or an order clone), draft edit (`PATCH /api/v1/quote-requests/:id`) and resubmit answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`. Order: hidden or unpublished products as unknown first, then packaging, then minimums. A draft edit does not refuse a line left unchanged; a line is matched to its stored row by the packaging unit's id first, so a unit renamed in the catalogue since does not make the line "changed" (it keeps its exemption and its stored reference price). Resubmit is judged as a new request; **a resubmit of a request whose product no longer exists now answers `404 PRODUCT_NOT_FOUND`**.
+  - **Product names in the response language.** The minimum and packaging refusals of a buyer's create (also from the cart, quick order and a shopping list), draft edit and resubmit name products in the language their sentence is written in (q-sorted `Accept-Language`, else the channel default); `createForCustomer` takes `options.language`.
+  - **Sales-rep writes warn.** Create on behalf, Modify, the admin's order clone and the admin quick-order build write below-minimum lines; `GET /api/v1/admin/quote-requests/:id` gives each such line `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), shown as a _Below minimum_ badge on the quote request screen. It never reaches the customer read.
+  - `RfqCustomerPort.createForCustomer` accepts `options.minimums` (`'enforce' | 'warn'`).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.minimum.pieces`, `rfq.detail.minimum.packagingUnit` and `rfq.detail.minimum.packagingUnitUnnamed` in English and Polish.
+  - Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.
+
+- 73699ad: Custom-field filters on the admin Orders and Quote Requests lists. The fields marked as list filters appear among each list's filters, labelled in the operator's language, and are applied on the server. They are deep-linkable (`cf.<key>.<operator>` in the address), shown as removable chips and kept in saved views. A saved filter on a field that is no longer offered is dropped when the view is loaded, with a notice naming it. A filter the server refuses, for instance one carried in an old link, is reported by the field's name with a button that removes it. The Orders CSV export follows the same filters, and is not offered while a refused filter stands.
+- 252b54b: The admin Quote Request list accepts `customFieldFilters`, a JSON object of filters keyed by Quote Request custom-field key, applied on the server and combined as AND with the organization, status and assignment filters. A key the list does not offer is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE` naming it; a malformed value, more than 10 keys or 100 chosen values, or the parameter given twice is 400 `VALIDATION_FAILED`. An operator that does not apply to a field's type, or an inverted range (a minimum above its maximum, a start date after its end), is refused with 400 `VALIDATION_FAILED` rather than ignored or answered empty.
+
+  `GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`) lists the Quote Request custom fields the list offers as filters.
+
+  The module's Quote Request custom-field definitions now follow its activation: while `quote_requests` is switched off they are neither offered, served nor writable on the custom-fields admin, and they return unchanged with it.
+
+- cf7a9c0: The Order and the Quote Request detail screens honour `?returnTo=`: opened with a path of the application, their _Back_ leads there and says only "Back" — the convention their create screens already had. Without it, _Back_ still leads to the list.
+- 1df7a5e: The Line items table prints a document's groups.
+
+  - **Contracts.** `DocumentCollectionDeclaration` gains an optional `sections(data)` answering `DocumentItemSection[]` (`{ key, kind: 'group' | 'ungrouped', label, itemIndexes, summary }`, with `documentItemSectionSchema` and `DOCUMENT_UNGROUPED_SECTION_KEY`); `isValidSectionPartition(sections, itemCount)` checks one. `itemsTableGroupingSchema` is now a union of `{ by: 'sections', otherItemsLabel, showItemCount }`, `{ by: 'none' }` and the existing field shape (with `by: 'field'` optional) — `itemsTableSectionsGroupingSchema`, `itemsTableNoGroupingSchema`, `itemsTableFieldGroupingSchema`; `itemsTableGroupingMode(raw)` reads a stored value. `documentCollectionDetailSchema` gains `sampleSections` (default `[]`). `documentSectionTexts(language)` answers the default _Other items_ heading and the plural item count in English and Polish.
+  - **Changed meaning of a stored `grouping: null`.** It meant _No grouping_; it now means **the document's groups**, which is also what an absent setting means. A document with no group prints exactly as before (the flat definition is unchanged), so this changes nothing until a document has groups — then every template, including those saved before this release, prints them without being edited. A table that must stay flat whatever the document says stores `{ by: 'none' }` (_No grouping_ in the editor).
+  - **Document templates.** In that mode, a document holding a group prints per section a heading row (the group's name, the item count when enabled), its rows and one subtotal row per totals row of the table over the section's totals, then _Other items_ and the document's totals. The renderer reads `sections()` once per collection per render; a host that throws, or answers a partition that does not cover its lines, is logged and the table prints flat. Route 2 serves `sampleSections`; the editor's _Grouping_ field offers _Document's groups_, _By field_ and _No grouping_, the _Other items_ heading and _Show item count_, and the canvas draws the sample's groups.
+  - **Quote requests.** The quote's `lines` collection declares its sections (`quoteLineSections`), each with the quote's totals rule over its own lines; the editor's sample quote has two groups and an ungrouped line.
+
+- c8aa175: Quote request lines can be arranged in named, ordered groups.
+
+  - **Admin API.** `PATCH /api/v1/admin/quote-requests/:id` and `POST /api/v1/admin/quote-requests` accept `groups` (`{ key, id?, name }`, in display order) and a per-line `groupKey`. A body with `groups` replaces the grouping (an `id` keeps a group across a rename; a stored group not named is deleted; its lines become ungrouped); a body with `items` and no `groups` keeps every paired line in its group; `groups` without `items` answers 400; a group id of another quote answers `422 VALIDATION_FAILED` at `groups.<i>.id`. The grouping is written under the existing row lock and recorded on the `quote_request.modify` / `quote_request.create_on_behalf` audit entry (`stateBefore.groups`, `stateAfter.groups` as `{ name, lineCount }`). A save that only regroups is an ordinary revision.
+  - **Replies.** Every quote reply answers `itemGroups` (admin: every group, empty ones included; customer: groups holding a line only) and each item's `groupId` and `position`, with `items` **in display order** — the reply read had no order before. The customer comparison may carry `{ kind: 'grouping' }`; the admin history lists the five new change kinds. Customer bodies accept no grouping (`PATCH` refuses `groups`; a create body's keys are stripped as before); a customer draft edit keeps every paired line's group; resubmission copies none.
+  - **One product on several lines.** A quote may hold one product and variant on several lines, in different groups or in one. Lines without an id pair with stored lines by group and quantity first (draft edits, API clients, revision comparisons); the customer comparison pairs revision lines one to one instead of by product, and an entry about a product on several lines names its group (`groupName`), as the admin history's line reference does. A `PATCH` line may carry `splitFromId`: a new line split off a stored line keeps its variant, packaging unit, proposal, note, currency and reference. The _Modify_ tab offers _Split line_; the create screen lets a product be added again and keys its price prefill by line.
+  - **Read port.** `quoteRequestReadPort.listItems` answers lines in display order with `position` and `group`.
+  - **PDF data.** The document data carries `groups` and each line's `groupId` / `position`, lines in display order; the quote PDF prints them as sections (see the document-sections changeset).
+  - **Admin screens.** The detail _Modify_ tab and the create screen group lines with the line groups editor, with a summary per group; _Overview_ shows the groups read-only.
+  - **Migration** `20261020T171341_quote_requests_quote_request_item_groups.ts` creates `quote_request_item_groups` and adds `quote_request_items.group_id` (on delete set null) and `position` (default 0, no backfill).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.history.change.{group_added,group_removed,group_renamed,line_group,line_order}`, `rfq.detail.history.ungrouped` and `rfq.detail.history.lineInGroup` in English and Polish.
+
+- 14bcf1d: Every consumer prices on price books (feature 160, D-287 P1), through the one batched resolution chain.
+
+  - **carts** — `cart_items.price_source` (migration `…_carts_cart_items_price_source`) records which tier priced a line (`agreed | base | catalogue | buyer | sale`). `CartLinePricing.orderablePrices` drops the product's own price step, passes the variant, and stores the source.
+  - **orders** — `order_items.price_source` (migration `…_orders_order_items_price_source`) is copied from the cart line at placement. The admin order preview and the external order intake price through `resolveLinePrices` instead of one `resolveLinePrice` per line; a line no price book prices is refused, with no `defaultPrice` fallback.
+  - **organizations** — the effective price lists of an organization are its effective **price books**: `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })` answers the books whose audience holds the organization, an ancestor or its group, each with `reason` and `depth`. Old: `listActive()` plus `evaluateApplicationRule` per list. New: one `listForOrganization` call.
+  - **product_feeds** — a feed pinned to a price book publishes that book's rows over the channel's catalogue price (`namedListPrices` takes the feed's `salesChannelId`); a product the book does not price is absent.
+  - **search** — hits and suggestions price through the batched listing resolution; suggestions pass the request currency.
+  - **quote_requests** — reference prices are resolved in the request's currency; the RFQ create prefill and the reference probe call `POST /api/v1/admin/price-books/resolve` instead of `GET /api/v1/admin/products/:id/resolved-price`.
+
+- b0e1abd: A custom-field value that was not carried is recorded with the field's label, so its history line can name the field.
+
+  - **`customFieldCarryPort`** names every skipped key with the **source** definition's label as
+    it reads at that moment — `label: { labelDefault, labels }` — a `target_missing` skip
+    included.
+  - **Records keep the label.** The Order system note (`systemNote.skipped`), the Quote Request
+    `custom-field-carry-skipped` event and its `custom_field_carry_skipped` history entry, and the
+    Sales Opportunity audit member `customFieldCarry.skipped` store each skip's label next to its
+    key and reason. It is a snapshot: renaming the field later does not change history. Skips
+    recorded earlier have no label and read as before.
+  - An administrator who cannot read custom-field definitions can now be shown which field was
+    not carried and why. The values themselves stay visible only to readers with
+    `custom_fields:read`.
+
+- 9e0d759: A Quote Request created from a Sales Opportunity receives the Opportunity's carried custom-field values.
+
+  - **`quoteRequestCustomFieldCarryPort`** (`CustomFieldCarryReceiverPort` from
+    `@endora-commerce/contracts`) carries a Sales Opportunity's values into a Quote Request's
+    **empty** fields in one `quote_request.custom_fields.carry` Command, attributed to the system.
+    A value the request already holds is kept. A missing request and one of another Organization
+    both answer `not-found`, and nothing is written; when nothing is carried and nothing skipped,
+    no audit entry is written.
+  - **History.** A value that cannot be carried is named in one `custom-field-carry-skipped` event
+    (new value of the `qre_event_type_check` constraint, migration
+    `Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped`), shown in
+    `GET /api/v1/admin/quote-requests/:id/history` as a `custom_field_carry_skipped` entry with
+    `customFieldCarry` (the source Opportunity and every skipped key with its reason). It is
+    admin-only: buyer replies leave the event out.
+
+- 56b075d: The _Place order_ action on an approved Quote Request in the Admin UI works. It posted to the storefront's `POST /api/v1/quote-requests/:id/convert-to-order`, which is customer-only: an administrator's session answered `401`, which the Admin UI reads as an expired session, so the operator was signed out — and an accepted call would have seeded the administrator's own basket.
+
+  `@endora-commerce/mod-quote-requests` adds `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`, behind the module's `rfqs:handle` permission and the sales-representative scope of the other admin actions. It puts the approved request's lines into the basket of the customer who owns the request, at the agreed unit prices — replacing what that basket held, exactly as the customer's own conversion does and under the same rules — and records `quote_request.prepare_customer_basket` in the audit log. The customer completes the order at checkout. `@endora-commerce/contracts` exports its response schema, `adminPrepareCustomerBasketResponseSchema` (`cartId`, `customerAccountId`, `itemCount`).
+
+  The Admin UI button calls it after a confirmation that names the replaced basket, and is labelled _Prepare the customer's basket_ (`@endora-commerce/mod-i18n`, English and Polish).
+
+- e6f3a78: A quote line's unit prices keep four decimal places (owner ruling of 2026-10-25). `quote_request_items.desired_unit_price`, `agreed_unit_price` and `reference_unit_price` are `numeric(14,4)` (`Migration20261025T031736QuoteRequestsUnitPriceFourPlaces`, lossless). A typed desired or agreed price is stored as typed, up to four places (`unitPriceText` now writes four places; a fifth is refused with `400 UNIT_PRICE_PRECISION_EXCEEDED`), a reference price is the resolver's four-place amount, and a cart line's four-place price handed over on conversion is a valid reference. The quote document marks its unit prices (`listUnitPrice`, `proposedUnitPrice`, `unitPrice`, `unitGrossPrice`, `unitDiscount`) as unit prices, carried at four places and printed with their significant places; a line's discount is its list value less its net. The admin screens show unit prices by the same rule, take a typed price at four places, and value a line as its unit price × quantity rounded once.
+
+### Patch Changes
+
+- ee26beb: Documentation for custom-field list filters, in English and Polish.
+
+  - `@endora-commerce/mod-custom-fields` ships its first documentation page: the records that take
+    custom fields, creating and editing a field and the limits of editing, the _Use as list
+    filter_ option, how each type filters, and the list APIs.
+  - The `orders`, `quote_requests` and `crm` pages describe the custom-field filters on their admin
+    lists. The `quote_requests` page also says that its fields follow the module's activation. The
+    `crm` page explains how the Opportunities list's filters differ from the board's card-field
+    filters.
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- 87ac085: A price is rounded to two places the same way everywhere: half-up on its decimal digits.
+
+  - **`@endora-commerce/contracts`.** New `roundAmountHalfUp(value: string | number): string` — an amount at two places, half-up on its decimal digits (half away from zero when negative). A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-carts`.** The basket line stores the resolver's four-place amount through `roundAmountHalfUp`, and the placement drift check (`storedPriceDiffers`) compares with it. `Number(amount).toFixed(2)` rounded the binary double, so a 9.0450 price was stored and charged as 9.04 while the card showed 9.05, and 1.0050 as 1.00 against 1.01.
+  - **`@endora-commerce/mod-orders`.** The admin order preview rounds its line prices the same way.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's stored reference price is rounded the same way.
+  - **`@endora-commerce/mod-product-feeds`.** Feed prices (`123.45 PLN`) are rounded the same way.
+
+- f367838: A resolver amount stays the decimal string `price_lists` answers with until it is rounded, and it is rounded only by the decimal helpers (`roundAmountHalfUp`, `grossAmountHalfUp`).
+
+  - **`@endora-commerce/mod-product-feeds`.** The feed's price ports carry decimal strings: `NamedListPriceResolver` and `SelectionPricePort` answer `Map<string, string>` (was `Map<string, number>`), `AnonymousPriceResolver` answers `{ amount: string; isSale }`, `NamedListPriceResolvers.one` answers `string | null`, and `FeedItemPrice.net` / `.gross` are strings (`gross` already rounded to two places). A custom item-field resolver or a decoration of these ports reads strings now; the file's figures do not change.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's reference price is rounded from the resolver's decimal string, not from a JS number; anything but a non-negative decimal stores no reference.
+  - **`@endora-commerce/mod-comparisons`.** The comparison PDF, its document table block and the admin comparison screen write a price at two places, half-up: a price of 9.0450 was shown as `9.045 PLN`, and 1900 as `1900 PLN`.
+
+- 93f873e: The admin quote request's Modify tab pre-fills an empty agreed unit price with the customer's current price rounded half-up on its decimal digits (`roundAmountHalfUp`), as a stored reference price is. It wrote `toFixed(2)` of the binary double, so a price of 9.0450 was offered as 9.04 and, once accepted, charged as 9.04 against the 9.05 the storefront shows. The current reference price the screen asks for is held at those two places too, and a price already defined on the request is written by the same rule.
+- 6f1e0ec: Custom-field carry review fixes.
+
+  - **`@endora-commerce/contracts`** — every string of `customFieldCarrySkipLabelSchema` is at most 200 characters (`CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX`, new export); a longer `labelDefault` or per-locale label is refused.
+  - **`@endora-commerce/mod-custom-fields`** — the carry port cuts a skip's label snapshot to that limit, since a definition's per-locale labels are not capped, so every skip it plans parses.
+  - **`@endora-commerce/mod-quote-requests`** — the Opportunity → Quote Request carry takes the request's row `for update` and plans over the bag it re-reads under the lock, so an administrator's concurrent edit is never overwritten. A carry that fills a field still raises the request's `version`.
+
+- cec838d: The quote request's _History_ tab renders the `custom_field_carry_skipped` entry: under its title, the sales opportunity the values came from and one line per key not carried, with the reason, in English and Polish. A reason the screen has no sentence for reads "the value could not be carried", never its code.
+- f376a45: The admin quote request list's `totalAtAgreedPrice` and `totalAtCustomerPrice` are exact sums, through the customer list's helper `listTotal` (issue #417).
+- d34d96c: Quote amounts are computed in exact decimal arithmetic (issue #417). The rules are unchanged.
+
+  - **The quote document** (PDF lines and summary): a line's net, VAT and gross, the unit gross, the list value, the discounts and their percentage, and the summary's net, VAT (on the net total, at the quote's one rate) and gross are computed on decimals and rounded half-up once — 29.50 at 23 % printed a unit gross of 36.28, now 36.29.
+  - **Typed unit prices** — an operator's `agreedUnitPrice` and a buyer's `desiredUnitPrice` — are stored half-up on their decimal digits (new `unitPriceText`); `toFixed(2)` stored 1.005 as 1.00.
+  - **The admin screens**: the quote's net, VAT and gross (new `quoteTotals`, `quoteNet` in `admin/quote-totals.ts`), the section summaries and the reference difference are exact; 0.70 at 5 % showed a VAT of 0.03, now 0.04.
+
+- 2b8bd26: The quote request list's `totalAtCustomerPrice` and `totalAtAgreedPrice` are exact sums (issue #417, review of PR #423): 3 × 9.05 was published as `27.150000000000002`, now `27.15`. A typed `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED` (`@endora-commerce/contracts`).
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/page-builder-core@0.108.0
+  - @endora-commerce/email-components@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: Customer draft edits and seller revisions keep line data they used to drop.
+
+  - **Behaviour change — at most 200 lines.** Customer create (`POST /api/v1/quote-requests`) and draft-edit (`PATCH /api/v1/quote-requests/:id`) bodies accept at most 200 lines; a longer list, accepted before, is now refused with `400` and nothing is written. A client that sends more must split the request.
+  - **Customer draft edits** (`PATCH /api/v1/quote-requests/:id`) are refused only once an administrator has modified the request (`409 RFQ_NOT_DRAFT`); a customer — or an organization administrator editing a colleague's draft — may now edit a pending draft repeatedly. An edit stores each line's packaging unit as sent. The route is rate-limited to 30 edits per minute per quote request (`429` beyond).
+  - **Seller revisions** (`PATCH /api/v1/admin/quote-requests/:id`) keep each surviving line's customer proposal, variant, line note, packaging unit and stored reference price unless the request changes them; `lineNote: null` clears a note. A line the seller adds has no packaging unit.
+  - **New peer dependency: `@fastify/rate-limit` (`^10`)**, needed for the route's rate-limit configuration. The platform host already registers it.
+
+- 70bb5e5: New `GET /api/v1/admin/quote-requests/:id/history` (gated by `rfqs:handle` and the sales-representative scope) and a rebuilt History tab on the admin quote-request screen. The stored events are turned into readable, translated entries: records of one decision are merged, every entry names the person who acted (an administrator by name and role, a customer user by name and e-mail, _System_ for expiry and completion), and a modification lists what changed against the previous revision — lines added and removed, quantity, agreed and proposed price, line note, header note and validity date. The reply reads the most recent 100 events and says `truncated: true` when older ones exist. Names are on the admin surface only.
+
+  An admin modification that changes the offer's validity date now records it in the `modified` event's payload as `validity`, and the customer's event payloads may carry that one key.
+
+- 70bb5e5: A per-customer **price negotiation lock**. An administrator decides whether customers may propose prices on quote requests — on the organization (allowed by default) and, as an override, on a customer account (_as organization_, _allowed_, _not allowed_). The effective value is the account's override, else the organization's value, else allowed.
+
+  - **Admin API**: `GET` / `PUT /api/v1/admin/organizations/:id/quote-price-negotiation` and `GET` / `PUT /api/v1/admin/customers/:id/quote-price-negotiation`. Reading follows `customers:read`, writing needs `customers:manage`; a sales representative reaches only organizations they may see (`404` otherwise). Every change is an audited Command with the old and new value.
+  - **Admin UI**: panels on the organization and customer screens, shown to roles with `customers:read`; the control is disabled without `customers:manage`. A role with `customers:manage` but not `customers:read` sees no panel.
+  - **Storefront API**: `GET /api/v1/quote-requests/price-negotiation` answers the signed-in customer's own effective value (`{ priceProposalsAllowed }`) and nothing else.
+  - **Enforcement**: a customer create or draft edit whose lines carry a proposed price — `0` included — while the request owner's value is _not allowed_ is refused with `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED` (translated) and writes nothing. The lock binds the request's **owner**, not the acting user: an organization administrator editing a colleague's draft is judged by the colleague's value. Cart conversion and resubmission carry no proposal and keep working. The seller's side and proposals already stored are not affected.
+  - While the module is switched off, the panels, the routes and the enforcement are absent; stored values are kept and apply again when it is switched back on.
+
+- 70bb5e5: Every quote line now stores a **reference price** — the net unit price, per base unit, that the request's customer would pay on a normal order on the request's sales channel — captured server-side on every customer write (storefront form, cart conversion, draft edit, resubmit, quick order, shopping list, order copy) and kept for the life of the request. The admin detail shows it per line beside the customer's proposal, their difference (amount and percentage) and the agreed price; a line with no stored reference shows the customer's current price on the request's channel, labelled as such. The Modify tab shows the same with a live difference, and prefills an empty agreed price with the customer's own price rather than the administrator's storefront price.
+
+  - **The module now depends on `price_lists`** (manifest `dependencies`): the reference is resolved through its `buyerLinePricePort`. `price_lists` cannot be switched off, so no activation control is affected.
+  - **For ERP and connector readers of `quoteRequestReadPort.listItems`: a line converted from a cart now has `desiredUnitPrice = null`.** The cart's unit price is its reference — read it from the new `referenceUnitPrice` / `referenceCurrency`.
+  - **Customer list totals**: `totalAtCustomerPrice` is `null` unless every line carries a proposal, the rule the admin list already applied. A cart-converted request therefore shows no customer-price total until it is priced.
+  - **Admin list totals**: the customer-price total no longer turns `null` at the seller's first revision — a revision now keeps each line's proposal.
+  - **CRM opportunity value**: a cart-converted request with no agreed price is valued `0` (it used to be valued at the cart prices recorded as proposals); a revised line the customer left unpriced is valued at the proposal carried from the customer's last draft edit until sales sets an agreed price.
+  - A client cannot supply a reference price: an unknown key in the customer body is stripped. A failure to resolve a price stores no reference and never blocks the request.
+
+- 70bb5e5: **A sales representative outside a quote request's organization now gets `404`, not `403`, on every admin quote-request route** — the detail, the new history and every action — the same answer as for an id that does not exist, so the response no longer reveals that the request exists. A client that branched on `403` for "not yours" should treat `404` as that case.
+- 05d0650: `quoteRequestReadPort` records now carry `salesChannelId`: the channel the quote request was
+  raised on, or `null` for one created outside a channel-resolved request.
+- bf9881f: Each module contributes its record type to admin global search (`@endora-commerce/mod-admin-search`).
+
+  | Package              | Record type                           | Fields offered (default in bold)                                                 | Permission                             |
+  | -------------------- | ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+  | `mod-orders`         | `orders.order`                        | **number**, **organizationName**, **customer**, billingCompanyName, billingTaxId | `orders:read`                          |
+  | `mod-quote-requests` | `quote_requests.quote_request`        | **number**, **organizationName**, **customer**, customerNote                     | `rfqs:handle`                          |
+  | `mod-crm`            | `crm.opportunity`                     | **number**, **title**, **organizationName**, description                         | `crm:read`                             |
+  | `mod-organizations`  | `organizations.organization`          | **name**, **taxId**, legalName                                                   | `customers:read` or `customers:manage` |
+  | `mod-customers`      | `customers.customer`                  | **email**, **name**                                                              | `customers:read`                       |
+  | `mod-catalog`        | `catalog.product`, `catalog.category` | **sku**, **name**, slug, quickSearchAttributes; **name**, **slug**               | `catalog:read`                         |
+
+  Every provider applies its own admin list's visibility: sales representatives see only their
+  organizations' orders, quote requests, opportunities and customers; organizations follow the
+  Organizations list, with a representative's assigned organizations ranked first. Each module declares
+  a `contributes-to` edge on `adminSearchProviderRegistry`, so none of them depends on global search and
+  none loses its switch. `mod-quote-requests`, `mod-organizations`, `mod-customers` and `mod-catalog`
+  now declare `_i18n` in `dependencies` (status labels in the admin's language), and each module's
+  bundle gains `adminSearch.*` keys in English and Polish.
+
+- d571d8c: Quote request PDF: export and send to the customer (`specs/153-quote-request-pdf-template/`).
+
+  - The module registers the _Quote request_ document type (`quote_requests.quote_request`,
+    per-document selection) with four blocks (`QuoteHeader`, `QuoteParties`, `QuoteNotes`,
+    `QuoteDetails`), every general-purpose block, the line collection `lines` (list price, discounts,
+    net, VAT, gross, product attributes …) and a built-in layout in English and Polish.
+  - The quote request screen offers **Export PDF** and **Send PDF to customer** in every state while
+    document templates are switched on. The template chosen for a quote is remembered on it and
+    audited (`quote_request.set_document_template`); the language is chosen in the dialog.
+  - **Send PDF to customer** e-mails the PDF to up to five addresses (the requester preselected)
+    through the new transactional e-mail `quote_request_pdf`, editable and switchable like every
+    other, with an optional personal message; each send is audited
+    (`quote_request.send_document`) and shown on the quote's History.
+  - New admin routes under `/api/v1/admin/quote-requests/:id/`: `document-templates`,
+    `document-template`, `pdf`, `pdf/send`; new error codes `QUOTE_REQUEST_PDF_TOO_LARGE`,
+    `QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE`, `QUOTE_REQUEST_PDF_SEND_FAILED`.
+  - Schema: `quote_requests.document_template_id` (nullable, no foreign key) and the `pdf-sent`
+    event type. The module now depends on `transactional_emails`.
+
+- b96321c: Saved views on the admin Quote Request list (#290).
+
+  - The Quote Request list's toolbar carries the admin kit's saved-views control beside the column picker: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's visibility scope, organization, status selection, search text, sort and visible columns. Loading a view replaces all six and goes back to the first page; a status or column the list no longer offers is dropped, an empty column selection loads the default columns, an unknown sort loads _Newest_, and a view without a scope loads the viewer's default (_All_ for a platform admin, _My organizations_ otherwise). Any admin who can open the Quote Request list (`rfqs:handle`) can use it.
+  - Loading a view never widens what the loader sees: the list request that follows is the loader's own, narrowed to the organizations they reach, and a saved `scope: 'mine'` means the loader's assignments. A view stores an organization by id only, and the list never shows the name of an organization the loader cannot see — a captured organization outside their scope shows as an id prefix and an empty list.
+  - Four new routes, gated by `rfqs:handle` and by the module's presence: `GET` and `POST /api/v1/admin/quote-requests/list-views`, `PATCH` and `DELETE /api/v1/admin/quote-requests/list-views/{id}`. A view stores the list's filters, and optionally its sort (`{ field, dir }`) and visible columns; `null` for either means the list's default. `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - While `quote_requests` is switched off, all four routes answer `503 MODULE_DISABLED` exactly as the Quote Request list does; saved views are kept and are served again once the module is back.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the quote request list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 RFQ_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `quote_request_list_saved_views`, created by the migration `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `quote_requests` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.RFQ_SAVED_VIEW_NAME_TAKEN` member.
+
+### Patch Changes
+
+- b4fbb1c: **Create quote request** adds lines through **Browse products** — the admin kit's shared product
+  browser, many products at once — and a quick search by name or SKU beside it; the per-row product
+  search and **Add line** are gone. Draft and inactive products can be added; grouped and bundle
+  parents are shown with a reason and cannot; a product already on the request is marked as already
+  added. Each line shows name and SKU, an editable whole-number quantity (default 1), an editable
+  agreed unit price and remove.
+
+  The agreed unit price is prefilled from the customer's price lists through a queue with at most
+  four requests in flight, and a response is applied only while it still answers the line's current
+  product, quantity and customer. **A hand-typed agreed price is no longer overwritten** — before,
+  changing the quantity or the customer replaced it. A prefilled price answers one quantity, so
+  once the quantity is no longer a valid one that price is cleared and the line is marked. On a
+  customer change every price not typed by hand is cleared and resolved again for the new
+  customer, so it may become empty; lines added before a customer is chosen are prefilled once one
+  with an organization is.
+
+  **Incomplete lines block submit instead of being dropped**: a line with no agreed price or an
+  invalid quantity is marked and the request cannot be sent until it is fixed or removed; every line
+  on screen is sent. The running total counts the lines with both a valid quantity and a price.
+
+  The `core` bundle gains `rfqCreate.items.browse`, `rfqCreate.items.quickSearch`,
+  `rfqCreate.items.empty`, `rfqCreate.line.priceMissing` and `rfqCreate.line.quantityInvalid` in
+  English and Polish, and loses `rfqCreate.addItem`, which nothing reads any more.
+
+- 64aabf5: The customer draft-edit rate limit (`PATCH /api/v1/quote-requests/:id`, 30 edits per minute per quote request) is now counted after the customer guard and keyed on the customer as well as the request. An unauthenticated caller naming a request's id is answered `401` without consuming the owner's budget, and one customer's edits no longer spend another's. Only a well-formed request id enters the key; any other `:id` counts against one bucket per customer, so varying the path no longer mints a fresh budget.
+- 34f97ae: Callers of the cart ports name the basket's sales channel (`specs/154-sales-channel-access/`):
+  quick-order builds and one-click buy fill the basket of the request's channel (one-click now
+  always places on that channel), converting an approved quote request seeds the basket of the
+  request's channel (`RfqService.convertToOrder` takes the channel), and converting a shopping list
+  fills the basket of the request's channel (`ShoppingListService.convertToCart` takes the channel
+  as its fourth argument).
+- 53b3482: The Quote Request expiry sweep holds each request to `quote_requests.expiry_days` resolved for its own sales channel. It read the default channel's value and applied it to requests of every channel, so a channel set to `0` was not exempt and a channel with its own number of days was held to the default's. A request with no channel is held to the default channel's value, as before, and the `expired` history entry records the value that applied.
+
+  **On upgrading:** a channel that already has its own value starts following it on the sweep's first runs. A channel with a lower value than the default expires its backlog of requests that have been quiet that long, and a channel set to `0` stops expiring. Read the per-channel values of _Auto-expire pending after (days)_ before upgrading if that matters.
+
+  `@endora-commerce/mod-settings`: the setting's help text says so in English and Polish.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

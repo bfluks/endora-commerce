@@ -1,6 +1,7 @@
 import {
   defineModuleManifest,
   defineModuleSettingsManifest,
+  type CustomFieldWriteDeclaration,
   type ModuleDemoManifest,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
@@ -115,6 +116,28 @@ const demo: ModuleDemoManifest<ModuleContext> = {
   seed: async (context) => (await import('./backend/demo/seed.js')).seedDemo(context),
   reset: async (context) => (await import('./backend/demo/reset.js')).resetDemo(context),
 };
+
+/**
+ * Feature 175 (`specs/175-buyer-input-custom-fields/` research R-11) — the
+ * admin writes of this module's custom-field host, for `check:custom-field-writes`.
+ * Read as a literal by the check: keep every entry a literal object.
+ */
+export const customFieldWrites = [
+  {
+    entityType: 'opportunity',
+    kind: 'create',
+    method: 'POST',
+    path: '/api/v1/admin/crm/opportunities',
+    body: 'CreateOpportunityRequestSchema',
+  },
+  {
+    entityType: 'opportunity',
+    kind: 'update',
+    method: 'PATCH',
+    path: '/api/v1/admin/crm/opportunities/:id',
+    body: 'UpdateOpportunityRequestSchema',
+  },
+] satisfies CustomFieldWriteDeclaration[];
 
 export const manifest = defineModuleManifest({
   id: 'crm',
@@ -233,6 +256,60 @@ export const manifest = defineModuleManifest({
         'than from a caught refusal. A link holds the Quote Request by value, so no table of ' +
         'that owner is referenced from this module\'s schema.',
     },
+    // `specs/163-projects-and-tasks/` FR-044 — one reference standard with
+    // Projects: a Task referred to in an Opportunity's text is resolved, and
+    // offered after `@@`, through `tasks`' read port. `tasks` is
+    // operator-switchable and must stay so with CRM on.
+    {
+      moduleId: 'tasks',
+      name: 'taskReadPort',
+      kind: 'degrades-without',
+      whenAbsent: 'References to Tasks show as unavailable and Tasks are not offered after @@.',
+      reason:
+        'Every call into this owner goes through `crm-tasks.ts`, whose callers — the reference ' +
+        'service and the `@@` document list — ask `isPresent()` in front of the gate: a Task ' +
+        'referred to resolves as unavailable and the Tasks group is left out, from that decision ' +
+        'rather than from a caught refusal. A reference holds the Task by value, so no table of ' +
+        'that owner is referenced from this module\'s schema.',
+    },
+    {
+      // `specs/165-task-management/` R-5: Projects became a reference kind of
+      // the shared grammar, which CRM's texts resolve and offer after `@@`.
+      moduleId: 'projects',
+      name: 'projectReadPort',
+      kind: 'degrades-without',
+      whenAbsent: 'References to Projects show as unavailable and Projects are not offered after @@.',
+      reason:
+        'Every call into this owner goes through `crm-projects.ts`, whose callers ask `isPresent()` ' +
+        'in front of the gate: a referenced Project renders as unavailable and the `@@` list offers ' +
+        'none. A reference holds its Project by value, so no table of that owner is referenced from ' +
+        "this module's schema.",
+    },
+    // Issue #474 (owner ruling of 2026-10-27) — the reporting time zone CRM
+    // analytics count days in, owned by `analytics` so no single reporting
+    // module owns it. `analytics` is operator-switchable and must stay so.
+    {
+      moduleId: 'analytics',
+      name: 'reportingTimeZonePort',
+      kind: 'degrades-without',
+      whenAbsent: 'CRM analytics count days in UTC instead of the reporting time zone.',
+      reason:
+        'The one call into this owner is `reporting-time-zone.ts`, which asks `analytics`’ presence in front ' +
+        'of the gate and answers `UTC` without it; the figures are counted either way, and no table of that ' +
+        "owner is referenced from this module's schema.",
+    },
+    // Feature 162 — an Opportunity's custom-field values pushed into a Quote
+    // Request created from it (`specs/162-custom-fields-value-carry/`, R-16).
+    {
+      moduleId: 'quote_requests',
+      name: 'quoteRequestCustomFieldCarryPort',
+      kind: 'degrades-without',
+      whenAbsent: 'Values of Sales Opportunities are not carried into Quote Requests created from them',
+      reason:
+        'The one caller, `opportunity-document-carry.ts`, asks `isPresent()` before it reaches the ' +
+        'receiver, so a switched-off quote desk is never called and nothing is caught; there is ' +
+        'no Quote Request to carry into while the module is off, and nothing is replayed after.',
+    },
   ],
   settings,
   // Constitution XVII — the operator's activation control.
@@ -304,7 +381,13 @@ export const manifest = defineModuleManifest({
     { code: 'CRM_STATUS_INITIAL_REQUIRED' },
     { code: 'CRM_ASSIGNEE_INVALID' },
     { code: 'CRM_ATTACHMENT_TOO_LARGE' },
+    // Issue #639 (#86) — a public file attached; it was `422 VALIDATION_FAILED`
+    // with an English literal the envelope never replaces. One refusal, so no
+    // `tokens`; the asset travels as scalar `details`.
+    { code: 'CRM_ATTACHMENT_NOT_PRIVATE' },
     { code: 'CRM_TAG_NAME_TAKEN' },
+    // Issue #1734 — a saved view of the Opportunities page named as one its owner has.
+    { code: 'CRM_SAVED_VIEW_NAME_TAKEN' },
     { code: 'CRM_MESSAGE_IMMUTABLE' },
     // One sentence per broken rule: the raise carries the rule as its refusal
     // token (`details.code`) beside `details.rule`, which the contract names.
@@ -327,9 +410,11 @@ export const manifest = defineModuleManifest({
    * Sales Rep starts from it daily, the board, analytics — the one screen
    * that opens on a code of its own, so for a manager holding it the palette
    * would otherwise offer nothing of what that code is for — and the calendar,
-   * opened daily by everybody who holds `crm:read` (User Story 22). Curated, not a
-   * route dump — the workflow configuration is reached from the sidebar by the
-   * few who configure it.
+   * opened daily by everybody who holds `crm:read` (User Story 22). The tags and
+   * the workflow configuration joined them with issue #516: both are sidebar
+   * screens, and a sidebar entry the palette cannot find is the gap Principle
+   * XVI names. They open on `crm:configure`, so only the few who configure CRM
+   * see them.
    *
    * Each `requiredPermission` is the code the target route itself enforces
    * (`src/admin/index.ts`), so the palette never advertises a screen the
@@ -343,7 +428,8 @@ export const manifest = defineModuleManifest({
       icon: 'CircleDollarSign',
       targetRoute: '/crm/opportunities',
       requiredPermission: 'crm:read',
-      keywords: ['crm', 'opportunity', 'opportunities', 'pipeline', 'szansa', 'sprzedaż', 'lejek'],
+      keywords: ['crm', 'opportunity', 'opportunities', 'pipeline'],
+      keywordsKey: 'actions.openOpportunities.keywords',
       weight: 320,
     },
     {
@@ -353,7 +439,8 @@ export const manifest = defineModuleManifest({
       icon: 'PlusCircle',
       targetRoute: '/crm/opportunities/new',
       requiredPermission: 'crm:write',
-      keywords: ['crm', 'opportunity', 'new', 'create', 'szansa', 'sprzedaż', 'nowa'],
+      keywords: ['crm', 'opportunity', 'new', 'create'],
+      keywordsKey: 'actions.newOpportunity.keywords',
       weight: 321,
     },
     {
@@ -363,7 +450,8 @@ export const manifest = defineModuleManifest({
       icon: 'PanelLeft',
       targetRoute: '/crm/board',
       requiredPermission: 'crm:read',
-      keywords: ['crm', 'opportunity', 'board', 'kanban', 'pipeline', 'szansa', 'tablica', 'lejek'],
+      keywords: ['crm', 'opportunity', 'board', 'kanban', 'pipeline'],
+      keywordsKey: 'actions.openOpportunityBoard.keywords',
       weight: 322,
     },
     {
@@ -373,7 +461,8 @@ export const manifest = defineModuleManifest({
       icon: 'LineChart',
       targetRoute: '/crm/analytics',
       requiredPermission: 'crm:analytics',
-      keywords: ['crm', 'analytics', 'report', 'statistics', 'sales rep', 'analityka', 'raport', 'handlowiec'],
+      keywords: ['crm', 'analytics', 'report', 'statistics', 'sales rep'],
+      keywordsKey: 'actions.openCrmAnalytics.keywords',
       weight: 323,
     },
     {
@@ -383,8 +472,31 @@ export const manifest = defineModuleManifest({
       icon: 'CalendarDays',
       targetRoute: '/crm/calendar',
       requiredPermission: 'crm:read',
-      keywords: ['crm', 'calendar', 'events', 'reminder', 'schedule', 'kalendarz', 'wydarzenia', 'przypomnienie', 'terminy'],
+      keywords: ['crm', 'calendar', 'events', 'reminder', 'schedule'],
+      keywordsKey: 'actions.openCrmCalendar.keywords',
       weight: 324,
+    },
+    {
+      id: 'open-crm-tags',
+      labelKey: 'actions.openCrmTags.label',
+      descriptionKey: 'actions.openCrmTags.description',
+      icon: 'Tag',
+      targetRoute: '/crm/workflow/tags',
+      requiredPermission: 'crm:configure',
+      keywords: ['crm', 'tag', 'tags', 'label', 'labels'],
+      keywordsKey: 'actions.openCrmTags.keywords',
+      weight: 325,
+    },
+    {
+      id: 'open-crm-workflow',
+      labelKey: 'actions.openCrmWorkflow.label',
+      descriptionKey: 'actions.openCrmWorkflow.description',
+      icon: 'ListChecks',
+      targetRoute: '/crm/workflow',
+      requiredPermission: 'crm:configure',
+      keywords: ['crm', 'workflow', 'status', 'statuses', 'transitions', 'pipeline'],
+      keywordsKey: 'actions.openCrmWorkflow.keywords',
+      weight: 326,
     },
   ],
   /**
@@ -408,6 +520,12 @@ export const manifest = defineModuleManifest({
         { key: 'event.name', label: 'Event name', sampleValue: 'Demo at the warehouse' },
         { key: 'event.when', label: 'When the event starts', sampleValue: 'October 12, 2026, 10:00 AM (Europe/Warsaw)' },
         { key: 'opportunity.number', label: 'Opportunity number', sampleValue: 'OPP-000042' },
+        {
+          key: 'event.adminUrl',
+          label: 'Link to the event in the admin panel (empty when ADMIN_BASE_URL is not set)',
+          sampleValue:
+            'https://admin.example.com/crm/opportunities/00000000-0000-4000-8000-000000000042?tab=events&event=00000000-0000-4000-8000-0000000000e1',
+        },
       ],
     },
   ],

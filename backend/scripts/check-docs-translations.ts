@@ -1,7 +1,9 @@
 /**
- * FR-022 — every English documentation source has a pinned translation cache entry
- * at the current source hash and a materialized i18n markdown file for each configured
- * translate locale.
+ * FR-022 — every English documentation source has a translation pin at the
+ * current source hash and a materialized i18n markdown file for each configured
+ * translate locale. The pin (`docs/translation-cache/<locale>/<key>.json`) holds
+ * the source path and hash only (issue #671); one carrying anything else is
+ * `malformed-pin`. `pnpm --filter backend run docs:translations:pin` re-pins.
  *
  * Feature 133 (FR-043) added the half that reports on **what Docusaurus actually
  * reads**. Until then this check asked whether a message id *existed in
@@ -14,10 +16,17 @@
  * `docs/docusaurus.config.js` and `docs/sidebars.js` by
  * `lib/docs-chrome-messages.ts`, never listed here.
  *
+ * Issue #1340 added `structure-divergence`: a fresh pin over an English page
+ * whose heading outline no longer matches the translation it pins — an
+ * explicit `{#anchor}` on one side only or at another level, or a different
+ * count of unanchored headings at one level. That is the shape a merge leaves
+ * when it drops an English section, re-pins, and the Polish page keeps it.
+ *
  * Usage: `pnpm --filter backend run check:docs-translations`
  *
- * Exit 0 = complete; exit 2 = missing or stale translations, chrome messages in
- * the wrong file or missing from the right one, or a page with no reachable title.
+ * Exit 0 = complete; exit 2 = missing, stale or malformed translations, chrome messages in
+ * the wrong file or missing from the right one, a page with no reachable title, or a
+ * translation whose heading outline diverges from its English source.
  */
 /* eslint-disable no-console -- CLI check: stdout/stderr is the interface. */
 import { existsSync, readFileSync } from 'node:fs';
@@ -41,13 +50,15 @@ import {
   defaultTranslationCacheLayout,
   docIdFromSourcePath,
   hashSourceBody,
-  readCacheEntry,
+  readCacheEntryResult,
   materializedDocPath,
   type TranslationCacheLayout,
 } from './lib/docs-translation-cache.js';
 import {
   collectAllDocsTranslationSources,
   collectSidebarMessageIds,
+  headingOutline,
+  headingOutlineDivergence,
   loadTranslationSkipPaths,
   type DocsTranslationSource,
 } from './lib/docs-translation-sources.js';
@@ -58,10 +69,12 @@ const PREFIX = '[docs-translations]';
 export type DocsTranslationFindingKind =
   | 'missing-translation'
   | 'stale-translation'
+  | 'malformed-pin'
   | 'missing-sidebar-message'
   | 'chrome-message-missing'
   | 'chrome-message-inert'
-  | 'doc-title-unresolvable';
+  | 'doc-title-unresolvable'
+  | 'structure-divergence';
 
 export interface DocsTranslationFinding {
   readonly kind: DocsTranslationFindingKind;
@@ -156,8 +169,8 @@ export function checkDocsTranslations(input: DocsTranslationCheckInput): DocsTra
 
       const english = readSource(source.absolutePath);
       const currentHash = hashSourceBody(english);
-      const entry = readCacheEntry(locale, source.sourcePath, input.layout);
-      if (entry === null) {
+      const pin = readCacheEntryResult(locale, source.sourcePath, input.layout);
+      if (pin.kind === 'absent') {
         findings.push({
           kind: 'missing-translation',
           key: `${locale}:${source.sourcePath}`,
@@ -165,7 +178,15 @@ export function checkDocsTranslations(input: DocsTranslationCheckInput): DocsTra
         });
         continue;
       }
-      if (entry.sourceHash !== currentHash) {
+      if (pin.kind === 'malformed') {
+        findings.push({
+          kind: 'malformed-pin',
+          key: `${locale}:${source.sourcePath}`,
+          detail: `malformed-pin:${source.sourcePath}:${pin.reason}`,
+        });
+        continue;
+      }
+      if (pin.entry.sourceHash !== currentHash) {
         findings.push({
           kind: 'stale-translation',
           key: `${locale}:${source.sourcePath}`,
@@ -186,15 +207,10 @@ export function checkDocsTranslations(input: DocsTranslationCheckInput): DocsTra
         });
         continue;
       }
+      // The materialised page *is* the translation (issue #671): the pin says
+      // which English body it was made from, and nothing else holds a copy of
+      // it that could disagree.
       const onDisk = readFileSync(materialized, 'utf8');
-      if (onDisk !== entry.content) {
-        findings.push({
-          kind: 'stale-translation',
-          key: `${locale}:${source.sourcePath}`,
-          detail: `stale-translation:${source.sourcePath}`,
-        });
-        continue;
-      }
       // The same rule as the English source above, evaluated on the artefact
       // this locale actually ships: a Polish page whose first content node is a
       // translation-policy admonition resolves no title of its own.
@@ -206,6 +222,20 @@ export function checkDocsTranslations(input: DocsTranslationCheckInput): DocsTra
           detail:
             `doc-title-unresolvable:${repoRelative(input.repoRoot, materialized)}:` +
             translatedTitle.reason,
+        });
+      }
+      // Issue #1340: the pin proves which English body the translation was
+      // made from, not that the English body still holds everything the
+      // translation does — a merge that drops an English section and re-pins
+      // passes the hash. The heading outline is what both locales share.
+      for (const divergence of headingOutlineDivergence(
+        headingOutline(english),
+        headingOutline(onDisk),
+      )) {
+        findings.push({
+          kind: 'structure-divergence',
+          key: `${locale}:${source.sourcePath}:structure:${divergence}`,
+          detail: `structure-divergence:${source.sourcePath}:${locale}:${divergence}`,
         });
       }
     }

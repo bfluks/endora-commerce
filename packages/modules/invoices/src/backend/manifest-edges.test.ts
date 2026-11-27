@@ -12,9 +12,13 @@ import { manifest } from '../manifest.js';
  * would put the dependency back the wrong way round.
  */
 describe('invoices manifest', () => {
-  it('names only the invoice ledger among its non-binding edges', () => {
+  it('names the invoice ledger, payments and returns among its non-binding edges', () => {
+    // `payments` (issue #417): an invoice records as paid what was captured.
+    // `returns` (issue #428): and deducts what a settled return refunded outside it.
     expect((manifest.nonBindingDependencies ?? []).map((edge) => edge.moduleId)).toEqual([
       'invoice_ledger',
+      'payments',
+      'returns',
     ]);
   });
 });

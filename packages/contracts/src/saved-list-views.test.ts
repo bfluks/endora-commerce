@@ -4,14 +4,20 @@ import {
   SAVED_LIST_VIEW_FILTERS_MAX_BYTES,
   SAVED_LIST_VIEW_NAME_MAX,
   SAVED_LIST_VIEW_TOKEN_MAX,
+  createOpportunitySavedViewRequestSchema,
   createProductSavedViewRequestSchema,
+  createProjectSavedViewRequestSchema,
   createQuoteRequestSavedViewRequestSchema,
+  createReturnSavedViewRequestSchema,
   hasForbiddenNameCharacters,
   savedListViewNameKey,
   savedListViewNameSchema,
   savedListViewSchema,
+  updateOpportunitySavedViewRequestSchema,
   updateProductSavedViewRequestSchema,
+  updateProjectSavedViewRequestSchema,
   updateQuoteRequestSavedViewRequestSchema,
+  updateReturnSavedViewRequestSchema,
 } from './saved-list-views.js';
 
 const VIEW_ID = '00000000-0000-4000-8000-000000000001';
@@ -180,12 +186,78 @@ describe('quote-request saved-view requests (R-9)', () => {
   });
 });
 
+for (const [label, create, update] of [
+  ['opportunity', createOpportunitySavedViewRequestSchema, updateOpportunitySavedViewRequestSchema],
+  ['project', createProjectSavedViewRequestSchema, updateProjectSavedViewRequestSchema],
+] as const) {
+  describe(`${label} saved-view requests (#1734)`, () => {
+    it('keeps filters and sort, and strips visibleColumns — the list has no column picker', () => {
+      const parsed = create.parse({
+        ...BASE_CREATE,
+        filters: { state: 'open' },
+        sort: { field: 'createdAt', dir: 'asc' },
+        visibleColumns: ['number'],
+      });
+      expect(parsed).toEqual({
+        name: 'Unpaid EU',
+        shared: false,
+        filters: { state: 'open' },
+        sort: { field: 'createdAt', dir: 'asc' },
+      });
+    });
+
+    it('takes sort as null or absent — the list then opens in its default order', () => {
+      expect(create.safeParse(BASE_CREATE).success).toBe(true);
+      expect(create.safeParse({ ...BASE_CREATE, sort: null }).success).toBe(true);
+    });
+
+    it('requires shared and refuses filters over 8 KB', () => {
+      expect(create.safeParse({ name: 'a', filters: {} }).success).toBe(false);
+      expect(create.safeParse({ ...BASE_CREATE, filters: filtersOfBytes(8193) }).success).toBe(false);
+    });
+
+    it('is partial on update', () => {
+      expect(update.parse({})).toEqual({});
+      expect(update.parse({ name: ' b ' })).toEqual({ name: 'b' });
+    });
+  });
+}
+
+describe('return saved-view requests (#312)', () => {
+  const SORT = { field: 'submittedAt', dir: 'desc' } as const;
+
+  it('requires shared and sort on create, as the order list does', () => {
+    expect(createReturnSavedViewRequestSchema.safeParse({ ...BASE_CREATE, sort: SORT }).success).toBe(true);
+    expect(createReturnSavedViewRequestSchema.safeParse(BASE_CREATE).success).toBe(false);
+    expect(
+      createReturnSavedViewRequestSchema.safeParse({ name: 'a', filters: {}, sort: SORT }).success,
+    ).toBe(false);
+  });
+
+  it('keeps visibleColumns, absent or null', () => {
+    const parsed = createReturnSavedViewRequestSchema.parse({ ...BASE_CREATE, sort: SORT, visibleColumns: ['rma'] });
+    expect(parsed.visibleColumns).toEqual(['rma']);
+    expect(
+      createReturnSavedViewRequestSchema.safeParse({ ...BASE_CREATE, sort: SORT, visibleColumns: null }).success,
+    ).toBe(true);
+  });
+
+  it('is partial on update', () => {
+    expect(updateReturnSavedViewRequestSchema.parse({})).toEqual({});
+    expect(updateReturnSavedViewRequestSchema.parse({ name: ' b ' })).toEqual({ name: 'b' });
+  });
+});
+
 describe('write bounds on every create and update schema (S-05, S-06)', () => {
+  /** The return list's create, like the order list's, always carries a sort. */
+  const WITH_SORT = { sort: { field: 'submittedAt', dir: 'desc' } } as const;
   const schemas = [
-    ['createProductSavedViewRequestSchema', createProductSavedViewRequestSchema, true],
-    ['updateProductSavedViewRequestSchema', updateProductSavedViewRequestSchema, true],
-    ['createQuoteRequestSavedViewRequestSchema', createQuoteRequestSavedViewRequestSchema, false],
-    ['updateQuoteRequestSavedViewRequestSchema', updateQuoteRequestSavedViewRequestSchema, false],
+    ['createProductSavedViewRequestSchema', createProductSavedViewRequestSchema, true, {}],
+    ['updateProductSavedViewRequestSchema', updateProductSavedViewRequestSchema, true, {}],
+    ['createQuoteRequestSavedViewRequestSchema', createQuoteRequestSavedViewRequestSchema, false, {}],
+    ['updateQuoteRequestSavedViewRequestSchema', updateQuoteRequestSavedViewRequestSchema, false, {}],
+    ['createReturnSavedViewRequestSchema', createReturnSavedViewRequestSchema, false, WITH_SORT],
+    ['updateReturnSavedViewRequestSchema', updateReturnSavedViewRequestSchema, false, {}],
   ] as const;
 
   it('exports the bounds', () => {
@@ -201,7 +273,8 @@ describe('write bounds on every create and update schema (S-05, S-06)', () => {
     expect(polish.length).toBeLessThan(8192);
   });
 
-  for (const [label, schema, stripsListState] of schemas) {
+  for (const [label, schema, stripsListState, extra] of schemas) {
+    const BASE_CREATE = { name: 'Unpaid EU', shared: false, filters: {}, ...extra };
     describe(label, () => {
       it('rejects a name with a control or format character', () => {
         expect(schema.safeParse({ ...BASE_CREATE, name: 'a‮b' }).success).toBe(false);

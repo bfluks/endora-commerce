@@ -1,15 +1,24 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { sanitiseNext } from '../../../../lib/auth/next-path';
 import { verifyCustomerMfa } from '../../../../lib/api/auth';
-import { StorefrontApiError } from '../../../../lib/api/client';
 import {
+  clearAnonCartCookie,
   clearMfaChallengeCookie,
   getMfaChallengeCookie,
+  setCartMergeFlash,
   setSessionCookie,
 } from '../../../../lib/session';
 import { Hook } from '../../../../components/Hook';
 import { MfaCodeForm } from '../../../../components/MfaCodeForm';
+import { getServerContext } from '../../../../lib/server-context';
+import {
+  CHANNEL_NOT_PERMITTED_ERROR,
+  MFA_STEP_ERRORS,
+  signInErrorParam,
+} from '../../../../lib/auth/sign-in-errors';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { tForLocale } from '../../../../lib/i18n/messages';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -33,13 +42,17 @@ export default async function MfaPage({
   const nextPath = sanitiseNext(params.next);
   const challengeId = await getMfaChallengeCookie();
   if (!challengeId) {
-    redirect(`/login?next=${encodeURIComponent(nextPath)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
+
+  const { locale } = await getServerContext();
+  // Issue #745 — `?error=` is a code; one this step does not know reads as its own failure.
+  const error = params.error ? tForLocale(locale)(MFA_STEP_ERRORS.errorKey(params.error)!) : undefined;
 
   return (
     <>
       <Hook code="login.top" />
-      <MfaCodeForm action={verifyAction} next={nextPath} error={params.error} />
+      <MfaCodeForm action={verifyAction} next={nextPath} error={error} locale={locale} />
       <Hook code="login.bottom" />
     </>
   );
@@ -51,29 +64,36 @@ async function verifyAction(formData: FormData): Promise<void> {
   const next = sanitiseNext((formData.get('next') as string) ?? '/account');
   const challengeId = await getMfaChallengeCookie();
   if (!challengeId) {
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
 
   let result;
   try {
     result = await verifyCustomerMfa({ challengeId, code });
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Verification failed. Please try again.';
-    redirect(`/login/mfa?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
+    const errorCode = signInErrorParam(err, 'MFA_VERIFY_FAILED');
+    if (errorCode === CHANNEL_NOT_PERMITTED_ERROR) {
+      // `specs/154-sales-channel-access/` — the account may not use this store.
+      // Another code would not change that, so the challenge is dropped and the
+      // buyer is shown the refusal on the sign-in page, as the password step does.
+      await clearMfaChallengeCookie();
+      return await localeRedirect(`/login?error=${errorCode}&next=${encodeURIComponent(next)}`);
+    }
+    return await localeRedirect(`/login/mfa?error=${errorCode}&next=${encodeURIComponent(next)}`);
   }
   if (!result.sessionCookieValue) {
-    redirect(
-      `/login/mfa?error=${encodeURIComponent('Verification failed. Please try again.')}&next=${encodeURIComponent(next)}`,
+    return await localeRedirect(
+      `/login/mfa?error=MFA_VERIFY_FAILED&next=${encodeURIComponent(next)}`,
     );
   }
   await setSessionCookie(result.sessionCookieValue);
   await clearMfaChallengeCookie();
-  redirect(next);
+  // Issue #368 — the backend merged the signed-out basket on this call; as on
+  // the password step, drop the drained anonymous cookie and flash the notice.
+  if (result.cartMerge?.outcome === 'adopted' || result.cartMerge?.outcome === 'merged') {
+    await clearAnonCartCookie();
+    await setCartMergeFlash(result.cartMerge.outcome);
+  }
+  return await localeRedirect(next);
 }
 
-function sanitiseNext(input: string | undefined): string {
-  if (!input) return '/account';
-  if (!input.startsWith('/') || input.startsWith('//')) return '/account';
-  return input;
-}

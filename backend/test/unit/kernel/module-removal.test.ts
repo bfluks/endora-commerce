@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { MODULES } from '../../../src/composition.generated.js';
+import { generatedListCommandHooks } from '../../helpers/generated-list-command-hooks.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { ApiInterceptorRegistry } from '@endora-commerce/platform/composition';
 import { composeModules } from '@endora-commerce/platform/composition';
@@ -657,12 +658,15 @@ const RESIDUE_LEDGER: Readonly<Record<string, readonly string[]>> = {
   //
   // Two entries left it together when the `apps/<deployment>/decorations/` seam
   // was retired: the decoration file itself, and `src/composition.ts`. The last
-  // one was the dev seed, which value-constructs `DefaultPriceListMigrator`, and
+  // one was the dev seed, which value-constructed `DefaultPriceListMigrator`, and
   // that is the entry the packaging cleared — but **not** by the route the three
   // criterion-7 entries above take. A row type off `dist` would have kept the
-  // substring; what happened instead is that the module now publishes the
-  // migrator itself on `./backend`, so the seed names a bare specifier and holds
-  // the same class the platform composed. It had to: the reach is to a
+  // substring; what happened instead is that the module published the migrator
+  // itself on `./backend`, so the seed named a bare specifier and held the same
+  // class the platform composed. (Feature 160 deleted the migrator with the old
+  // price-list model; the demo's prices are `seedDemoPriceBooks` /
+  // `withdrawDemoPriceBooks` on the same door, reached from
+  // `@endora-commerce/demo-composition` by the same bare specifier.) It had to: the reach is to a
   // *service*, and the duplicate entity class it would have carried sits one hop
   // behind it, where `check:singleton-identity`'s conjunct 2 cannot see it
   // (D-160.6.1). The residue drained as a side effect of a correctness repair,
@@ -1014,9 +1018,17 @@ describe('T055 — the remaining module set still composes', () => {
       blogStorefrontDeps: undefined,
       emFactory: () => undefined,
     });
+    const hooks = generatedListCommandHooks();
     return composeModules(
       MODULES.filter((entry) => entry.id !== removed),
-      { container, eventBus: new EventBus(), log, interceptorRegistry: newInterceptorRegistry() },
+      {
+        container,
+        eventBus: new EventBus(),
+        log,
+        interceptorRegistry: newInterceptorRegistry(),
+        commandHookRegistry: hooks.registry,
+        commandHooks: hooks.data,
+      },
     );
   }
 
@@ -1030,9 +1042,17 @@ describe('T055 — the remaining module set still composes', () => {
   it('resolving the removed module\'s registration fails naming the name', () => {
     const container = createRootContainer();
     registerValues(container, { redis: undefined });
+    const hooks = generatedListCommandHooks();
     composeModules(
       MODULES.filter((entry) => entry.id !== SUBJECT),
-      { container, eventBus: new EventBus(), log, interceptorRegistry: newInterceptorRegistry() },
+      {
+        container,
+        eventBus: new EventBus(),
+        log,
+        interceptorRegistry: newInterceptorRegistry(),
+        commandHookRegistry: hooks.registry,
+        commandHooks: hooks.data,
+      },
     );
     // Not `undefined` reaching business logic — the property `composition.ts`
     // could not offer, where a missing option-object key is simply absent.

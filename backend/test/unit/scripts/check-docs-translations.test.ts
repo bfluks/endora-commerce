@@ -18,16 +18,20 @@ import {
 import {
   defaultTranslationCacheLayout,
   docIdFromSourcePath,
+  cacheEntryPath,
   hashSourceBody,
-  materializeTranslation,
   materializedDocPath,
   writeCacheEntry,
   type TranslationCacheEntry,
 } from '../../../scripts/lib/docs-translation-cache.js';
 import {
+  collectAllDocsTranslationSources,
+  collectTranslateCommandSources,
+  headingOutline,
   sidebarMessageIdsIn,
   type DocsTranslationSource,
 } from '../../../scripts/lib/docs-translation-sources.js';
+import type { DocPage } from '../../../scripts/lib/module-docs.js';
 import { resolveDocTitle } from '../../../scripts/lib/docs-title-resolution.js';
 import {
   checkDocsTranslations,
@@ -103,6 +107,19 @@ function baseInput(
   };
 }
 
+/** Write the Polish page where Docusaurus reads it — the translation itself. */
+function writeMaterialized(
+  root: string,
+  locale: string,
+  sourcePath: string,
+  content: string,
+): string {
+  const target = materializedDocPath(locale, docIdFromSourcePath(sourcePath), layout(root));
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content, 'utf8');
+  return target;
+}
+
 function seedTranslation(
   root: string,
   source: DocsTranslationSource,
@@ -114,11 +131,10 @@ function seedTranslation(
     sourcePath: source.sourcePath,
     sourceHash: hashSourceBody(english),
     locale,
-    content: `---\ntitle: Sample\n---\n\n${polishBody}\n`,
     meta: { provider: 'manual', updatedAt: '2026-09-17T08:00:00.000Z' },
   };
   writeCacheEntry(entry, layout(root));
-  materializeTranslation(entry, layout(root));
+  writeMaterialized(root, locale, source.sourcePath, `---\ntitle: Sample\n---\n\n${polishBody}\n`);
   return entry;
 }
 
@@ -134,11 +150,10 @@ function seedTranslationVerbatim(
     sourcePath: source.sourcePath,
     sourceHash: hashSourceBody(english),
     locale,
-    content: polish,
     meta: { provider: 'manual', updatedAt: '2026-09-17T08:00:00.000Z' },
   };
   writeCacheEntry(entry, layout(root));
-  materializeTranslation(entry, layout(root));
+  writeMaterialized(root, locale, source.sourcePath, polish);
   return entry;
 }
 
@@ -164,15 +179,91 @@ describe('check-docs-translations', () => {
         sourcePath: source.sourcePath,
         sourceHash: hashSourceBody(`${english}\nChanged.`),
         locale: 'pl',
-        content: '---\ntitle: Sample\n---\n\nWitamy.\n',
         meta: { provider: 'manual', updatedAt: '2026-09-17T08:00:00.000Z' },
       };
       writeCacheEntry(entry, layout(root));
-      materializeTranslation(entry, layout(root));
+      writeMaterialized(root, 'pl', source.sourcePath, '---\ntitle: Sample\n---\n\nWitamy.\n');
 
       const result = checkDocsTranslations(baseInput(root, [source]));
       expect(result.findings.map((finding) => finding.kind)).toEqual(['stale-translation']);
       expect(result.findings[0]?.detail).toBe('stale-translation:docs/docs/intro.md');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports missing-translation when the pin is fresh but no page is materialised', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', 'Welcome.');
+      writeCacheEntry(
+        {
+          sourcePath: source.sourcePath,
+          sourceHash: hashSourceBody(readFileSync(source.absolutePath, 'utf8')),
+          locale: 'pl',
+          meta: { provider: 'manual', updatedAt: '2026-09-17T08:00:00.000Z' },
+        },
+        layout(root),
+      );
+      const result = checkDocsTranslations(baseInput(root, [source]));
+      expect(result.findings.map((finding) => finding.detail)).toEqual([
+        'missing-translation:docs/docs/intro.md',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // --- Issue #671: the pin is the whole of the cache entry -----------------------------------
+
+  it('reads the materialised page as the translation — a Polish-only edit needs no re-pin (#671)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-pin-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', 'Welcome.');
+      seedTranslation(root, source, 'Witamy.');
+      // A wording fix to the Polish page alone: the English body did not move, so
+      // the pin is still true and nothing else holds a copy that could disagree.
+      writeMaterialized(root, 'pl', source.sourcePath, '---\ntitle: Sample\n---\n\nWitajcie.\n');
+      expect(checkDocsTranslations(baseInput(root, [source])).findings).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports malformed-pin for an entry that still duplicates the page (#671)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-pin-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', 'Welcome.');
+      const entry = seedTranslation(root, source, 'Witamy.');
+      // What a branch cut before #671 merges back in: a fresh hash, plus the page.
+      writeFileSync(
+        cacheEntryPath('pl', source.sourcePath, layout(root)),
+        `${JSON.stringify({ ...entry, content: '---\ntitle: Sample\n---\n\nWitamy.\n' }, null, 2)}\n`,
+        'utf8',
+      );
+      const result = checkDocsTranslations(baseInput(root, [source]));
+      expect(result.findings.map((finding) => finding.detail)).toEqual([
+        'malformed-pin:docs/docs/intro.md:unexpected-key:content',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports malformed-pin for a pin left with merge-conflict markers (#671)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-pin-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', 'Welcome.');
+      seedTranslation(root, source, 'Witamy.');
+      writeFileSync(
+        cacheEntryPath('pl', source.sourcePath, layout(root)),
+        '{\n<<<<<<< HEAD\n  "sourceHash": "a",\n=======\n  "sourceHash": "b",\n>>>>>>> other\n}\n',
+        'utf8',
+      );
+      const result = checkDocsTranslations(baseInput(root, [source]));
+      expect(result.findings.map((finding) => finding.detail)).toEqual([
+        'malformed-pin:docs/docs/intro.md:invalid-json',
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -532,6 +623,184 @@ describe('check-docs-translations', () => {
         .update(readFileSync(join(FIXTURE_DIR, name)))
         .digest('hex');
       expect(digest, `${name} is not the artefact captured from the pre-fix tree`).toBe(expected);
+    }
+  });
+
+  // --- Issue #676: the hand-authored pages under docs/docs/modules/ --------------------------
+
+  it('counts the hand-authored pages under the modules category, never the module copies (#676)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-sources-modules-'));
+    try {
+      const contentRoot = join(root, 'docs/docs');
+      const modulesRoot = join(contentRoot, 'modules');
+      writeEnglish(root, 'docs/docs/intro.md', 'Welcome.');
+      writeEnglish(root, 'docs/docs/modules/README.md', 'Backend modules.');
+      writeEnglish(root, 'docs/docs/modules/lifecycle.md', 'Lifecycle.');
+      writeEnglish(root, 'docs/docs/modules/module-map.generated.md', 'Module map.');
+      // What `composer:generate` copies in: present on a developer's disk, absent
+      // from a fresh checkout — the population must be the same size on both.
+      const modulePages: DocPage[] = [];
+      for (const relativePath of ['catalog.md', 'catalog/attributes.md']) {
+        const owned = writeEnglish(root, `packages/modules/catalog/docs/${relativePath}`, 'Owned.');
+        writeEnglish(root, `docs/docs/modules/${relativePath}`, 'Owned.');
+        modulePages.push({ path: owned.absolutePath, relativePath } as DocPage);
+      }
+
+      const all = collectAllDocsTranslationSources(root, contentRoot, modulesRoot, modulePages);
+      expect(all.map((source) => source.sourcePath)).toEqual([
+        'docs/docs/intro.md',
+        'docs/docs/modules/lifecycle.md',
+        'docs/docs/modules/module-map.generated.md',
+        'docs/docs/modules/README.md',
+        'packages/modules/catalog/docs/catalog.md',
+        'packages/modules/catalog/docs/catalog/attributes.md',
+      ]);
+
+      // The maintainer translate walk takes the hand-authored pages too, and
+      // leaves the generated module map to its own layer.
+      const translate = collectTranslateCommandSources(root, contentRoot, modulePages);
+      expect(translate.map((source) => source.sourcePath)).toEqual([
+        'docs/docs/intro.md',
+        'docs/docs/modules/lifecycle.md',
+        'docs/docs/modules/README.md',
+        'packages/modules/catalog/docs/catalog.md',
+        'packages/modules/catalog/docs/catalog/attributes.md',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('check-docs-translations — structural divergence (issue #1340)', () => {
+  const english = [
+    '## Public surface',
+    '',
+    'Text.',
+    '',
+    '## One Save on the screen {#one-save}',
+    '',
+    '```bash',
+    '# Install the module',
+    'pnpm install',
+    '```',
+    '',
+    '### Migrations',
+  ].join('\n');
+
+  const polish = [
+    '## API publiczne',
+    '',
+    'Tekst.',
+    '',
+    '## Jeden przycisk Zapisz na ekranie {#one-save}',
+    '',
+    '```bash',
+    '# Zainstaluj moduł',
+    '# Druga linia komentarza, której nie ma w wersji angielskiej',
+    'pnpm install',
+    '```',
+    '',
+    '### Migracje',
+  ].join('\n');
+
+  function run(englishBody: string, polishBody: string) {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', englishBody);
+      seedTranslation(root, source, polishBody);
+      return checkDocsTranslations(baseInput(root, [source]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('reads level and explicit anchor, ignoring front matter and fenced code', () => {
+    expect(
+      headingOutline(`---\ntitle: T\n---\n\n# Title\n\n~~~sh\n# not a heading\n~~~\n\n## A {#a}\n### B ##\n`),
+    ).toEqual([
+      { level: 1, anchor: null, id: 'title' },
+      { level: 2, anchor: 'a', id: 'a' },
+      { level: 3, anchor: null, id: 'b' },
+    ]);
+  });
+
+  it('derives the slug Docusaurus renders for a heading without an explicit anchor', () => {
+    expect(
+      headingOutline('## Sales channels\n## The `organizations` [module](./x.md)\n## Sales channels\n'),
+    ).toEqual([
+      { level: 2, anchor: null, id: 'sales-channels' },
+      { level: 2, anchor: null, id: 'the-organizations-module' },
+      { level: 2, anchor: null, id: 'sales-channels-1' },
+    ]);
+  });
+
+  it('pairs a Polish explicit anchor with the English heading whose derived slug it repeats', () => {
+    const result = run(
+      `${english}\n\n## Switching the module off\n`,
+      `${polish}\n\n## Wyłączanie modułu {#switching-the-module-off}\n`,
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it('reports a Polish anchor that matches no English heading id', () => {
+    const result = run(
+      `${english}\n\n## Switching the module off\n`,
+      `${polish}\n\n## Wyłączanie modułu {#wylaczanie-modulu}\n`,
+    );
+    expect(result.findings.map((finding) => finding.detail)).toEqual([
+      'structure-divergence:docs/docs/intro.md:pl:anchor-only-in-translation:#wylaczanie-modulu',
+      'structure-divergence:docs/docs/intro.md:pl:unanchored-h2-count:2-vs-1',
+    ]);
+  });
+
+  it('reports nothing for a normal translation whose heading text differs', () => {
+    expect(run(english, polish).findings).toEqual([]);
+  });
+
+  it('reports an anchored section the Polish page keeps and the English page dropped', () => {
+    const dropped = english.replace('## One Save on the screen {#one-save}', 'Moved text.');
+    const result = run(dropped, polish);
+    expect(result.findings.map((finding) => finding.detail)).toEqual([
+      'structure-divergence:docs/docs/intro.md:pl:anchor-only-in-translation:#one-save',
+    ]);
+    expect(result.findings[0]?.kind).toBe('structure-divergence');
+  });
+
+  it('reports an anchored section the English page has and the Polish page lacks', () => {
+    const result = run(`${english}\n\n## Upgrading {#upgrading}\n`, polish);
+    expect(result.findings.map((finding) => finding.detail)).toEqual([
+      'structure-divergence:docs/docs/intro.md:pl:anchor-only-in-source:#upgrading',
+    ]);
+  });
+
+  it('reports an anchor whose heading level differs between the two pages', () => {
+    const result = run(english.replace('## One Save', '### One Save'), polish);
+    expect(result.findings.map((finding) => finding.detail)).toEqual([
+      'structure-divergence:docs/docs/intro.md:pl:anchor-level:#one-save:h3-vs-h2',
+    ]);
+  });
+
+  it('reports a dropped unanchored section as a per-level heading count mismatch', () => {
+    // The #1340 shape: the section had no explicit anchor, so only the count
+    // per level can tell the shortened English page from its translation.
+    const dropped = english.replace('## Public surface\n\nText.\n\n', '');
+    const result = run(dropped, polish);
+    expect(result.findings.map((finding) => finding.detail)).toEqual([
+      'structure-divergence:docs/docs/intro.md:pl:unanchored-h2-count:0-vs-1',
+    ]);
+  });
+
+  it('does not compare a translation whose pin is already stale', () => {
+    const root = mkdtempSync(join(tmpdir(), 'docs-check-'));
+    try {
+      const source = writeEnglish(root, 'docs/docs/intro.md', english);
+      seedTranslation(root, source, `${polish}\n\n## Dodatkowa {#extra}\n`);
+      writeFileSync(source.absolutePath, `${readFileSync(source.absolutePath, 'utf8')}\nMore.\n`);
+      const result = checkDocsTranslations(baseInput(root, [source]));
+      expect(result.findings.map((finding) => finding.kind)).toEqual(['stale-translation']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

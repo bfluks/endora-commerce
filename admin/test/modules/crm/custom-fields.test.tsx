@@ -129,8 +129,6 @@ describe('custom fields on the Opportunity (Overview)', () => {
         onChange={onChange}
         reload={async (): Promise<void> => {}}
         orderStatuses={[]}
-        editing={false}
-        onEditingChange={(): void => {}}
       />,
       { permissions },
     );
@@ -144,6 +142,17 @@ describe('custom fields on the Opportunity (Overview)', () => {
     expect(getSpy.mock.calls.map(([path]) => path)).toContain(DEFINITIONS_URL);
   });
 
+  it('is a section of the Overview tab’s card, not a card inside it (issue #1504, WORK-04)', async () => {
+    renderOverview();
+    const field = await screen.findByLabelText(/Lead source/);
+    // The Overview tab is mounted inside the detail page's tab card; a card here is a card in a card.
+    expect(field.closest('[data-slot="card"]')).toBeNull();
+    const section = field.closest('section[data-slot="editor-section"]');
+    expect(section).not.toBeNull();
+    expect(section!.className.split(/\s+/)).not.toContain('border');
+    expect(document.body.querySelector('[data-slot="card"] [data-slot="card"]')).toBeNull();
+  });
+
   it('saves through the Opportunity’s own PATCH, with If-Match, and puts the answer on screen', async () => {
     const saved = detail({ version: 5, customFieldValues: { lead_source: 'trade_fair', competitor: 'Globex' } });
     patchSpy.mockResolvedValue({ data: saved });
@@ -155,7 +164,8 @@ describe('custom fields on the Opportunity (Overview)', () => {
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
     expect(patchSpy.mock.calls[0]).toEqual([
       `/api/v1/admin/crm/opportunities/${OPPORTUNITY_ID}`,
-      { customFieldValues: { lead_source: 'trade_fair', competitor: 'Globex' } },
+      // Only the changed key (issue #1007): the unchanged `competitor` is left to the server's merge.
+      { customFieldValues: { lead_source: 'trade_fair' } },
       { headers: { 'If-Match': '"4"' } },
     ]);
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(saved));
@@ -168,7 +178,7 @@ describe('custom fields on the Opportunity (Overview)', () => {
     await userEvent.click(screen.getByRole('button', { name: core('customFields.save') }));
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
     expect(patchSpy.mock.calls[0]?.[1]).toEqual({
-      customFieldValues: { lead_source: null, competitor: 'Globex' },
+      customFieldValues: { lead_source: null },
     });
   });
 

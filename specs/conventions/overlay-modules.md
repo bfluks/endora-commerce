@@ -14,8 +14,7 @@ the permission-inventory check **for that deployment** — run the inventory tes
 shadowing it (feature 072), and there is exactly one way to write one: from the deployment's
 own overlay module, `ctx.di.decorate('<registrationName>', (inner) => …)`, which receives the
 core implementation and returns one that delegates to it, so core fixes keep flowing.
-`backend/src/apps/example/modules/example_overlay/backend.ts` is the worked example. A
-`services/` file under an overlay is an **unknown override target** and fails the build.
+`backend/src/apps/example/modules/example_overlay/backend.ts` is the worked example.
 
 **There used to be a second way, and it is retired** — a file under
 `backend/src/apps/<deployment>/decorations/`, named after the registration it wraps, exporting
@@ -42,7 +41,17 @@ every consumer of that name resolves, and a core module wrapping `commandBus`,
 `auditLogService` or another module's read port is a coupling nothing declares. Ask the owner
 for a seam instead (a port, a contribution point, an event). An overlay module is exempt, and
 the exemption is structural: `loadOverlayModuleEntries` marks an entry `overlay: true` from
-the root it was discovered under, so core cannot assert it.
+the root it was discovered under, so core cannot assert it. That exemption is **D-156.4, narrowed
+by D-296**, and the narrowing covers the four guard seams only — `commandBus`, `auditLogService`,
+`eventBus`, `emFactory` (`GUARD_SEAM_REGISTRATIONS` in `@endora-commerce/contracts`): an overlay's
+decoration of one is deprecated in 0.113.0 (it composes, logs `kernel.decoration.deprecated` and is a
+`deprecated-decoration` warning in the divergence report) and refused from 0.114.0. Use command
+middleware (`admit` to refuse, `observe` to measure) or a command hook instead of wrapping
+`commandBus` or `auditLogService`, `ctx.subscribe` or an `afterCommit` hook instead of wrapping
+`eventBus`, and a port from the owning module instead of `emFactory`; `guardSeamReplacementFor`
+carries the full text. Decorating another overlay module's registration, a workspace module's, or any
+other root-supplied name (`redis`, `orm`, `requireAdmin`, …) is unchanged
+(`specs/189-command-middleware/contracts/guard-seam-narrowing.md`).
 **An overlay module ships `backend.ts`, not `plugin.ts`** (D-103). It is composed by the
 kernel container exactly as a core module is — appended to the core list in the one
 `composeModules` call — and uses `ctx.routes` / `ctx.worker` / `ctx.subscribe` /
@@ -52,9 +61,12 @@ A deployment's modules are **discovered at runtime**, so `composition.generated.
 `manifest-index.generated.ts` are bare core under every value of `DEPLOYMENT` (D-104).
 **A deployment's divergence from core is a committed artefact** (feature 107, D-30). Every build
 emits `divergence.generated.ts` and `divergence.generated.md` per deployment plus bare core, from
-**one** derivation over the deployment's own overlay tree: nine kinds, each with the module that
-wrote it, the module that owns what it names, the rung of the customisation ladder it sits on and
-the deployment's own sentence. Beside them is the hand-written
+**one** derivation over the deployment's own overlay tree: the kinds `DivergenceKind` lists, each
+with the module that wrote it, the module that owns what it names, the rung of the customisation
+ladder it sits on and the deployment's own sentence. An overlay's own tables are not among them —
+they are its own surface, named under `notRecorded` — while a `defineColumnExtension(…)` it
+declares on another module's table is (`column-extension`, owned by the host's module, data ladder
+D2; FR-047). Beside them is the hand-written
 `backend/src/apps/<deployment>/divergence.ts`, which carries the three things no walk can produce —
 the modules the deployment omits, the wrapping order where two of its overlay modules decorate one
 name (`decorationOrder`, **checked and never applied**), and one reason per derived divergence. The
@@ -62,33 +74,107 @@ two are reconciled **both ways** by `check:divergence`, and both renderings are 
 `overlay:check`'s four verdicts. Which seam to reach for and what each costs is
 `docs/docs/architecture/customisation-ladder.md`; the rung on every report entry is what makes
 arriving repeatedly at a high one measurable rather than anecdotal.
-**An overlay module contributes no schema** (D-106, narrowing D-105): a per-deployment overlay
-module under `backend/src/apps/` contributes registrations, routes, decorations, interceptors,
-permissions, i18n bundles and a manifest, and **no `@Entity()` class and no migration**. The
-reason is **not** migration ordering. That argument — "the order is only meaningful over a fixed
-set" — was measured false (`specs/080-f4-real-scope/README.md` §2: adding a leaf module's
-migrations leaves the relative order of all 141 existing ones exactly unchanged) and is retired;
-do not cite it and do not repeat it to an overlay author. The reason is that **an overlay lives
-in the same repository and the same build as core**, so the remedy is always available and costs
-nothing but a directory: own the table from a core module and read it from the overlay through
-that module's port. A second schema-owning mechanism that buys no capability is not worth its
-weight. The generator refuses both (`generate-composer.ts`), which is the same rule
-`module-migrations.md` states. **In a client's instance the refusal is `endora generate`'s**
-(`packages/cli/src/generate/divergence.ts`' `overlaySchemaFiles`): an instance has no composer
-generator and the platform reads entities and migrations from installed packages alone, so
-without it the directory is ignored rather than refused. **And the platform refuses it again
-wherever overlay modules are resolved** (`packages/platform/src/overlay/overlay-schema.ts`, called
-from `overlayModuleIdsUnder`), because `generate` is a command somebody has to run: the API, the
-worker, the operator CLI and the `module:*` commands stop before composing or opening anything.
-The two walks are written twice — the CLI reads an instance without loading the platform — and
-must agree. A bare `migrate` reaches neither: its configuration is handed no deployment root.
-There the remedy is a module package, not a core module — an instance has no core tree to move
-the table into.
-**An extension package is the opposite case and may ship entities and migrations** (D-106.2, an
-owner ruling). A third-party author has no core module, so for a package the same rule would not
-be a constraint to design around but a prohibition on the entire extension-package programme,
-every family of which persists state. The mechanism that lets it is Wave 3 of
-`specs/080-f4-real-scope/tasks.md`; until it lands, the only schema a running platform executes
-is core's. See `docs/docs/architecture/overlay-pattern.md` and
+**An overlay module is a full module, and owns its schema** (D-297, retiring D-106 for
+overlays; `specs/190-overlay-full-modules/`, owner clauses OR-1 – OR-13, issue #1846). D-106.2
+below is unchanged. What D-297 holds every overlay module to:
+
+- **It may own entities and migrations.** `backend.ts` exports `entities` (an array of classes),
+  and every class under the module's `entities/` that carries entity metadata must be in it
+  (`overlay-entity-unexported`). Each entity takes exactly one tenancy classification and
+  decorators from `@mikro-orm/decorators/legacy`. Migrations are the module's `migrations/`
+  directory, read **file by file** — no barrel: each runtime unit is named
+  `<YYYYMMDDTHHmmss>_<module-segment>_<slug>` and exports exactly one class whose name the
+  filename derives, scoped by the module id (`migration-file-shape`). It may declare
+  `schemaExtensions` as an installed package does (OR-3). The reader is the platform's
+  `overlay/overlay-schema.ts`, the counterpart of `discoverPackageSchema`; the merge is the one
+  `db/configured-{entities,migrations}.ts` already do for packages, with migration origin
+  `overlay` (R-7).
+- **Discovered at runtime, never committed.** Which deployment a process runs as is a fact about
+  the process (D-104), so the overlay's schema is read from the deployment root the application
+  supplies, and `entities-registry.generated.ts` and `migrations-registry.generated.ts` stay bare
+  core under every `DEPLOYMENT`. `composer:generate` **validates** an overlay module's schema —
+  classification, `/legacy` imports, filename and class agreement, the scoped name, uniqueness
+  beside core — and emits none of it. With `DEPLOYMENT` unset the configuration is byte-identical
+  to bare core.
+- **No deployment exemption** (OR-4). An overlay migration runs inside the foreign-schema guard
+  every installed package's does, with the module's own entities as its owned set and **no**
+  exemption entry: R2's first-party ledger does not reach it, and `check:module-boundary` will not
+  let an R2 entry excuse one. Its chain is ordered by its manifest's `dependencies` and owned by
+  its module id, so `uninstall --hard` reverts it.
+- **In both trees** (OR-3). It holds in a client's instance, whose `mikro-orm.config.ts` hands the
+  platform `backend/dist`, and in this repository's `backend/src/apps/`, where
+  `backend/src/db/configured-*.ts` bind `overlay-roots.ts`' deployment root.
+  `apps/example/modules/overlay_notes_fixture/` is the smallest one that owns a table. A backend
+  test that needs an overlay table selects the deployment **in-process** and takes that
+  deployment's own migration template (`test/helpers/deployment-database.ts`); no suite leg runs
+  with `DEPLOYMENT=example` (OR-13).
+- **One build, no package in disguise.** Overlay code is compiled by one deployment-level `tsc`
+  project (#1848). There is no per-module build, and no `package.json`, `exports` map or build
+  configuration under `apps/`. In an instance that project is run by `endora build overlays`
+  (the backend member's `build` and `dev`), which also mirrors each module's `i18n/` into
+  `backend/dist/apps`. Two refusals hold it, in the build and in every process that resolves
+  overlay modules: the layout (`nested-module`, `package-in-disguise` — platform
+  `overlay/overlay-layout.ts`, the CLI's twin `build-overlays/layout.ts`, held to agree) and the
+  freshness of the compiled tree against its sources (`stale`, `unbuilt`, `orphan` — platform
+  `overlay/overlay-freshness.ts`, given `deploymentSourceRoot`).
+- **The lifecycle of a module this build ships** (FR-045 – FR-046,
+  `specs/190-overlay-full-modules/contracts/overlay-lifecycle.md`), not an installed package's:
+  boot converges its registry row, `module:install` applies its pending migrations,
+  `module:status <id>` lists them with origin `overlay`, switching it off or a soft uninstall
+  keeps its tables and rows, and `uninstall --hard` reverts its chain. A tree that still ships
+  the directory converges it back at the next boot and recreates its tables empty at the next
+  `migrate`, so remove it by hard-uninstalling first. An overlay module with tables owes the
+  off-state proof any switchable module does, and `check:off-state-coverage` counts those of
+  every deployment on disk; its proof runs the server on the deployment's own database
+  (`test/integration/overlay/overlay-notes-fixture-off-state.test.ts` is the template). This
+  repository's `module:uninstall` script still answers for core alone
+  (`coreMigrationOwnership()`), so a hard uninstall of an overlay module from that terminal is
+  refused; an instance's answers for its overlays.
+- **Its admin layer is `admin/index.tsx`** (FR-080 – FR-086, #1855), exporting the
+  `contributions` a package's `./admin` layer exports. It lands in its deployment's own registry,
+  `admin/src/deployments/<deployment>.generated.ts`, never in the bare-core one; the admin build
+  selects one registry from `DEPLOYMENT` (unset is `none`, a missing one refuses the build). The
+  admin's type-check owns the layer and the backend's overlay program excludes it. Palette
+  coverage, the permission inventory, `check:action-route-permissions` and the bundle-shape test
+  judge it per deployment — the checklists of `module-admin-surfaces.md` apply unchanged.
+- **It may publish port types to its siblings, through `ports.ts` alone** (FR-070 – FR-072,
+  `specs/190-overlay-full-modules/contracts/overlay-ports.md`, #1854). The owner registers the
+  port with `ctx.di.providePort` and declares its types in `modules/<owner>/ports.ts`
+  (`endora new module --ports` writes both). Another overlay module may import that file, and
+  nothing else of the owner, iff the import is `import type` (or every specifier `type`), it
+  resolves to exactly `<sibling>/ports.ts`, both modules are in the **same** deployment, and the
+  importer's manifest `dependencies` name the owner, transitively; it resolves the port with
+  `lazyPort`. Every other import between two overlay modules is a finding naming each failed
+  clause, from **one** analysis (`packages/cli/src/lib/overlay-boundary.ts`) with two readers:
+  `check:module-boundary` here, where no ledger entry can excuse one, and `endora generate` in an
+  instance, which exits 1 after writing. The dependency behaves as between any two modules:
+  install refuses a missing one, both activation axes refuse to switch the owner off under a
+  present dependent, and `uninstall --hard` is `dependents-block`. A port consumed from a
+  sibling is not a divergence (it is named under `notRecorded`); the owner's `port-provided` is.
+- **Promotion keeps the id.** A module promoted from an overlay to a package keeps its module
+  id, so the migration class names a database has already recorded still match. Its `ports.ts`
+  becomes the package's `./ports` subpath, and consumers switch the specifier to it.
+- **The trust tier is derived, never claimed.** An overlay module's tier is `deployment`, read
+  from the `origin` the loader stamps on its module entry from where it discovered the module
+  (`specs/189-command-middleware/contracts/module-origin.md`). No manifest field feeds it.
+
+`endora new module --entities` does not scaffold an overlay module's schema yet (#1852); the
+entity and the migration are written by hand until it does.
+
+**D-106's stated reason is retired with it, so do not cite it.** That reason was "an overlay
+lives in the same repository and the same build as core, so own the table from a core module
+and read it through that module's port", and it has no referent in an instance, which depends on
+released packages and has no core tree. The older migration-ordering argument stays retired as
+well. It was measured false: per `specs/080-f4-real-scope/README.md` §2, adding a leaf module's
+migrations leaves the relative order of all 141 existing ones exactly unchanged. The three walks
+that refused overlay schema — the composer's, `endora generate`'s and the platform's — are
+deleted with the refusal.
+**An extension package may ship entities and migrations** (D-106.2, an owner ruling). A
+third-party author has no core module, so for a package the same rule would not be a constraint
+to design around but a prohibition on the entire extension-package programme, every family of
+which persists state. The platform discovers a package's schema at runtime
+(`discoverPackageSchema`, `packages/platform/src/packages/package-runtime.ts`) and runs every
+package migration under the foreign-schema guard (`packages/platform/src/db/foreign-schema-guard.ts`).
+See `docs/docs/architecture/overlay-pattern.md` and
 `specs/057-overlay-pattern-multideploy/`.
 

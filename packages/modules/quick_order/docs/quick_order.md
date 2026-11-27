@@ -1,9 +1,9 @@
 ---
-title: quick_order
+title: Quick order
 description: CSV-import + type-ahead helpers for buyers ordering by SKU
 ---
 
-# `quick_order`
+# Quick order (`quick_order`)
 
 The platform's **quick-ordering toolkit**.
 It bundles several conveniences that let B2B buyers place repeat and
@@ -26,15 +26,114 @@ normalized to the same row model and validated against the catalog:
 - The response partitions rows into `recognized` + `rejected` (each with a
   per-row reason: `sku_missing`, `quantity_invalid`, `product_not_found`,
   `product_archived`, `malformed_row`, `variant_not_resolved`,
-  `variant_ambiguous`, `row_limit_exceeded`) plus a `summary`.
+  `variant_ambiguous`, `row_limit_exceeded`, `below_minimum`) plus a `summary`.
+  `product_archived` means the product is archived (the catalogue's Archive
+  action), whatever its status; a product that is merely switched off for the
+  buyer's channel answers `product_not_found`, like any product the buyer cannot
+  order there.
 - Duplicate SKUs are merged (quantities summed); rows beyond
-  `quick_order.import_max_rows` are rejected.
+  `quick_order.import_max_rows` are rejected. The setting is clamped to
+  **1–10 000** whatever its stored value.
 
 `POST /api/v1/quick-order/build` turns the confirmed recognized rows into a
-**Cart** (`CartService`) or a **Quote Request** (`RfqService`), priced under the
-buyer's / organization's current price list. The admin twins
+**Cart** (`CartService`) or a **Quote Request** (`RfqService`), priced at the
+buyer's current prices from the price books — the basket's own pricing for a
+cart, the quote request's reference prices for a request. The admin twins
 (`/api/v1/admin/quick-order/import` + `/build`, guarded by `orders:write`)
 build on behalf of a chosen customer via `onBehalfOf`.
+
+**Organization permissions.** The buyer's import needs `carts.create` **or**
+`quote_requests.create`: a file can become either a basket or a quote request,
+so a member allowed to do either may preview it. A member holding neither is
+refused `403 ORGANIZATION_PERMISSION_REQUIRED` naming `carts.create`, before the
+file is parsed — a malformed file gets the same answer. A permission whose
+module is switched off grants nothing, so with `quote_requests` off only
+`carts.create` admits the import. The buyer's build needs
+the target's create permission — `carts.create` for target `cart`,
+`quote_requests.create` for target `quote_request` — judged first, before the
+items are looked at. Both permissions are declared by `carts` and
+`quote_requests`; a refusal is `403 ORGANIZATION_PERMISSION_REQUIRED` naming the
+code. The admin twins are gated by the operator permission `orders:write` only:
+an operator holds no organization role, so the customer an on-behalf build is
+for is not judged. What it produces is judged when the customer acts on it.
+
+On the storefront the quick-order page (`/quick-order`) follows the same rule. A
+member holding neither code is told, instead of being shown the import: *"Your
+role does not allow adding products to the cart or requesting quotes, so quick
+order is not available to you."* After an import, **Add all to cart** is offered
+only with `carts.create` and **Send as quote request** only with
+`quote_requests.create`, so a member holding only the second imports a file and
+can only request a quote.
+
+**Order minimums in the file.** The preview judges each product's minimum in
+pieces on the product's **total across the whole file** — duplicate rows
+merged, then every variant of the product summed — never together with the
+buyer's cart, so the preview's verdict and the build's may differ. Rows
+rejected for another reason count toward no total.
+
+- On the **buyer's** import, every row of a product whose file total is below
+  its minimum is rejected with `below_minimum`, the `minimum` and the
+  `productTotal` the verdict used.
+- On the **operator's** import (admin route) such a row stays in `recognized`
+  with `warning: { reason: 'below_minimum', minimum, productTotal }`, and the
+  summary counts it in `warningCount`. The on-behalf screen badges the row and
+  still builds it — into a quote request as is, into a cart subject to the
+  cart's check.
+
+**The build.** A build of more than **200** items is refused whole with
+`422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`,
+before anything else, for both targets and for buyer and operator alike.
+
+- Target `cart` adds the items as one batch judged together with the cart: the
+  lines that meet their minimums are added, the others are listed in
+  `rejected[]` (`reason: 'below_minimum'`, the `kind`, the `minimum`, and
+  `packagingUnitName` for a packaging-unit minimum). A product the customer
+  may not see, or that the channel does not publish, fails the build as an
+  unknown product before anything is added.
+- Target `quote_request` is one quote request, not a batch: a buyer's build is
+  refused below a minimum like any customer quote request, an operator's build
+  is written with the lines flagged for the sales team (the Quote Requests
+  module's page).
+
+**The preview between the import and the build.** The storefront keeps the
+buyer's preview here while the buyer reviews and edits it:
+`GET /api/v1/quick-order/preview` answers `{ data: preview | null }`, `PUT`
+replaces it, and `DELETE` drops it (`204`). The preview is the import's response
+as the buyer has edited it. The module keeps **one preview per buyer session**,
+in Redis, under a key made of the buyer's Organization, the buyer and a digest
+of the session. A buyer of another Organization, or the same buyer signed in
+from another session, reads nothing. All three need a signed-in buyer, and no
+preview id travels in a URL. Writing needs the import's permission
+(`carts.create` or `quote_requests.create`); reading and dropping one's own
+preview need only the session.
+
+- **The line cap is `quick_order.import_max_rows`** as it stands when the
+  preview is written (clamped to 1–10 000). It counts the rows the import read,
+  recognised and rejected. The rows past the import's limit are not kept one by
+  one: the preview keeps them as one `summary.overflowCount`, with the limit they
+  were past in `summary.rowLimit`. The storefront shows a single message:
+  *"Only the first 2000 rows of the file were read. Rows left out: 15. Split the
+  file and import the rest separately."*
+- So an import always fits. The cap limits only what adding from search adds:
+  a write that grows a preview past it is refused `422 VALIDATION_FAILED`,
+  `details: { code: 'too_many_lines', maximum }`, where `maximum` is the setting.
+  A write that adds no line (an edit, a removal, the lines a cart build left) is
+  accepted even when the setting has been lowered below the stored preview.
+- A body over 2 MiB is refused `413`, whatever the setting. A refused write
+  leaves the previous preview as it was.
+- **Building takes at most 200 lines.** When a preview has more than 200
+  recognised lines (rejected rows are not built and do not count), the
+  storefront says so above the actions and disables *Add all to cart* and *Send
+  as quote request* until lines are removed or the file is split. The build's
+  own `too_many_items` refusal stays as the guard.
+- It expires **one hour after its last write**. A read does not extend it. An
+  expired preview reads as `null`, and the storefront tells the buyer to paste or
+  upload the list again.
+- The storefront drops it after a successful build and on sign-out. An expired
+  session can no longer name it, so it expires on its own.
+- While the module is switched off the three endpoints answer
+  `503 MODULE_DISABLED`; stored previews are left as they are and are served
+  again once it is switched back on, if their hour has not run out.
 
 `.xlsx` parsing uses **`exceljs`** (backend-only, isolated to
 `excel-importer.ts`); only the first worksheet is read.
@@ -45,6 +144,10 @@ build on behalf of a chosen customer via `onBehalfOf`.
 values of attributes flagged **`quick_searchable`** (an independent boolean on
 `product_attributes`, toggled in the admin Attributes manager). Values of
 non-flagged attributes never match. Session-gated; channel-scoped.
+Availability and the hits' names follow the request's language: `Accept-Language`
+is read as a q-weighted list matched against the sales channel's languages,
+else the channel's default. The build, and one-click buy, judge their products
+in the same language.
 
 ### 3. Default ordering preferences
 
@@ -55,10 +158,30 @@ delivery method, billing address, shipping address — per target
 re-check (active / org-allowed / address exists → otherwise dropped to null).
 
 - Storefront: a customer manages their own defaults (`/preferences`); checkout
-  pre-selects the resolved defaults.
+  pre-selects the resolved defaults. A member holding their Organization's
+  *Administrator* role also manages the Organization scope and the defaults of
+  the Organization's other members. That is reserved to *Administrator* — it is
+  not a permission, no other role can be granted it, and anyone else is refused
+  `403 FORBIDDEN`. On `/preferences` the Administrator of a company Organization
+  sees a second form, *Organization defaults*, with its own Save; a personal
+  (B2C) Organization is not offered it.
+- Reading is wider than managing by one row: every member may read
+  (`GET /api/v1/quick-order/preferences?scope=organization`) their own
+  Organization's defaults, the values they inherit. The page names them in
+  each field's empty choice ("Organization default: …", or "No organization
+  default").
+- A default address is always one of the Organization's own addresses — the
+  only address book a customer has.
 - Admin: `/api/v1/admin/quick-order/preferences` — a platform admin manages any
-  scope; a salesperson only their assigned organizations and those orgs'
-  customers. Every change is audited.
+  scope; a salesperson only the organizations they reach (their assigned ones
+  and every organization no other representative is assigned to) and those
+  orgs' customers; a write naming an organization that does not exist answers
+  `404 NOT_FOUND`. Every change is audited.
+  In the admin the defaults are a panel on the organization screen and on the customer screen,
+  and the panel has no Save of its own: a change is staged, counted by that screen's one Save and
+  written by it after the organization's or customer's own changes. If the panel's write fails
+  while the rest was saved, the screen says so, the defaults stay unsaved, and the next Save
+  writes only them.
 
 ### 4. Reorder
 
@@ -69,24 +192,73 @@ lines and respecting the `orders.reorder_enabled` setting.
 
 ### 5. One-click buy
 
-When `quick_order.one_click_buy_enabled` is on for the buyer's sales channel
+When the buyer's role holds **One-click purchase** (`quick_order.one_click`)
+**and** **Place orders without approval** (`carts.order_without_approval`),
+`quick_order.one_click_buy_enabled` is on for the buyer's sales channel
 **and** the buyer has all four eligible defaults, the product page shows a
 "Buy in one click" button. It skips Cart and Checkout: the order is placed from
-the defaults (`clear cart → add product → OrderService.placeOrder`) and the
-buyer is routed by the payment `nextAction` (gateway redirect, or the order /
-success page when no payment step is required). Same validations as a normal
-order (org active, minimum value, credit limit, stock).
+the defaults and the buyer is routed by the payment `nextAction` (gateway
+redirect, or the order / success page when no payment step is required).
+When the only thing missing is a default (`missing_defaults`), the product page
+shows a short hint linking to `/preferences` instead of the button; for any
+other reason it shows nothing.
+
+The buyer's basket is left alone. The product goes into a separate working
+basket (the Carts module's *Working baskets*) through the cart's `addItems`
+with `workingBasket: true` and `onBelowMinimum: 'throw'`, and
+`OrderService.placeOrder` places the order from that basket. Whatever the
+buyer had in their basket — including lines filled from an accepted quote
+request — is still there afterwards. A line refused before the write (below
+its minimum order quantity, without a price, or quote-only) writes nothing. A
+refusal at placement, after the line was written (stock, the organization, a
+payment or delivery method), deletes the working basket again.
+
+Same validations as a normal order (org active, minimum value, credit limit,
+stock, minimum order quantity). For a `simple` or `configurable` product with
+a minimum order quantity, one click orders that minimum instead of 1.
+
+**Who may buy in one click.** One-click purchase is an organization permission,
+`quick_order.one_click`, declared by this module and member-default. It also
+needs `carts.order_without_approval`: a member whose carts need approval cannot
+buy round it. `GET /api/v1/quick-order/one-click/eligibility` judges the role
+first, in this order:
+
+| `reason` | When |
+| --- | --- |
+| `permission_required` | the role lacks `quick_order.one_click` (also when it lacks both) |
+| `cart_approval_required` | the role holds it but lacks `carts.order_without_approval` |
+| `setting_disabled` | the setting is off for the channel |
+| `missing_defaults` | one of the four defaults does not resolve |
+
+`POST /api/v1/quick-order/one-click` is refused on the same rule, before the
+working basket is written: `403 ORGANIZATION_PERMISSION_REQUIRED` naming
+`quick_order.one_click`, or `carts.order_without_approval` when only that one is
+missing. A buyer the setting or the defaults refuse is answered
+`422 ONE_CLICK_UNAVAILABLE`, with the eligibility reason as `details.code`
+(`setting_disabled` or `missing_defaults`) and again as `details.reason`, in the
+buyer's language. Until issue #641 this was `422 VALIDATION_FAILED` with
+`details.code: 'one_click_unavailable'` and an English sentence. The storefront
+hides the button whenever eligibility is disabled. When
+the module is switched off, its permission leaves the role editor and every
+member's effective permissions; the grants stay stored and apply again once it
+is switched back on.
+
+On upgrade, an Organization's *Member* role is granted `quick_order.one_click`
+only where it is granted `carts.order_without_approval` — that is, only in an
+Organization that did not require cart approval.
 
 ## Settings
 
 | Code | Type | Default | Scope |
 |------|------|---------|-------|
 | `quick_order.one_click_buy_enabled` | boolean | `false` | per sales channel |
-| `quick_order.import_max_rows` | number | `2000` | global |
+| `quick_order.import_max_rows` | number | `2000` (clamped to 1–10 000) | global |
 
 ## Data
 
 - New table `quick_order_default_preferences` (migration `20260611T140359_quick_order_default_preferences.ts`).
+- The buyer's preview lives in Redis only, under `b2b:quick_order:preview:*`,
+  with a one-hour TTL; no table holds it.
 - New column `product_attributes.quick_searchable` (migration `20260611T140400_catalog_attribute_quick_searchable.ts`, owned
   by `catalog`).
 

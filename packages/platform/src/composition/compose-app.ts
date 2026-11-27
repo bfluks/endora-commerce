@@ -70,6 +70,9 @@ import type {
 } from '@endora-commerce/contracts';
 
 import { CommandBus } from '../commands/index.js';
+import { CommandHookRegistry } from '../commands/hooks/registry.js';
+import { CommandMiddlewareRegistry } from '../commands/middleware/registry.js';
+import { createCommandOutboxWake } from '../commands/outbox/wake.js';
 import { configuredEntitiesFrom } from '../db/configured-entities.js';
 import { discoverConfiguredMigrations } from '../db/configured-migrations.js';
 import { mikroOrmConfigFrom } from '../db/mikro-orm.config.js';
@@ -81,6 +84,7 @@ import { ApiInterceptorRegistry } from '../http/interceptors/index.js';
 import type { ModulePlugin } from '../http/server.js';
 import { StorefrontRevalidator } from '../http/storefront-revalidator.js';
 import { AuditLogService } from '../kernel/audit/audit-log-service.js';
+import { AuditRedactionService } from '../kernel/audit/audit-redaction-service.js';
 import {
   attachEscapeHatchAuditWriter,
   type EscapeHatchAuditWriter,
@@ -100,12 +104,31 @@ import {
 import { effectiveState } from '../kernel/lifecycle/effective-state.js';
 import { publishStateChanged, registryCache } from '../kernel/lifecycle/registry-cache.js';
 import { requiredModulesFrom } from '../kernel/lifecycle/required-modules.js';
+import {
+  commandMiddlewareFrom,
+  hookableActionsFrom,
+  moduleDependencyClosureFrom,
+} from '../kernel/lifecycle/command-hook-inputs.js';
 import { platformLogger } from '../kernel/logging.js';
+import {
+  activeSchemaExtensionContext,
+  activeSchemaExtensions,
+} from '../kernel/schema-extensions/registry.js';
+import { createSchemaExtensionReads } from '../kernel/schema-extensions/reads.js';
+import { verifySchemaExtensions } from '../db/schema-extension-verifier.js';
+import { verifyEntityExtensions } from '../db/entity-extension-verifier.js';
+import { activeEntityExtensionContext } from '../kernel/entity-extensions/context.js';
+import { createEntityExtensionReads } from '../kernel/entity-extensions/reads.js';
+import {
+  EntityExtensionLoaderRegistry,
+  entityExtensionDeclarationsFrom,
+} from '../kernel/entity-extensions/registry.js';
 import { createRegistrationOwnership } from '../kernel/module-context.js';
 import {
   assertPublicApiBaseUrlConfigured,
   resolvePublicApiBaseUrl,
 } from '../kernel/public-api-base-url.js';
+import { assertAdminBaseUrlWellFormed } from '../kernel/admin-base-url.js';
 import { tenantContextMappingFor } from '../kernel/actor-tenant-context.js';
 import { registerRequestScopeHook } from '../kernel/request-scope-hook.js';
 import {
@@ -116,6 +139,7 @@ import { DefaultChannelReconciler } from '../kernel/sales-channels/default-chann
 import { enterSystemScope } from '../kernel/scope.js';
 import { composeSettingsKernel, type SettingsKernel } from '../kernel/settings/compose.js';
 import { ManifestReconciler } from '../kernel/settings/manifest-reconciler.js';
+import { backfillPlaintextSecrets } from '../kernel/settings/plaintext-secret-backfill.js';
 import {
   buildStaticRegistry,
   deploymentShippedEntries,
@@ -126,14 +150,14 @@ import {
   type RegisteredManifestEntry,
 } from '../lifecycle/index.js';
 import { lifecycleModuleFromStaticEntries } from '../lifecycle/plugin.js';
-import { activeOverlayModulesRoot } from '../overlay/deployment-roots.js';
-import { overlayModulesUnder } from '../overlay/overlay-runtime.js';
+import { overlayModulesFor } from '../overlay/overlay-runtime.js';
 import {
   discoverPackageModuleManifests,
   installedPackageModuleIdClaims,
   loadPackageModuleEntries,
 } from '../packages/package-runtime.js';
 import { nodeModulesRootsFor } from '../packages/installed-packages.js';
+import { createCursorSeal } from './cursor-seal.js';
 import { newsletterTokenSecretFrom } from './newsletter-token-secret.js';
 import { processRunsWorkersFor } from './process-runs-workers.js';
 import { forkScopedEm } from '../tenancy/scoped-em.js';
@@ -258,6 +282,17 @@ export interface ComposeAppOptions {
    * absent declaration and an empty one are deliberately the same answer.
    */
   readonly deploymentRoot: string;
+  /**
+   * The directory that holds `apps/` **as written**, when {@link deploymentRoot} holds it
+   * compiled (`specs/190-overlay-full-modules/` FR-015 – FR-016, #1848).
+   *
+   * An instance's compiled entry points pass `backend/dist` as the deployment root and the
+   * instance root here; every overlay unit is then judged against its source before
+   * anything is imported, and a stale, unbuilt or orphaned one refuses the boot
+   * (`OverlayBuildError`). Absent, nothing is compared and one line says so. Equal to
+   * {@link deploymentRoot} — a run from sources — there is nothing to compare.
+   */
+  readonly deploymentSourceRoot?: string;
   /** What only this build knows — see {@link AppComposition}. */
   readonly composition?: AppComposition;
   /**
@@ -325,6 +360,20 @@ export interface ComposeAppOptions {
    * Forwarded to `composeModules` unchanged and **checked, never applied**.
    */
   readonly decorationOrder?: Readonly<Record<string, readonly string[]>> | undefined;
+  /**
+   * The order this deployment declares for command-hook modules no manifest
+   * dependency ranks (`specs/176-command-hooks-outbox/` FR-014), read from the
+   * same `divergence.ts` as `decorationOrder` and forwarded to `composeModules`,
+   * which seals the command-hook registry against it.
+   */
+  readonly commandHookOrder?: Readonly<Record<string, readonly string[]>> | undefined;
+  /**
+   * The order this deployment declares for `admit` command middleware from
+   * modules no manifest dependency ranks (`specs/189-command-middleware/`
+   * FR-031), read from the same `divergence.ts` as `commandHookOrder` and
+   * forwarded to `composeModules`, which seals the middleware registry against it.
+   */
+  readonly commandMiddlewareOrder?: readonly string[] | undefined;
   /**
    * The modules this deployment declares it omits (D-101), from the same
    * declaration `decorationOrder` comes from.
@@ -428,6 +477,7 @@ interface PlatformContainerReads {
 export async function defaultComposition(
   deploymentRoot: string,
   env: NodeJS.ProcessEnv,
+  deploymentSourceRoot?: string,
 ): Promise<Required<AppComposition>> {
   // Both overlay seams off one reader, over one id set
   // (`specs/124-instance-customisation-gap/` FR-001, FR-002). The registration
@@ -438,8 +488,11 @@ export async function defaultComposition(
   // fewer than the presence projection enumerated, which is A4's own
   // arithmetic, and no operator could switch the module off because there was
   // no manifest to gate it against (Principle XVII).
-  const overlayModules = overlayModulesUnder(activeOverlayModulesRoot(deploymentRoot, env), () =>
-    installedPackageModuleIdClaims(nodeModulesRootsFor(env)),
+  const overlayModules = overlayModulesFor(
+    { deploymentRoot, deploymentSourceRoot },
+    env,
+    () => installedPackageModuleIdClaims(nodeModulesRootsFor(env)),
+    { info: (line) => platformLogger().info({}, line) },
   );
   const overlay = await overlayModules.entries();
   const packages = await loadPackageModuleEntries(env);
@@ -448,10 +501,13 @@ export async function defaultComposition(
     overlay: () => overlayModules.manifests(),
     packages: () => discoverPackageModuleManifests(env),
   });
+  // The deployment root reaches the schema readers too (`specs/190-overlay-full-modules/`
+  // FR-035), so the ORM this composition opens maps the overlay modules' entities and
+  // knows the order their migrations were applied in.
   const bootstrap = createOrmBootstrap(async () => {
     const [entities, migrations] = await Promise.all([
-      configuredEntitiesFrom({ coreEntities: [], env }),
-      discoverConfiguredMigrations({ coreEntries: [], manifests: [] }, env),
+      configuredEntitiesFrom({ coreEntities: [], env, deploymentRoot }),
+      discoverConfiguredMigrations({ coreEntries: [], manifests: [] }, env, deploymentRoot),
     ]);
     return mikroOrmConfigFrom({ entities, migrations });
   });
@@ -505,6 +561,11 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // configuration problem" message plus `exit(1)`.
   assertPublicApiBaseUrlConfigured();
 
+  // Issue #185 — the admin's address is optional, but one that is set and
+  // malformed refuses the boot in every environment (architect ruling on
+  // #1078): it would leave every link into the admin broken or missing.
+  assertAdminBaseUrlWellFormed();
+
   // Resolved once, and only for the members the caller did not supply: the
   // default builds an ORM bootstrap and scans `node_modules`, and doing that
   // beside a caller that already handed over both would be two answers to one
@@ -513,12 +574,33 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   const fallback =
     supplied.modules !== undefined && supplied.manifests !== undefined && supplied.orm !== undefined
       ? undefined
-      : await defaultComposition(deploymentRoot, process.env);
+      : await defaultComposition(deploymentRoot, process.env, options.deploymentSourceRoot);
   const moduleEntries = supplied.modules ?? fallback?.modules ?? [];
   const resolvedRegistry = supplied.manifests ?? fallback?.manifests ?? [];
   const ormLifecycle = supplied.orm ?? (fallback?.orm as AppOrmLifecycle);
 
   const orm = await ormLifecycle.open();
+  // `specs/178-extensible-columns/` FR-026 — the declared extension columns are
+  // held to the database before anything is composed over it: a column dropped
+  // by hand, or lost to an upgrade, fails the boot naming the module, the key,
+  // the column, the host and its owner's last executed migration. Read-only,
+  // and with no declaration it issues no statement at all.
+  await verifySchemaExtensions(
+    (sql, params = []) =>
+      orm.em.getConnection().execute(sql, params, 'all') as Promise<Record<string, unknown>[]>,
+    activeSchemaExtensionContext(),
+    (message) => platformLogger().warn({}, message),
+  );
+  // `specs/187-side-table-extensions/` FR-022, FR-023 — and the declared side
+  // tables, read-only, in one catalog query: a cascade dropped by hand, or a
+  // side table lost to an upgrade, fails the boot naming the module and the
+  // table; an undeclared or unowned one is a `warn` (OR-8).
+  await verifyEntityExtensions(
+    (sql, params = []) =>
+      orm.em.getConnection().execute(sql, params, 'all') as Promise<Record<string, unknown>[]>,
+    activeEntityExtensionContext(),
+    (message) => platformLogger().warn({}, message),
+  );
   // Feature 050 — the single EM-injection seam. `forkScopedEm` is a bare
   // `orm.em.fork()`: it stamps NOTHING, because the tenant filters read the
   // ambient TenantContext from AsyncLocalStorage **when the query is built**
@@ -571,6 +653,12 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // The writer keeps the stderr line, aggregates per flush window and writes on
   // a fork of its own; the reasoning is at the top of its file.
   const escapeHatchAudit = attachEscapeHatchAuditWriter({ em });
+  // Issue #120 — the boot is one access, not one per step: every `boot: …`
+  // widening from here to the end of `runBootHooks()` folds into a single
+  // `boot: process start` row that keeps the per-(module, reason) counts.
+  // Anything else recorded meanwhile is written as before; the writer's header
+  // carries the rule.
+  escapeHatchAudit.beginBoot();
 
   // Feature 090 Phase 2 — which bundle holds which error code's sentence,
   // derived from the manifests this deployment resolved rather than from a table
@@ -625,7 +713,43 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // Feature 054 (Principle XIII) — the Command Bus: the single, guaranteed audit
   // writer for sensitive writes. It forks the scoped EM, runs the write + one
   // audit insert co-transactionally, and dispatches the domain event on commit.
-  const commandBus = new CommandBus(orm, auditLogService, eventBus);
+  // No `getRequestMeta`: the bus reads the request in flight from the ambient
+  // platform scope by default, so an entry carries the same IP, user agent and
+  // request id a direct `auditLogService.record` call takes (issue #997).
+  //
+  // `specs/176-command-hooks-outbox/` P2 — the command-hook registry, shared by
+  // the bus (which runs the hooks) and every module context (which registers
+  // them); `composeModules` seals it below. Presence is the live effective
+  // state, asked per Command, so a switched-off hook module stops running on
+  // the next write without a restart.
+  const commandHookRegistry = new CommandHookRegistry({
+    isPresent: (moduleId) => effectiveState.isPresent(moduleId),
+  });
+  // P3 — the outbox drain's post-commit wake-up, on this process's Redis
+  // connection. Every process gets one, an API-only process included: the
+  // process that commits is the one that knows rows were written, and the
+  // drain itself runs wherever `_lifecycle` finds `processRunsWorkers`.
+  const commandOutboxWake = createCommandOutboxWake(redis);
+  // `specs/189-command-middleware/` P1 — the command-middleware registry, shared
+  // the same way: the bus asks it on every Command, every module context
+  // registers into it, `composeModules` seals it below. Presence is the live
+  // effective state, asked per call (FR-033), and its failures are logged on
+  // the platform logger, which `buildServer` binds to the application's own.
+  const commandMiddlewareRegistry = new CommandMiddlewareRegistry({
+    isPresent: (moduleId) => effectiveState.isPresent(moduleId),
+    log: platformLogger(),
+  });
+  // `specs/187-side-table-extensions/` B1 — the side-table loader registry,
+  // judged against every composed manifest's `extends` (L1) as each module
+  // registers, sealed by `composeModules` below; `entityExtensionReads` reads it.
+  const entityExtensionLoaderRegistry = new EntityExtensionLoaderRegistry({
+    declarations: entityExtensionDeclarationsFrom(resolvedRegistry.map((entry) => entry.manifest)),
+  });
+  const commandBus = new CommandBus(orm, auditLogService, eventBus, {
+    hooks: commandHookRegistry,
+    outboxWake: commandOutboxWake,
+    middleware: commandMiddlewareRegistry,
+  });
 
   // Feature 060 — API interceptor registry. Modules register pre/post
   // interceptors against endpoints owned by other modules; execution is
@@ -680,6 +804,12 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
       process.env['NEWSLETTER_TOKEN_SECRET'],
       process.env['SESSION_COOKIE_SECRET'],
     ),
+    // Issue #497 — what a listing seals a cursor with when its next position
+    // may name a row the client must not learn about (the catalogue's price
+    // walk). A platform value rather than a module's: the key is derived from
+    // the session key every instance already has, so no module reads it and no
+    // operator provisions a new one. Keyed lazily — see `./cursor-seal.ts`.
+    cursorSeal: createCursorSeal(process.env['SESSION_COOKIE_SECRET'] ?? ''),
     // The one connection ioredis has put into subscriber mode. Shared, because
     // a subscriber connection cannot serve commands: a per-module one would
     // cost a socket per module and buy nothing.
@@ -690,12 +820,31 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // The audited write path (Principle XIII). A converted module resolves it
     // like any other platform service.
     commandBus,
+    // 176 P2 — so `_lifecycle` can serve the read-only execution plan over it.
+    commandHookRegistry,
     // The resolved registry — core manifests plus this deployment's overlay
     // modules plus every installed package. `admin_roles` builds the permission
     // catalogue from it and cannot see it itself: which modules a deployment
     // ships is a composition input, not something a module decides.
     resolvedModuleRegistry: resolvedRegistry,
     auditLogService,
+    // Issue #844 — the one non-append write on the audit table, platform-owned
+    // beside its writer; the customers retention sweep is its caller.
+    auditRedactionService: new AuditRedactionService(em, auditLogService),
+    // `specs/178-extensible-columns/` FR-051 — extension attributes on the
+    // admin reads of an extensible host, over the declarations this platform's
+    // ORM registered and the effective module state.
+    schemaExtensionReads: createSchemaExtensionReads({
+      declarations: activeSchemaExtensions,
+      state: effectiveState,
+    }),
+    // `specs/187-side-table-extensions/` FR-054 — side-table values on the
+    // extensible hosts' read ports, over the loaders the modules registered and
+    // the effective module state.
+    entityExtensionReads: createEntityExtensionReads({
+      registry: entityExtensionLoaderRegistry,
+      state: effectiveState,
+    }),
     storefrontBaseUrl: process.env['STOREFRONT_BASE_URL'] ?? 'http://localhost:3000',
     // No verification-token probe outside a harness.
     organizationsExposeTestProbe: false,
@@ -722,6 +871,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     emFactory: em,
     eventBus,
     redis,
+    redisSubscriber,
     auditLogService,
   });
 
@@ -811,6 +961,24 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // emits in its own order and drains decorations once; this asserts that the
     // resulting order was the intended one and refuses when the two disagree.
     decorationOrder: options.decorationOrder,
+    // `specs/176-command-hooks-outbox/` P2 — sealed at the end of this call,
+    // against data derived from the same manifest set as `requiredModules`.
+    commandHookRegistry,
+    commandHooks: {
+      hookableActions: hookableActionsFrom(resolvedRegistry.map((entry) => entry.manifest)),
+      moduleDependencies: moduleDependencyClosureFrom(resolvedRegistry.map((entry) => entry.manifest)),
+      commandHookOrder: options.commandHookOrder,
+    },
+    // 189 P1 — sealed after the hook registry, against the same manifest set;
+    // the composer adds each entry's origin.
+    commandMiddlewareRegistry,
+    commandMiddleware: {
+      declarations: commandMiddlewareFrom(resolvedRegistry.map((entry) => entry.manifest)),
+      moduleDependencies: moduleDependencyClosureFrom(resolvedRegistry.map((entry) => entry.manifest)),
+      commandMiddlewareOrder: options.commandMiddlewareOrder,
+    },
+    // 187 B1 — sealed after the middleware registry.
+    entityExtensionLoaderRegistry,
   });
 
   const composedContext: ComposedAppContext = {
@@ -861,6 +1029,13 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // T129 and neither root registered it, so the channel-scoped storefront
     // stock read threw `AwilixResolutionError` on its first call.
     salesChannelResolutionPort: salesChannels.resolver,
+    // Feature 154 — the sales-channel access rule, for the paths that decide
+    // it before a request exists for the session in question (sign-in, second
+    // factor, federated callback) and for the storefront's access read.
+    salesChannelAccessPort: salesChannels.accessPolicy,
+    // Feature 154 — the per-Organization permitted-channel cache, which
+    // `sales_channels` drops when a channel delete rebinds or drops assignments.
+    salesChannelAccessCache: salesChannels.accessCache,
     /**
      * The channel a **channel-scoped** settings read resolves against outside a
      * request (worker, boot hook, CLI): the deployment's system-default sales
@@ -1109,6 +1284,8 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     ): {
       customerAccountId: string;
       organizationId: string;
+      /** The member's organization role, when the auth hook knows it (feature 170, R-15). */
+      organizationRoleId: string | null;
       impersonatorAdminUserId?: string | null;
     } => {
       if (request.actor.kind !== 'customer') {
@@ -1125,6 +1302,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
       return {
         customerAccountId: request.actor.customerAccountId,
         organizationId: request.actor.organizationId,
+        organizationRoleId: request.actor.organizationRoleId ?? null,
         impersonatorAdminUserId: request.actor.impersonatorAdminUserId ?? null,
       };
     },
@@ -1148,6 +1326,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
           customer: {
             customerAccountId: request.actor.customerAccountId,
             organizationId: request.actor.organizationId,
+            organizationRoleId: request.actor.organizationRoleId ?? null,
           },
         };
       }
@@ -1195,6 +1374,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
       return {
         customerAccountId: request.actor.customerAccountId,
         organizationId: request.actor.organizationId ?? null,
+        organizationRoleId: request.actor.organizationRoleId ?? null,
       };
     },
   });
@@ -1279,10 +1459,32 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // operator merely `pnpm add`ed abort this boot.
   const settingsManifests: ModuleSettingsManifest[] = reads()
     .settingsManifestCollectionPort.collect(deploymentShippedEntries(resolvedRegistry));
-  const reconciler = new ManifestReconciler(em());
+  //
+  // Issue #700 — the reconciler gets the key and the cache, so a `string` →
+  // `secret` upgrade encrypts the values it reclassifies in the same flush and
+  // drops what a process cached while they were plaintext.
+  const settingsSecretKey = process.env['SETTINGS_SECRET_ENCRYPTION_KEY'] || undefined;
+  const reconciler = new ManifestReconciler(em(), {
+    secretEncryptionKey: settingsSecretKey,
+    cache: settings.cache,
+  });
   const reconciliation = await enterSystemScope(
     'boot: reconcile module settings manifests',
     () => reconciler.apply(settingsManifests),
+    { entryPoint: 'boot' },
+  );
+  // Issue #700 — and a database that took such an upgrade *before* the
+  // reconciler encrypted anything (#333's S3/GCS credentials) still stores the
+  // plaintext. Every boot encrypts any non-envelope value of a `secret` setting,
+  // packaged modules' included; an envelope is never touched, so the step is
+  // idempotent. Without a key it only warns, naming each code.
+  await enterSystemScope(
+    'boot: encrypt plaintext secret settings',
+    () =>
+      backfillPlaintextSecrets(em(), {
+        secretEncryptionKey: settingsSecretKey,
+        cache: settings.cache,
+      }),
     { entryPoint: 'boot' },
   );
   for (const perModule of reconciliation.perModule) {
@@ -1318,6 +1520,9 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // below it throws `ContributionWindowClosedError` naming the rule, rather
   // than landing somewhere no hook will read.
   await composedModules.runBootHooks();
+  // The bracket opened beside the writer closes here: what a plugin body,
+  // a worker or a request widens from now on is not the process start.
+  escapeHatchAudit.endBoot();
 
   return {
     orm,
@@ -1356,6 +1561,8 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
       // scope — and before the ORM closes, so the last records are written
       // rather than printed as unpersisted.
       await escapeHatchAudit.detach();
+      // The wake-up's producer queue shares `redis`; close it first.
+      await commandOutboxWake.close();
       redis.disconnect();
       redisSubscriber.disconnect();
       await ormLifecycle.close();

@@ -13,6 +13,7 @@ import {
   TEST_ORGANIZATION_ID,
 } from '../../helpers/test-actors.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Feature 146, issue #283 / FR-017 / US3 #1–#2, end to end: when organization
@@ -41,9 +42,11 @@ describe('146 — History attributes a colleague\'s decision to the user who mad
         passwordHash: 'x'.repeat(60),
         firstName: 'Beata',
         lastName: 'Colleague',
-        role: 'organization_admin',
+        // B sees A's request because B holds the *Administrator* role
+        // (`specs/170-organization-roles/` R-30); the legacy `role` is dual-written.
+        organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'administrator'),
       });
-      await em.persistAndFlush(b);
+      await em.persist(b).flush();
       bId = b.id;
       CUSTOMER_COOKIES[B_SESSION] = { customerAccountId: b.id, organizationId: TEST_ORGANIZATION_ID };
     });

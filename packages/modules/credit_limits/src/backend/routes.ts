@@ -2,12 +2,19 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   ERROR_CODES,
   adjustCreditLimitRequestSchema,
+  adminCreditLimitListQuerySchema,
   grantCreditLimitRequestSchema,
+  moneySum,
+  type CreditLimitListResponse,
+  type CreditLimitView,
+  type OrderReadPort,
   type OrganizationDetailsPort,
+  type OrganizationPermissionPort,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { isOrgInScope } from '@endora-commerce/platform/tenancy';
+import { orgInScope } from '@endora-commerce/platform/tenancy';
 import type { CreditLimitService } from './services/credit-limit-service.js';
+import { availableCredit } from './services/credit-money.js';
 import type { CreditLimit } from './entities/credit-limit.entity.js';
 import type { CreditLimitReservation } from './entities/credit-limit-reservation.entity.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -42,6 +49,13 @@ export interface CreditLimitsDeps {
    * switched off. The port fails the request closed instead.
    */
   organizationDetailsPort: OrganizationDetailsPort;
+  /**
+   * `organizations`' permission port and `orders`' read model — together they
+   * decide which reservations a buyer's `GET /api/v1/me/credit-limit` lists
+   * (issue #748). Both owners are already in this module's `dependencies`.
+   */
+  organizationPermissionPort: OrganizationPermissionPort;
+  orderReadPort: OrderReadPort;
   requireCustomer: (req: FastifyRequest, reply: unknown) => Promise<void>;
   requireAdmin: RequireAdminFactory;
   resolveCustomerContext: (req: FastifyRequest) => {
@@ -74,6 +88,8 @@ export async function registerCreditLimitsRoutes(
   const {
     creditLimitService,
     organizationDetailsPort,
+    organizationPermissionPort,
+    orderReadPort,
     requireCustomer,
     requireAdmin,
     resolveCustomerContext,
@@ -88,10 +104,60 @@ export async function registerCreditLimitsRoutes(
     return new Map(orgs.map((o) => [o.id, o.name]));
   };
 
+  /**
+   * Each order's customer-facing number (`businessId`), for every reservation
+   * of `reservations`, in **one** batched read of `orders` — however many
+   * limits the reservations come from (issue #1178: the admin list asks once
+   * per page, never once per limit). An order the read does not return is
+   * absent, and answers `null` in the view. No reservation, no read.
+   */
+  const orderNumbersOf = async (
+    reservations: readonly CreditLimitReservation[],
+  ): Promise<ReadonlyMap<string, string>> => {
+    if (reservations.length === 0) return new Map();
+    const orders = await orderReadPort.findByIds([...new Set(reservations.map((r) => r.orderId))]);
+    return new Map(orders.map((o) => [o.id, o.businessId]));
+  };
+
+  /**
+   * The reservations of `reservations` whose order this buyer may read
+   * (issue #748), under the rule `GET /api/v1/orders/:id` applies
+   * (`specs/170-organization-roles/` FR-049): a member whose organization role
+   * holds `orders.view_organization` — the *Administrator* implicitly — reads
+   * every order of the Organization, anyone else only the orders they placed.
+   *
+   * The reservation records neither who placed its order nor the order's
+   * customer-facing number, so both are asked of `orders` in one batched read.
+   * The number is what the buyer's widget shows instead of the database id
+   * (issue #661). The totals are computed from the full set by the caller: the
+   * limit is shared, and a member needs them to know what they can spend.
+   */
+  const readableReservations = async (
+    ctx: { customerAccountId: string; organizationId: string },
+    reservations: CreditLimitReservation[],
+  ): Promise<{ listed: CreditLimitReservation[]; orderNumbers: ReadonlyMap<string, string> }> => {
+    if (reservations.length === 0) return { listed: reservations, orderNumbers: new Map() };
+    const subject = { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId };
+    const holds = await organizationPermissionPort.can(subject, ORDERS_VIEW_ORGANIZATION);
+    const orders = await orderReadPort.findByIds(reservations.map((r) => r.orderId));
+    const orderNumbers = new Map(orders.map((o) => [o.id, o.businessId]));
+    if (holds) return { listed: reservations, orderNumbers };
+    const own = new Set(
+      orders
+        .filter(
+          (o) =>
+            o.placedByCustomerAccountId === ctx.customerAccountId &&
+            o.organizationId === ctx.organizationId,
+        )
+        .map((o) => o.id),
+    );
+    return { listed: reservations.filter((r) => own.has(r.orderId)), orderNumbers };
+  };
+
   app.get(
     '/api/v1/me/credit-limit',
     { preHandler: requireCustomer },
-    async (request) => {
+    async (request): Promise<{ data: CreditLimitView }> => {
       const ctx = resolveCustomerContext(request);
       const limit = await creditLimitService.getForOrganization(ctx.organizationId);
       if (!limit) {
@@ -102,23 +168,40 @@ export async function registerCreditLimitsRoutes(
         );
       }
       const reservations = await creditLimitService.listActiveReservations(limit.id);
-      return { data: serializeView(limit, reservations) };
+      const { listed, orderNumbers } = await readableReservations(ctx, reservations);
+      return { data: serializeView(limit, reservations, null, listed, orderNumbers) };
     },
   );
 
   app.get(
     '/api/v1/admin/credit-limits',
     { preHandler: requireAdmin('credit_limits:manage') },
-    async () => {
-      const rows = await creditLimitService.listAll();
-      const names = await loadOrgNames(rows.map((l) => l.organizationId));
-      const data = await Promise.all(
-        rows.map(async (l) => {
-          const reservations = await creditLimitService.listActiveReservations(l.id);
-          return serializeView(l, reservations, names.get(l.organizationId) ?? null);
-        }),
+    async (request): Promise<CreditLimitListResponse> => {
+      // Issue #1664 — an offset page for the list screen's pager; a caller that
+      // names no `pageSize` keeps the whole list, as before. Names, reservations
+      // and order numbers are read for this page's limits only.
+      const query = adminCreditLimitListQuerySchema.parse(request.query ?? {});
+      const { rows, total } = await creditLimitService.listPage(
+        query.pageSize === undefined
+          ? { offset: 0 }
+          : { offset: (query.page - 1) * query.pageSize, limit: query.pageSize },
       );
-      return { data };
+      const names = await loadOrgNames(rows.map((l) => l.organizationId));
+      const reservationsByLimit = await Promise.all(
+        rows.map((l) => creditLimitService.listActiveReservations(l.id)),
+      );
+      const orderNumbers = await orderNumbersOf(reservationsByLimit.flat());
+      const data = rows.map((l, i) => {
+        const reservations = reservationsByLimit[i] ?? [];
+        return serializeView(l, reservations, names.get(l.organizationId) ?? null, reservations, orderNumbers);
+      });
+      return {
+        data,
+        meta:
+          query.pageSize === undefined
+            ? { page: 1, pageSize: Math.max(total, 1), total }
+            : { page: query.page, pageSize: query.pageSize, total },
+      };
     },
   );
 
@@ -128,11 +211,11 @@ export async function registerCreditLimitsRoutes(
       preHandler: requireAdmin('credit_limits:manage'),
       schema: { body: grantCreditLimitRequestSchema },
     },
-    async (request, reply) => {
+    async (request, reply): Promise<{ data: CreditLimitView }> => {
       const body = grantCreditLimitRequestSchema.parse(request.body);
       // Feature 050 — inserts are not reachable by the org column filter, so gate
       // the target org explicitly; out-of-scope responds as "not granted" (FR-008).
-      if (!isOrgInScope(request.params.id)) {
+      if (!(await orgInScope(request.params.id))) {
         throw new HttpError(
           404,
           ERROR_CODES.CREDIT_LIMIT_NOT_GRANTED,
@@ -162,7 +245,7 @@ export async function registerCreditLimitsRoutes(
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/organizations/:id/credit-limit',
     { preHandler: requireAdmin('credit_limits:manage') },
-    async (request) => {
+    async (request): Promise<{ data: CreditLimitView }> => {
       const limit = await creditLimitService.getForOrganization(request.params.id);
       if (!limit) {
         throw new HttpError(
@@ -173,7 +256,10 @@ export async function registerCreditLimitsRoutes(
       }
       const reservations = await creditLimitService.listActiveReservations(limit.id);
       const names = await loadOrgNames([request.params.id]);
-      return { data: serializeView(limit, reservations, names.get(request.params.id) ?? null) };
+      const orderNumbers = await orderNumbersOf(reservations);
+      return {
+        data: serializeView(limit, reservations, names.get(request.params.id) ?? null, reservations, orderNumbers),
+      };
     },
   );
 
@@ -183,10 +269,10 @@ export async function registerCreditLimitsRoutes(
       preHandler: requireAdmin('credit_limits:manage'),
       schema: { body: adjustCreditLimitRequestSchema },
     },
-    async (request) => {
+    async (request): Promise<{ data: CreditLimitView }> => {
       const body = adjustCreditLimitRequestSchema.parse(request.body);
       // Feature 050 — gate the target org (see POST grant above).
-      if (!isOrgInScope(request.params.id)) {
+      if (!(await orgInScope(request.params.id))) {
         throw new HttpError(
           404,
           ERROR_CODES.CREDIT_LIMIT_NOT_GRANTED,
@@ -210,7 +296,16 @@ export async function registerCreditLimitsRoutes(
         }
         const reservations = await creditLimitService.listActiveReservations(result.limit.id);
         const names = await loadOrgNames([request.params.id]);
-        return { data: serializeView(result.limit, reservations, names.get(request.params.id) ?? null) };
+        const orderNumbers = await orderNumbersOf(reservations);
+        return {
+          data: serializeView(
+            result.limit,
+            reservations,
+            names.get(request.params.id) ?? null,
+            reservations,
+            orderNumbers,
+          ),
+        };
       } catch (err) {
         if (err instanceof Error && err.message === 'CREDIT_LIMIT_NOT_GRANTED') {
           throw new HttpError(
@@ -225,21 +320,41 @@ export async function registerCreditLimitsRoutes(
   );
 }
 
+/**
+ * The organization permission that lets a buyer read a colleague's order —
+ * declared by `orders` (`specs/170-organization-roles/` FR-049). Here it
+ * decides which reservations the customer view lists (issue #748).
+ */
+const ORDERS_VIEW_ORGANIZATION = 'orders.view_organization';
+
+/**
+ * `reservations` is every active reservation of the limit and drives the
+ * totals; `listed` is the subset the caller may read, defaulting to all of
+ * them (the admin views). `orderNumbers` maps an order id to its
+ * customer-facing number — the customer view since issue #661, the admin views
+ * since issue #1178 — and an order it lacks answers `null`; a caller that passes
+ * none (the fresh grant, which holds no reservation) omits the field. The
+ * published `creditLimitViewSchema` (issue #599).
+ */
 function serializeView(
   limit: CreditLimit,
   reservations: CreditLimitReservation[],
   organizationName?: string | null,
-): Record<string, unknown> {
-  const granted = Number(limit.grantedAmount);
-  const reservedSum = reservations.reduce((acc, r) => acc + Number(r.amount), 0);
+  listed: CreditLimitReservation[] = reservations,
+  orderNumbers?: ReadonlyMap<string, string>,
+): CreditLimitView {
+  // Exact decimal arithmetic (issue #417); each figure a two-place decimal read as a number.
+  const reservedSum = moneySum(reservations.map((r) => r.amount));
   return {
     organizationId: limit.organizationId,
     organizationName: organizationName ?? null,
-    grantedAmount: granted,
-    availableAmount: granted - reservedSum,
+    grantedAmount: Number(limit.grantedAmount),
+    availableAmount: Number(availableCredit(limit.grantedAmount, reservedSum)),
     currency: limit.currency,
-    activeReservations: reservations.map((r) => ({
+    activeReservationCount: reservations.length,
+    activeReservations: listed.map((r) => ({
       orderId: r.orderId,
+      ...(orderNumbers ? { orderBusinessId: orderNumbers.get(r.orderId) ?? null } : {}),
       amount: Number(r.amount),
       createdAt: r.createdAt.toISOString(),
     })),

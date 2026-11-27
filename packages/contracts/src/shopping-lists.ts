@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { REQUEST_LINE_ITEMS_MAX, lineQuantitySchema } from './line-bounds.js';
 
 /**
  * Shopping list contracts (T202 / FR-031..FR-033).
@@ -41,6 +42,34 @@ export const shoppingListSchema = z.object({
 });
 export type ShoppingList = z.infer<typeof shoppingListSchema>;
 
+/** `GET /api/v1/shopping-lists` — the signed-in customer's lists, each with its items (issue #599). */
+export const shoppingListListResponseSchema = z.object({
+  data: z.array(shoppingListSchema),
+});
+export type ShoppingListListResponse = z.infer<typeof shoppingListListResponseSchema>;
+
+/**
+ * The name `shopping_lists` stores on the default list it creates for every
+ * customer (at registration, or on the first default-list read). It is data,
+ * written in no language in particular (issue #751).
+ */
+export const SHOPPING_LIST_AUTO_DEFAULT_NAME = 'Default';
+
+/**
+ * Whether `list` is the default list the platform created and nobody renamed —
+ * the list a storefront names in the shop language rather than by its stored
+ * name (owner ruling on PR #760, issue #751).
+ *
+ * No column records "never renamed", so the marker is the default flag and the
+ * stored name together, matched exactly. A list the customer renamed is theirs;
+ * a list named `Default` that is not the default one is a name like any other.
+ * The cost of not adding a column: a customer who types exactly `Default` as the
+ * default list's name sees it in the shop language — the same word.
+ */
+export function isAutoDefaultShoppingList(list: { readonly name: string; readonly isDefault: boolean }): boolean {
+  return list.isDefault && list.name === SHOPPING_LIST_AUTO_DEFAULT_NAME;
+}
+
 /** Lightweight default-list view for the storefront header heart badge. */
 export const defaultShoppingListSummarySchema = z.object({
   id: uuidSchema,
@@ -63,17 +92,49 @@ export const renameShoppingListRequestSchema = z
   .strict();
 export type RenameShoppingListRequest = z.infer<typeof renameShoppingListRequestSchema>;
 
+/**
+ * Issue #1251 — `PATCH /api/v1/shopping-lists/:id`: the list's name, the quantities of any of
+ * its lines, or both, written together or not at all — the one *Save changes* of the
+ * storefront list page. Every body {@link renameShoppingListRequestSchema} accepts is accepted
+ * here. A line appears once, at most {@link REQUEST_LINE_ITEMS_MAX} of them; a line that is
+ * not on the list refuses the whole write.
+ */
+export const updateShoppingListRequestSchema = z
+  .object({
+    name: z.string().min(1).max(160).optional(),
+    items: z
+      .array(
+        z
+          .object({
+            id: uuidSchema,
+            quantity: lineQuantitySchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(REQUEST_LINE_ITEMS_MAX)
+      .refine((items) => new Set(items.map((item) => item.id)).size === items.length, {
+        message: 'A line may be listed once.',
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((body) => body.name !== undefined || body.items !== undefined, {
+    message: 'Send a name, lines, or both.',
+  });
+export type UpdateShoppingListRequest = z.infer<typeof updateShoppingListRequestSchema>;
+
 export const addShoppingListItemRequestSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.optional(),
-  quantity: z.number().int().positive(),
+  quantity: lineQuantitySchema,
   note: z.string().max(2000).optional(),
 });
 export type AddShoppingListItemRequest = z.infer<typeof addShoppingListItemRequestSchema>;
 
 export const updateShoppingListItemRequestSchema = z
   .object({
-    quantity: z.number().int().positive().optional(),
+    quantity: lineQuantitySchema.optional(),
     note: z.string().max(2000).nullable().optional(),
   })
   .strict();
@@ -96,9 +157,42 @@ export type ConvertShoppingListRequest = z.infer<typeof convertShoppingListReque
 export const conversionSkipSchema = z.object({
   itemId: uuidSchema,
   productId: uuidSchema,
-  reason: z.enum(['product_archived', 'variant_unavailable', 'product_not_found']),
+  reason: z.enum(['product_archived', 'variant_unavailable', 'product_not_found', 'below_minimum']),
+  /** Feature 155 — on `below_minimum`: the minimum the line missed. */
+  minimum: z.number().int().positive().optional(),
 });
 export type ConversionSkip = z.infer<typeof conversionSkipSchema>;
+
+/** One line of the carts bridge's `droppedLines`, as a shopping-list append reports it. */
+export interface ShoppingListDroppedLine {
+  productId: string;
+  /** The id: a skip carries no name, and the storefront resolves it. */
+  productName: string;
+  reason: 'below_minimum' | 'not_purchasable';
+  minimum?: number;
+}
+
+/**
+ * Feature 155 (FR-011, US4 #3) — a list conversion's skipped items as the carts
+ * bridge's `droppedLines`, the uniform shape of the three conversions into a
+ * cart. A line below a minimum says so, with the minimum it missed; every other
+ * skip is `not_purchasable`. Pure — the one mapping both composition roots call,
+ * so production and the test harness cannot answer an append differently.
+ */
+export function toCartDroppedLines(
+  skipped: ReadonlyArray<Pick<ConversionSkip, 'productId' | 'minimum'> & { reason: string }>,
+): ShoppingListDroppedLine[] {
+  return skipped.map((skip) =>
+    skip.reason === 'below_minimum'
+      ? {
+          productId: skip.productId,
+          productName: skip.productId,
+          reason: 'below_minimum',
+          ...(skip.minimum !== undefined ? { minimum: skip.minimum } : {}),
+        }
+      : { productId: skip.productId, productName: skip.productId, reason: 'not_purchasable' },
+  );
+}
 
 export const convertToCartResponseSchema = z.object({
   shoppingListId: uuidSchema,
@@ -109,7 +203,8 @@ export type ConvertToCartResponse = z.infer<typeof convertToCartResponseSchema>;
 
 export const convertToRfqResponseSchema = z.object({
   shoppingListId: uuidSchema,
-  rfqId: uuidSchema,
+  /** `null` when no item converted — every selected item was skipped, or none was selected; no quote request was created or changed. */
+  rfqId: uuidSchema.nullable(),
   added: z.number().int().nonnegative(),
   skipped: z.array(conversionSkipSchema),
 });

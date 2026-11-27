@@ -11,12 +11,12 @@ description: "Wszystko, co manifest modułu `custom_fields` deklaruje: uprawnien
 
 # `custom_fields` — referencja modułu
 
-Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jeszcze nie napisał strony o tym, co ten moduł *robi*; [mapa modułów](../modules/module-map.generated.md) wymienia wszystkie moduły, z których składa się platforma.
+Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł *robi*, opisuje [jego własna strona](../modules/custom_fields.md).
 
 | | |
 | --- | --- |
 | Identyfikator modułu | `custom_fields` |
-| Nazwa | Custom Fields |
+| Nazwa | Custom fields |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-custom-fields` |
 | Licencja | `MIT` |
@@ -29,6 +29,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jesz
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 
 ## Uprawnienia
@@ -42,6 +43,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jesz
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `new-custom-field` | `/custom-fields/new` | `custom_fields:write` |
 | `open-custom-fields` | `/custom-fields` | `custom_fields:read` |
 
 ## Ustawienia

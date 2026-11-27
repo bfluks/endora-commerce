@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import { tForLocale } from '../../lib/i18n/messages';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Quote-request success panel (feature 008). Reached right after a buyer
@@ -35,12 +35,15 @@ export function RfqSuccessPanel({
 
       <p>{t('quoteRequest.success.nextStepsHint')}</p>
 
+      {/* Issue #1220 — the base reset strips every `<a>` of colour and underline, so
+          these take the shared link style. It is the account area's class, and two of
+          the three targets are account pages (the buyer's quote requests). */}
       <p className="b2b-auth__hint">
-        <Link href={`/quote-requests/${rfqId}`}>{t('quoteRequest.success.viewRequest')}</Link>
+        <LocalizedLink href={`/quote-requests/${rfqId}`} className="b2b-account__link">{t('quoteRequest.success.viewRequest')}</LocalizedLink>
         {' · '}
-        <Link href="/quote-requests">{t('quoteRequest.success.allRequests')}</Link>
+        <LocalizedLink href="/quote-requests" className="b2b-account__link">{t('quoteRequest.success.allRequests')}</LocalizedLink>
         {' · '}
-        <Link href="/catalog">{t('quoteRequest.success.continueShopping')}</Link>
+        <LocalizedLink href="/catalog" className="b2b-account__link">{t('quoteRequest.success.continueShopping')}</LocalizedLink>
       </p>
     </div>
   );

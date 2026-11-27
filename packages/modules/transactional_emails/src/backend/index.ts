@@ -1,8 +1,13 @@
+import { TransactionalEmailStateService } from './services/transactional-email-state.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type {
+  AdminI18nTranslatePort,
+  AssetReadPort,
   EmailBlockRendererRegistryPort,
+  SettingWriteValidatorRegistryPort,
   TemplateEmailPort,
+  TransactionalEmailStatePort,
   ModuleManifest,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
@@ -19,6 +24,7 @@ import type { BrandingService, AssetUrlResolver } from './services/branding.serv
 import type { TransactionalEmailService } from './services/transactional-email.service.js';
 import { makeTemplateEmail, type TemplateEmail } from './services/template-email.js';
 import { EmailDefaultsRegistry } from './services/email-defaults-registry.js';
+import { createLogoAssetValidator } from './services/logo-asset-validator.js';
 import { EmailBlockSalesChannel } from './entities/email-block-sales-channel.entity.js';
 import { EmailBlock } from './entities/email-block.entity.js';
 import { EmailTemplateSalesChannel } from './entities/email-template-sales-channel.entity.js';
@@ -161,7 +167,15 @@ export function registerModule(ctx: ModuleContext): void {
                 { block, owner, err: error },
                 'a contributed e-mail block failed to render; the message was rendered without it',
               ),
+            // Issue #560 — a variable's sample value in the language being
+            // edited. `_i18n` is non-deactivatable; the service still keeps the
+            // manifest's English sample if the resolver refuses.
+            translator: lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService'),
             resolveAssetUrl: (assetId: string) => cradle().transactionalEmailAssetUrl(assetId),
+            // Issue #1354 — resolved per call: a save that newly stores an asset
+            // id asks whether the caller may see it in the library.
+            // `assets_library` is non-deactivatable and a declared dependency.
+            assets: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
             requireAdmin: (permission?: string) => async (req, reply) =>
               cradle().requireAdmin(permission ?? '')(req, reply),
             resolveAdminUserId: (req: FastifyRequest) =>
@@ -183,6 +197,16 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         (): (() => TransactionalEmailSender | undefined) => () => exposed.sender ?? undefined,
       )
+      .singleton(),
+  );
+
+  // `specs/180-off-platform-complaints/` D-11 (research R-21) — whether an e-mail is
+  // switched on, for a module that tells its reader one is on its way. Read-only;
+  // gated like every port, so it refuses while this module is off.
+  ctx.di.providePort<TransactionalEmailStatePort>(
+    'transactionalEmailStatePort',
+    ctx
+      .asFunction(({ emFactory }: TransactionalEmailsCradle) => new TransactionalEmailStateService(emFactory))
       .singleton(),
   );
 
@@ -211,9 +235,12 @@ export function registerModule(ctx: ModuleContext): void {
           // platform-wide on a branch that cannot be taken.
           resolveScopeSalesChannelId: async () =>
             (await cradle().salesChannelResolutionPort.getSystemDefault()).id,
-          resolveLanguage: async (salesChannelId: string) =>
-            (await cradle().salesChannelResolutionPort.getById(salesChannelId))?.defaultLanguage ??
-            'en-US',
+          // `null` only for a channel that does not resolve (issue #1256): a
+          // caller-named channel that is gone renders on the system default.
+          resolveLanguage: async (salesChannelId: string) => {
+            const channel = await cradle().salesChannelResolutionPort.getById(salesChannelId);
+            return channel ? channel.defaultLanguage || 'en-US' : null;
+          },
         }),
       )
       .singleton(),
@@ -248,6 +275,17 @@ export function registerModule(ctx: ModuleContext): void {
           emailDefaultsRegistryInstance,
       )
       .singleton(),
+  });
+
+  /**
+   * Issue #1354 — a newly set e-mail logo the administrator may not see in the
+   * asset library is refused as a missing one. A contribution into `settings`'
+   * registry, which skips it while this module is off.
+   */
+  ctx.onBoot(() => {
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createLogoAssetValidator(lazyPort<AssetReadPort>(ctx, 'assetReadPort')),
+    );
   });
 
   ctx.routes(async (app) => {

@@ -12,7 +12,8 @@ import {
  * Covers `contracts/products-sku-edit.contract.md`:
  *   - PATCH /api/v1/admin/catalog/products/:id accepts the `sku` field.
  *   - Renaming to a SKU already in use by another product is refused
- *     with 400 sku_in_use.
+ *     with 409 SKU_ALREADY_EXISTS, as create is (issue #624; it was
+ *     400 sku_in_use).
  *   - Renaming to an invalid SKU (empty / whitespace only / >160) is
  *     refused with 400 invalid_sku.
  *   - Renaming the same SKU back to itself is a no-op (no error).
@@ -38,8 +39,8 @@ describe('Admin Products contract — feature 012 editable SKU (T027)', () => {
       payload: {
         sku,
         type: 'simple',
-        name: { 'en-US': sku },
-        description: { 'en-US': 'desc' },
+        name: sku,
+        description: 'desc',
         categoryIds: [],
         attributeValues: {},
         visibility: 'public',
@@ -74,8 +75,8 @@ describe('Admin Products contract — feature 012 editable SKU (T027)', () => {
     expect(after.data.sku).toBe('SKU-EDIT-001-renamed');
   });
 
-  it('PATCH refuses a SKU already in use by another product (400 sku_in_use)', async () => {
-    await createProduct('SKU-EDIT-A');
+  it('PATCH refuses a SKU already in use by another product (409 SKU_ALREADY_EXISTS)', async () => {
+    const idA = await createProduct('SKU-EDIT-A');
     const idB = await createProduct('SKU-EDIT-B');
     const res = await h.app.inject({
       method: 'PATCH',
@@ -83,9 +84,10 @@ describe('Admin Products contract — feature 012 editable SKU (T027)', () => {
       payload: { sku: 'SKU-EDIT-A' },
       cookies: adminCookie,
     });
-    expect(res.statusCode).toBe(400);
-    const body = res.json() as { error: { message: string } };
-    expect(body.error.message).toMatch(/sku_in_use/);
+    expect(res.statusCode).toBe(409);
+    const body = res.json() as { error: { code: string; details?: Record<string, unknown> } };
+    expect(body.error.code).toBe('SKU_ALREADY_EXISTS');
+    expect(body.error.details).toEqual({ code: 'held_by_product', sku: 'SKU-EDIT-A', conflictingProductId: idA });
   });
 
   it('PATCH refuses an empty SKU with 400 invalid_sku', async () => {
@@ -113,22 +115,23 @@ describe('Admin Products contract — feature 012 editable SKU (T027)', () => {
   });
 
   // Regression: the admin Product editor always round-trips the full
-  // `attributeValues` map on save — including the virtual `defaultPrice` key,
-  // which belongs to no AttributeSet. A SKU-only edit must not be rejected
-  // with ATTRIBUTE_VALUE_REJECTED because that virtual key is present.
-  it('PATCH changing only the SKU while round-tripping the virtual defaultPrice succeeds', async () => {
+  // `attributeValues` map on save. A SKU-only edit must not be rejected with
+  // ATTRIBUTE_VALUE_REJECTED for the values it carries back. (The editor used
+  // to carry a virtual `defaultPrice` key too; a product has no price of its
+  // own since feature 160, and that key is refused —
+  // `price-fields-refused.test.ts`.)
+  it('PATCH changing only the SKU while round-tripping the attribute values succeeds', async () => {
     const create = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/products',
       payload: {
         sku: 'SKU-EDIT-PRICE',
         type: 'simple',
-        name: { 'en-US': 'priced' },
-        description: { 'en-US': 'desc' },
+        name: 'priced',
+        description: 'desc',
         categoryIds: [],
-        // `internal_sku_notes` is a real Default-set attribute (seed); the
-        // `defaultPrice` virtual key reproduces the editor's save payload.
-        attributeValues: { internal_sku_notes: 'note', defaultPrice: 49.99 },
+        // `internal_sku_notes` is a real Default-set attribute (seed).
+        attributeValues: { internal_sku_notes: 'note' },
         visibility: 'public',
       },
       cookies: adminCookie,
@@ -141,7 +144,7 @@ describe('Admin Products contract — feature 012 editable SKU (T027)', () => {
       url: `/api/v1/admin/catalog/products/${id}`,
       payload: {
         sku: 'SKU-EDIT-PRICE-renamed',
-        attributeValues: { internal_sku_notes: 'note', defaultPrice: 49.99 },
+        attributeValues: { internal_sku_notes: 'note' },
       },
       cookies: adminCookie,
     });

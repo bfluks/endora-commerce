@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `quote_requests` |
-| Name | Quote Requests |
+| Name | Quote requests |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-quote-requests` |
 | Licence | `MIT` |
@@ -44,9 +44,12 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `transactional_emails` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `carts` | gating only | resolves `cartWritePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `orders` | gating only | resolves `orderReadPort`; withheld from `dependencies` because the install order cannot carry the edge |
+| `admin_notifications` | no | degrades-without `adminNotificationRecordPort` — Operators get no bell entry about quote requests; each delivery record closes as skipped (module off). |
 | `admin_search` | no | contributes-to `adminSearchProviderRegistry` |
+| `customer_notifications` | no | degrades-without `customerNotificationRecordPort` — Buyers get no entry about their quote requests in the storefront notification centre; each delivery record closes as skipped (module off). |
 | `document_templates` | no | refuses-without `documentRenderPort` — quote requests cannot be exported to PDF and no PDF template can be chosen |
 | `document_templates` | no | contributes-to `documentTypeRegistry` |
+| `pwa` | no | degrades-without `customerPushPort` — Buyers get no push notification about their quote requests on their devices; each delivery record closes as skipped (module off). |
 | `webhooks` | no | contributes-to `webhookEventRegistry` |
 
 ## Permissions
@@ -67,6 +70,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | --- | --- | --- |
 | `quote_requests.business_id.prefix` | Business Quote Request ID prefix | `string` |
 | `quote_requests.business_id.suffix` | Business Quote Request ID suffix | `string` |
+| `quote_requests.default_validity_days` | Default validity of operator quotes (days) | `number` |
 | `quote_requests.enabled` | Quote requests enabled | `boolean` |
 | `quote_requests.expiry_days` | Auto-expire pending after (days) | `number` |
 | `quote_requests.show_add_to_quote_on_card` | Show "Add to quote" on product card | `boolean` |

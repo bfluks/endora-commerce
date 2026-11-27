@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. Nobod
 | | |
 | --- | --- |
 | Module id | `admin_notifications` |
-| Name | Admin Notifications |
+| Name | Admin notifications |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-admin-notifications` |
 | Licence | `MIT` |
@@ -29,6 +29,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `admin_roles` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
@@ -36,7 +37,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Code | Label | Also needs |
 | --- | --- | --- |
-| `admin:read` | View admin notifications | — |
+| `admin:read` | View notifications sent to all admins | — |
 
 ## Command palette
 
@@ -50,7 +51,7 @@ _None._
 
 ## Translations
 
-This module declares no translation bundles.
+Bundles at `i18n` inside the module, one file per shipped language.
 
 ## Operator commands
 

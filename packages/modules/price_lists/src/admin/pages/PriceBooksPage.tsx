@@ -1,0 +1,622 @@
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, BookOpen, Plus, RotateCcw, Settings, X } from 'lucide-react';
+import type {
+  PriceBookAudienceKind,
+  PriceBookListResponse,
+  PriceBookStatus,
+  PriceBookSummary,
+  PriceBookTargetCurrency,
+  PriceBookTargetCustomerGroup,
+  PriceBookTargetSalesChannel,
+  PriceBookType,
+} from '@endora-commerce/contracts';
+import {
+  ListPage,
+  ListToolbar,
+  ListToolbarSearch,
+  ResponsiveTable,
+  RowActionMenu,
+  RowActionMenuItem,
+  RowActionMenuSeparator,
+  type ListPageLoad,
+  type ResponsiveColumn,
+} from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useAuth, usePageSizePreference, type PageSizeOption } from '@endora-commerce/admin-kit/lib';
+import {
+  Badge,
+  Button,
+  Combobox,
+  EmptyState,
+  Label,
+  Select,
+  buttonVariants,
+  type ComboboxOption,
+} from '@endora-commerce/admin-kit/ui';
+import { DeleteBookDialog } from '../components/DeleteBookDialog.js';
+import { errorMessage } from '../lib/api-errors.js';
+import { AUDIENCE_KINDS, BOOK_STATUSES, BOOK_TYPES, audienceLabel, statusLabel, typeLabel } from '../lib/book-labels.js';
+import { useLocalizedName } from '../lib/localized-name.js';
+import { usePriceBooksApi } from '../lib/use-price-books-api.js';
+
+/**
+ * The price-book list (feature 161, US1 — FR-001, FR-005, FR-032, FR-034).
+ *
+ * **Filters live in the URL** (OQ-2 = B; saved views are issue #408): a
+ * filtered list is a link an operator can share or bookmark. Every filter is
+ * written with `replace`, so the history holds the addresses an operator
+ * opened rather than one per keystroke.
+ *
+ * **Base books** are shown once per currency, marked as base prices, and offer
+ * no delete — the server answers `403` to one anyway (FR-005). A book the
+ * caller may not change (`writable`, G11) offers no action either: absent, not
+ * disabled (FR-028).
+ *
+ * The member filter names organizations through the scope-filtered targets
+ * (G12), so a representative only ever sees their own.
+ */
+
+/** `GET …/price-books` pages at most 200; the kit's 500 option falls back to 100. */
+const MAX_PAGE_SIZE = 200;
+
+const FILTER_KEYS = ['search', 'type', 'status', 'currency', 'channelId', 'audienceKind', 'memberId'] as const;
+
+const isOneOf = <T extends string>(values: readonly T[], value: string | null): value is T =>
+  value !== null && (values as readonly string[]).includes(value);
+
+type ListState =
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'error'; readonly message: string; readonly detail: string }
+  | { readonly kind: 'ready'; readonly answer: PriceBookListResponse };
+
+export function PriceBooksPage(): ReactNode {
+  const t = useTranslation('price_lists');
+  /** Where focus returns after *Clear filters* in the empty state (WCAG 2.4.3). */
+  const searchRef = useRef<HTMLInputElement>(null);
+  const api = usePriceBooksApi();
+  const navigate = useNavigate();
+  const { hasPermission } = useAuth();
+  const localizedName = useLocalizedName();
+  const [params, setParams] = useSearchParams();
+  const { pageSize: preferred, setPageSize } = usePageSizePreference('price-books');
+  const pageSize = (preferred > MAX_PAGE_SIZE ? 100 : preferred) as PageSizeOption;
+  const mayWrite = hasPermission('price_lists:write');
+
+  const type = params.get('type');
+  const status = params.get('status');
+  const currency = params.get('currency');
+  const channelId = params.get('channelId');
+  const audienceKind = params.get('audienceKind');
+  const memberId = params.get('memberId');
+  const search = params.get('search') ?? '';
+  const page = Math.max(1, Number.parseInt(params.get('page') ?? '1', 10) || 1);
+  const filtered = FILTER_KEYS.some((key) => params.get(key));
+
+  const [state, setState] = useState<ListState>({ kind: 'loading' });
+  // The last page answered: a filter or page change refreshes over it (`busy`), the skeleton is for the first load.
+  const [answer, setAnswer] = useState<PriceBookListResponse | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [deleting, setDeleting] = useState<PriceBookSummary | null>(null);
+  const [searchText, setSearchText] = useState(search);
+  const [currencies, setCurrencies] = useState<PriceBookTargetCurrency[]>([]);
+  const [channels, setChannels] = useState<PriceBookTargetSalesChannel[]>([]);
+  const [groups, setGroups] = useState<PriceBookTargetCustomerGroup[]>([]);
+
+  /** Write filters to the URL (`null` removes one) and go back to the first page. */
+  const setFilter = useCallback(
+    (changes: Record<string, string | null>): void => {
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          for (const [key, value] of Object.entries(changes)) {
+            if (value === null || value === '') next.delete(key);
+            else next.set(key, value);
+          }
+          if (!('page' in changes)) next.delete('page');
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+
+  // The search box writes to the URL once typing settles.
+  useEffect(() => {
+    if (searchText.trim() === search) return undefined;
+    const timer = setTimeout(() => setFilter({ search: searchText.trim() || null }), 300);
+    return (): void => clearTimeout(timer);
+  }, [searchText, search, setFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ kind: 'loading' });
+    api
+      .list({
+        ...(isOneOf(BOOK_TYPES, type) ? { type: [type as PriceBookType] } : {}),
+        ...(isOneOf(BOOK_STATUSES, status) ? { status: [status as PriceBookStatus] } : {}),
+        ...(currency ? { currency } : {}),
+        ...(channelId ? { channelId } : {}),
+        ...(isOneOf(AUDIENCE_KINDS, audienceKind) ? { audienceKind: audienceKind as PriceBookAudienceKind } : {}),
+        ...(memberId ? { memberId } : {}),
+        ...(search ? { search } : {}),
+        page,
+        pageSize,
+      })
+      .then((answer) => {
+        if (cancelled) return;
+        setState({ kind: 'ready', answer });
+        setAnswer(answer);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'error', message: t('priceBooks.list.error.load'), detail: errorMessage(err, '') });
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [api, type, status, currency, channelId, audienceKind, memberId, search, page, pageSize, attempt, t]);
+
+  // The filters' choices: a failed read leaves that filter with "Any" alone.
+  useEffect(() => {
+    void api.targets.currencies().then(setCurrencies).catch(() => undefined);
+    void api.targets.salesChannels().then(setChannels).catch(() => undefined);
+  }, [api]);
+  useEffect(() => {
+    if (audienceKind === 'customer_groups') void api.targets.customerGroups().then(setGroups).catch(() => undefined);
+  }, [api, audienceKind]);
+
+  const creatable = state.kind === 'ready' ? state.answer.meta.creatableAudienceKinds.length > 0 : true;
+  const mayCreate = mayWrite && creatable;
+  const mayChange = useCallback(
+    (book: PriceBookSummary): boolean => mayWrite && book.writable && !book.isSystem,
+    [mayWrite],
+  );
+
+  const columns = useMemo<ResponsiveColumn<PriceBookSummary>[]>(
+    () => [
+      {
+        id: 'name',
+        header: t('priceBooks.list.column.name'),
+        primary: true,
+        render: (book) => (
+          <div className="space-y-1">
+            <Link to={`/price-lists/${book.id}`} className="font-medium underline-offset-2 hover:underline">
+              {book.name}
+            </Link>
+            <div className="flex flex-wrap gap-1">
+              {book.isSystem ? <Badge variant="secondary">{t('priceBooks.list.base', { currency: book.currencyCode })}</Badge> : null}
+              {book.appliesToNoOne ? (
+                <Badge variant="warning" className="gap-1">
+                  <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                  {t('priceBooks.list.flag.noOne')}
+                </Badge>
+              ) : null}
+              {book.appliesNowhere ? (
+                <Badge variant="warning" className="gap-1">
+                  <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                  {t('priceBooks.list.flag.nowhere')}
+                </Badge>
+              ) : null}
+            </div>
+          </div>
+        ),
+      },
+      { id: 'type', header: t('priceBooks.list.column.type'), render: (book) => typeLabel(t, book.type) },
+      {
+        id: 'status',
+        header: t('priceBooks.list.column.status'),
+        render: (book) => (
+          <Badge variant={book.status === 'active' ? 'success' : book.status === 'expired' ? 'secondary' : 'outline'}>
+            {statusLabel(t, book.status)}
+          </Badge>
+        ),
+      },
+      { id: 'currency', header: t('priceBooks.list.column.currency'), render: (book) => book.currencyCode },
+      { id: 'channels', header: t('priceBooks.list.column.channels'), hideOnMobile: true, render: (book) => book.channelCount },
+      {
+        id: 'audience',
+        header: t('priceBooks.list.column.audience'),
+        render: (book) =>
+          book.audienceKind === 'everyone'
+            ? audienceLabel(t, 'everyone')
+            : t('priceBooks.list.audienceSummary', { kind: audienceLabel(t, book.audienceKind), count: book.memberCount }),
+      },
+      { id: 'priority', header: t('priceBooks.list.column.priority'), hideOnMobile: true, render: (book) => book.priority },
+      { id: 'rows', header: t('priceBooks.list.column.rows'), hideOnMobile: true, render: (book) => book.rowCount },
+    ],
+    [t],
+  );
+
+  const clearFilters = (): void => {
+    setSearchText('');
+    setParams(new URLSearchParams(), { replace: true });
+  };
+
+  const total = answer?.meta.totalCount ?? 0;
+
+  const listLoad: ListPageLoad =
+    state.kind === 'error'
+      ? {
+          kind: 'error',
+          message: (
+            <>
+              {state.message}
+              {state.detail ? <span className="block text-xs">{state.detail}</span> : null}
+            </>
+          ),
+          // The feature's own wording, *Try again* (FR-032), in place of the kit's *Retry*.
+          action: (
+            <Button type="button" variant="outline" size="sm" onClick={(): void => setAttempt((n) => n + 1)}>
+              <RotateCcw aria-hidden="true" />
+              {t('priceBooks.common.retry')}
+            </Button>
+          ),
+        }
+      : answer === null
+        ? { kind: 'loading' }
+        : { kind: 'ready' };
+
+  return (
+    <>
+      <ListPage
+        title={t('priceBooks.list.title')}
+        description={t('priceBooks.list.description')}
+        actions={
+          <>
+            {/* Principle XVI (Checkpoint 10 ruling): *Pricing settings* has no
+                sidebar entry; it is reached from here and from the palette. */}
+            <Link to="/price-lists/display-modes" className={buttonVariants({ variant: 'outline' })}>
+              <Settings aria-hidden="true" />
+              {t('priceBooks.list.pricingSettings')}
+            </Link>
+            {mayCreate ? (
+              <Link to="/price-lists/new" className={buttonVariants()}>
+                <Plus aria-hidden="true" />
+                {t('priceBooks.list.new')}
+              </Link>
+            ) : null}
+          </>
+        }
+        toolbar={
+          <ListFilters
+            search={searchText}
+            onSearch={setSearchText}
+            searchRef={searchRef}
+            type={type}
+            status={status}
+            currency={currency}
+            channelId={channelId}
+            audienceKind={audienceKind}
+            memberId={memberId}
+            currencies={currencies}
+            channels={channels.map((c) => ({ id: c.id, name: localizedName(c.name, c.code) }))}
+            groups={groups}
+            onFilter={setFilter}
+            onClear={clearFilters}
+            filtered={filtered}
+            foldedCount={foldedFilterCount(params)}
+          />
+        }
+        count={t('priceBooks.list.loaded', { count: answer?.data.length ?? 0 })}
+        load={listLoad}
+        busy={state.kind === 'loading' && answer !== null}
+        onRetry={(): void => setAttempt((n) => n + 1)}
+        pagination={{
+          page: page - 1,
+          pageSize,
+          total,
+          onPageSizeChange: (next): void => {
+            setPageSize(next);
+            setFilter({ page: null });
+          },
+          onPrev: (): void => setFilter({ page: page > 2 ? String(page - 1) : null }),
+          onNext: (): void => setFilter({ page: String(page + 1) }),
+        }}
+      >
+        <ResponsiveTable
+          columns={columns}
+          data={answer?.data ?? []}
+          keyExtractor={(book) => book.id}
+          renderActions={(book) =>
+            mayChange(book) ? (
+              <RowActionMenu label={t('priceBooks.list.actionsFor', { name: book.name })}>
+                <RowActionMenuItem onSelect={(): void => void navigate(`/price-lists/${book.id}`)}>
+                  {t('priceBooks.list.open')}
+                </RowActionMenuItem>
+                <RowActionMenuSeparator />
+                <RowActionMenuItem destructive onSelect={(): void => setDeleting(book)}>
+                  {t('priceBooks.delete.action')}
+                </RowActionMenuItem>
+              </RowActionMenu>
+            ) : null
+          }
+          emptyState={
+            filtered ? (
+              <EmptyState
+                variant="no-results"
+                title={t('priceBooks.list.emptyFiltered.title')}
+                description={t('priceBooks.list.emptyFiltered.body')}
+                onClearFilters={clearFilters}
+                focusAfterClear={searchRef}
+              />
+            ) : (
+              <EmptyState
+                icon={<BookOpen size={20} />}
+                title={t('priceBooks.list.empty.title')}
+                description={t('priceBooks.list.empty.body')}
+              />
+            )
+          }
+        />
+      </ListPage>
+
+      {deleting ? (
+        <DeleteBookDialog
+          book={deleting}
+          onClose={(): void => setDeleting(null)}
+          onDeleted={(): void => {
+            setDeleting(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** The filters folded behind *More filters*; search, type, status and currency stay in view. */
+const FOLDED_FILTER_KEYS = ['channelId', 'audienceKind', 'memberId'] as const;
+
+/**
+ * How many folded filters the address uses — the *More filters (n)* count
+ * (issue #1440). A member counts on its own: it narrows the list further than
+ * its audience kind does.
+ */
+export function foldedFilterCount(params: URLSearchParams): number {
+  return FOLDED_FILTER_KEYS.filter((key) => params.get(key)).length;
+}
+
+/**
+ * The filter bar: every control writes one URL parameter. Search and the
+ * three filters operators reach for most stay in view; channel, audience and
+ * member are folded behind *More filters* (Hick's Law, issue #1440).
+ */
+function ListFilters(props: {
+  readonly search: string;
+  readonly onSearch: (text: string) => void;
+  readonly type: string | null;
+  readonly status: string | null;
+  readonly currency: string | null;
+  readonly channelId: string | null;
+  readonly audienceKind: string | null;
+  readonly memberId: string | null;
+  readonly currencies: readonly PriceBookTargetCurrency[];
+  readonly channels: readonly { id: string; name: string }[];
+  readonly groups: readonly PriceBookTargetCustomerGroup[];
+  readonly onFilter: (changes: Record<string, string | null>) => void;
+  readonly onClear: () => void;
+  /** Whether any filter, the search included, narrows the list. */
+  readonly filtered: boolean;
+  /** How many folded filters are in use. */
+  readonly foldedCount: number;
+  /** The search box, so a screen can return focus to it (after *Clear filters*, WCAG 2.4.3). */
+  // Typed off the kit's search box, whose React types this package does not share.
+  readonly searchRef?: ComponentProps<typeof ListToolbarSearch>['ref'];
+}): ReactNode {
+  const t = useTranslation('price_lists');
+  const base = useId();
+  const options = (
+    anyLabel: string,
+    choices: readonly { value: string; label: string }[],
+  ): ReactNode => (
+    <>
+      <option value="">{anyLabel}</option>
+      {choices.map((choice) => (
+        <option key={choice.value} value={choice.value}>
+          {choice.label}
+        </option>
+      ))}
+    </>
+  );
+  /** A filter in view: no visible label, so its "no filter" choice names what it filters. */
+  const primary = (
+    key: string,
+    label: string,
+    anyLabel: string,
+    value: string | null,
+    choices: readonly { value: string; label: string }[],
+  ): ReactNode => (
+    <Select
+      aria-label={label}
+      className="w-auto"
+      value={value ?? ''}
+      onChange={(event): void => props.onFilter({ [key]: event.target.value || null })}
+    >
+      {options(anyLabel, choices)}
+    </Select>
+  );
+  /** A folded filter: a labelled cell in the *More filters* panel. */
+  const folded = (
+    key: string,
+    label: string,
+    value: string | null,
+    choices: readonly { value: string; label: string }[],
+    extra: Record<string, string | null> = {},
+  ): ReactNode => (
+    <div className="space-y-1">
+      <Label htmlFor={`${base}-${key}`}>{label}</Label>
+      <Select
+        id={`${base}-${key}`}
+        value={value ?? ''}
+        onChange={(event): void => props.onFilter({ [key]: event.target.value || null, ...extra })}
+      >
+        {options(t('priceBooks.list.filters.any'), choices)}
+      </Select>
+    </div>
+  );
+
+  return (
+    <ListToolbar
+      className="min-w-0 flex-1"
+      label={t('priceBooks.list.filters.label')}
+      search={
+        <ListToolbarSearch
+          ref={props.searchRef}
+          label={t('priceBooks.list.filters.search')}
+          value={props.search}
+          onValueChange={props.onSearch}
+        />
+      }
+      filters={
+        <>
+          {primary(
+            'type',
+            t('priceBooks.list.filters.type'),
+            t('priceBooks.list.filters.anyType'),
+            props.type,
+            BOOK_TYPES.map((v) => ({ value: v, label: typeLabel(t, v) })),
+          )}
+          {primary(
+            'status',
+            t('priceBooks.list.filters.status'),
+            t('priceBooks.list.filters.anyStatus'),
+            props.status,
+            BOOK_STATUSES.map((v) => ({ value: v, label: statusLabel(t, v) })),
+          )}
+          {primary(
+            'currency',
+            t('priceBooks.list.filters.currency'),
+            t('priceBooks.list.filters.anyCurrency'),
+            props.currency,
+            props.currencies.map((c) => ({ value: c.code, label: c.code })),
+          )}
+        </>
+      }
+      moreFilters={
+        <>
+          {folded('channelId', t('priceBooks.list.filters.channel'), props.channelId, props.channels.map((c) => ({ value: c.id, label: c.name })))}
+          {folded(
+            'audienceKind',
+            t('priceBooks.list.filters.audience'),
+            props.audienceKind,
+            AUDIENCE_KINDS.map((v) => ({ value: v, label: audienceLabel(t, v) })),
+            { memberId: null },
+          )}
+          {props.audienceKind === 'customer_groups'
+            ? folded(
+                'memberId',
+                t('priceBooks.list.filters.member'),
+                props.memberId,
+                props.groups.map((g) => ({ value: g.id, label: g.name })),
+              )
+            : null}
+          {props.audienceKind === 'organizations' ? (
+            <OrganizationMemberFilter memberId={props.memberId} onChange={(id): void => props.onFilter({ memberId: id })} />
+          ) : null}
+        </>
+      }
+      moreFiltersActiveCount={props.foldedCount}
+      // A shared or bookmarked address shows what narrows it.
+      defaultMoreFiltersOpen={props.foldedCount > 0}
+      filtersActive={props.filtered}
+      onClearFilters={props.onClear}
+    />
+  );
+}
+
+/** The organization a list is filtered by: named through G12, searched through the scope-filtered targets. */
+function OrganizationMemberFilter(props: {
+  readonly memberId: string | null;
+  readonly onChange: (id: string | null) => void;
+}): ReactNode {
+  const t = useTranslation('price_lists');
+  const api = usePriceBooksApi();
+  const [query, setQuery] = useState('');
+  const [options, setOptions] = useState<ComboboxOption<string>[]>([]);
+  const [name, setName] = useState<string | null>(null);
+  const id = useId();
+
+  useEffect(() => {
+    if (!props.memberId) {
+      setName(null);
+      return undefined;
+    }
+    let cancelled = false;
+    void api.targets
+      .organizations({ ids: [props.memberId] })
+      .then((orgs) => {
+        if (!cancelled) setName(orgs[0]?.name ?? t('priceBooks.members.unknown'));
+      })
+      .catch(() => undefined);
+    return (): void => {
+      cancelled = true;
+    };
+  }, [api, props.memberId, t]);
+
+  useEffect(() => {
+    if (props.memberId) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(
+      () => {
+        void api.targets
+          .organizations(query.trim() ? { search: query.trim(), limit: 20 } : { limit: 20 })
+          .then((orgs) => {
+            if (!cancelled) setOptions(orgs.map((o) => ({ value: o.id, label: o.name, description: o.taxId ?? undefined })));
+          })
+          .catch(() => undefined);
+      },
+      query === '' ? 0 : 250,
+    );
+    return (): void => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [api, props.memberId, query]);
+
+  const label = t('priceBooks.list.filters.member');
+  return (
+    <div className="space-y-1">
+      {props.memberId ? (
+        <>
+          <p className="text-sm font-medium leading-none">{label}</p>
+          <div className="flex min-h-9 items-center">
+            <span className="inline-flex items-center gap-1 rounded-full border bg-muted/40 py-0.5 pl-3 pr-1 text-sm">
+              <span>{name ?? '…'}</span>
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={t('priceBooks.list.filters.memberRemove')}
+                onClick={(): void => props.onChange(null)}
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </span>
+          </div>
+        </>
+      ) : (
+        <>
+          <Label htmlFor={id}>{label}</Label>
+          <Combobox<string>
+            id={id}
+            options={options}
+            value={null}
+            onChange={(value): void => props.onChange(value)}
+            onSearchChange={setQuery}
+            manualFilter
+            clearable={false}
+            placeholder={t('priceBooks.members.addOrganization')}
+            emptyMessage={t('priceBooks.members.noMatch')}
+            ariaLabel={label}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The registry loads a route component through a dynamic-import factory and
+ * reads its default export (feature 091, FR-013).
+ */
+export default PriceBooksPage;

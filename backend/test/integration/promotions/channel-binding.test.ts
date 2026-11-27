@@ -38,12 +38,11 @@ describe('PromotionService — sales-channel gate (feature 052 US3)', () => {
       defaultCurrency: 'PLN',
       languages: ['en-US'],
       currencies: ['PLN'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush(channelB);
+    await em.persist(channelB).flush();
     channelBId = channelB.id;
   });
 

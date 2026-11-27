@@ -11,7 +11,12 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
+  LANGUAGE_FALLBACK,
+  SUPPORTED_LANGUAGES,
+  type AdminI18nTranslatePort,
+  type EmailVariableDescriptor,
   type PreviewEmailResponse,
+  type SupportedLanguage,
   type ResolvedEmailContent,
   type TransactionalEmailDetail,
   type TransactionalEmailSender,
@@ -35,6 +40,7 @@ import { TransactionalEmail } from '../entities/transactional-email.entity.js';
 import { TransactionalEmailContent } from '../entities/transactional-email-content.entity.js';
 import type { ContentResolver} from './content-resolver.js';
 import { type ResolvedContent } from './content-resolver.js';
+import { assertEmailAssetsLinkable, type EmailAssetVisibility } from './linkable-assets.js';
 import type { BrandingService} from './branding.service.js';
 import { type ResolvedBranding } from './branding.service.js';
 import type { EmbedResolver } from './embed-resolver.js';
@@ -105,6 +111,17 @@ export interface TransactionalEmailServiceDeps {
   onBlockFailure?: EmailBlockFailureReporter;
   /** The block names saved content may hold. Absent: the first-party set alone. */
   emailSafeNames?: EmailSafeNames;
+  /**
+   * `_i18n`'s resolver, through which a variable's `sampleValueKey` is read in
+   * the language being edited (issue #560). Absent, or refusing: every sample
+   * is the manifest's English literal, which is what it was before the key.
+   */
+  translator?: AdminI18nTranslatePort;
+  /**
+   * Issue #1354 — asked before a save stores an asset id none of the e-mail's
+   * bodies already held. Absent: a save that adds an id fails closed.
+   */
+  assets?: EmailAssetVisibility;
 }
 
 export class TransactionalEmailService implements TransactionalEmailSender {
@@ -119,6 +136,8 @@ export class TransactionalEmailService implements TransactionalEmailSender {
   private readonly blockRenderers: (() => EmailBlockRenderers) | undefined;
   private readonly onBlockFailure: EmailBlockFailureReporter | undefined;
   private readonly emailSafeNames: EmailSafeNames;
+  private readonly translator: AdminI18nTranslatePort | undefined;
+  private readonly assets: EmailAssetVisibility | undefined;
 
   constructor(deps: TransactionalEmailServiceDeps) {
     this.emFactory = deps.emFactory;
@@ -132,6 +151,8 @@ export class TransactionalEmailService implements TransactionalEmailSender {
     this.blockRenderers = deps.blockRenderers;
     this.onBlockFailure = deps.onBlockFailure;
     this.emailSafeNames = deps.emailSafeNames ?? FIRST_PARTY_EMAIL_NAMES;
+    this.translator = deps.translator;
+    this.assets = deps.assets;
   }
 
   // --- Sending (port) -----------------------------------------------------
@@ -285,31 +306,80 @@ export class TransactionalEmailService implements TransactionalEmailSender {
     return { deactivatable: reason === null, nonDeactivatableReason: reason };
   }
 
+  /**
+   * Issue #1809 — one of the sending module's declared sentences in the
+   * reader's language: the name and description from its manifest, the
+   * protection reason from its defaults. They are platform prose and the
+   * response's reader has a language, so the backend translates
+   * (`specs/conventions/module-i18n.md`, case 1), from the sending module's
+   * bundle under `transactionalEmails.<code>.<field>`. English, no reader, no
+   * resolver, a missing entry and a refusing resolver all answer the declared
+   * English: a list is never rendered with a key in it.
+   */
+  private async declaredText(
+    email: Pick<TransactionalEmail, 'code' | 'ownerModule'>,
+    field: 'name' | 'description' | 'reason',
+    declared: string,
+    reader: SupportedLanguage | undefined,
+  ): Promise<string> {
+    const translator = this.translator;
+    if (!translator || !reader || reader === LANGUAGE_FALLBACK) return declared;
+    const key = `transactionalEmails.${email.code}.${field}`;
+    try {
+      const value = await translator.translate(email.ownerModule, key, reader);
+      return value === `${email.ownerModule}.${key}` || value === '' ? declared : value;
+    } catch {
+      return declared;
+    }
+  }
+
+  /** The name, description and protection of one e-mail, in the reader's language. */
+  private async declaredFor(
+    email: TransactionalEmail,
+    reader: SupportedLanguage | undefined,
+  ): Promise<{ name: string; description: string | null; deactivatable: boolean; nonDeactivatableReason: string | null }> {
+    const protection = this.protectionOf(email.code);
+    return {
+      name: await this.declaredText(email, 'name', email.name, reader),
+      description:
+        email.description === null ? null : await this.declaredText(email, 'description', email.description, reader),
+      deactivatable: protection.deactivatable,
+      nonDeactivatableReason:
+        protection.nonDeactivatableReason === null
+          ? null
+          : await this.declaredText(email, 'reason', protection.nonDeactivatableReason, reader),
+    };
+  }
+
   private async summarize(
     em: EntityManager,
     email: TransactionalEmail,
+    reader?: SupportedLanguage,
   ): Promise<TransactionalEmailSummary> {
     const globalCount = await em.count(TransactionalEmailContent, { emailId: email.id, salesChannelId: null });
     const channelCount = await em.count(TransactionalEmailContent, { emailId: email.id, salesChannelId: { $ne: null } });
+    const { name, deactivatable, nonDeactivatableReason } = await this.declaredFor(email, reader);
     return {
       code: email.code,
-      name: email.name,
+      name,
       ownerModule: email.ownerModule,
       group: email.groupCode,
       active: email.active,
       languages: email.languages,
       hasGlobalOverride: globalCount > 0,
       hasChannelOverride: channelCount > 0,
-      ...this.protectionOf(email.code),
+      deactivatable,
+      nonDeactivatableReason,
     };
   }
 
-  async list(): Promise<TransactionalEmailSummary[]> {
+  /** `reader` is the language the response is read in (issue #1809); absent reads English. */
+  async list(reader?: SupportedLanguage): Promise<TransactionalEmailSummary[]> {
     const em = this.emFactory();
     const emails = await em.find(TransactionalEmail, {}, { orderBy: { name: 'asc' } });
     const out: TransactionalEmailSummary[] = [];
     for (const e of emails) {
-      out.push(await this.summarize(em, e));
+      out.push(await this.summarize(em, e, reader));
     }
     return out;
   }
@@ -324,11 +394,11 @@ export class TransactionalEmailService implements TransactionalEmailSender {
    * the auth guard put there, and discarding those to re-read one row is a
    * wider blast radius than the question needs.
    */
-  async summary(code: string): Promise<TransactionalEmailSummary> {
+  async summary(code: string, reader?: SupportedLanguage): Promise<TransactionalEmailSummary> {
     const em = this.emFactory();
     const email = await em.findOne(TransactionalEmail, { code }, { refresh: true });
     if (!email) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Transactional email "${code}" not found.`);
-    return this.summarize(em, email);
+    return this.summarize(em, email, reader);
   }
 
   private async loadEmailOrThrow(em: EntityManager, code: string): Promise<TransactionalEmail> {
@@ -337,7 +407,16 @@ export class TransactionalEmailService implements TransactionalEmailSender {
     return email;
   }
 
-  async getDetail(code: string, salesChannelId: string | null, language?: string): Promise<TransactionalEmailDetail> {
+  /**
+   * `language` is the content language being edited; `reader` is the language
+   * the admin reads the screen in (issue #1809), which names the e-mail.
+   */
+  async getDetail(
+    code: string,
+    salesChannelId: string | null,
+    language?: string,
+    reader?: SupportedLanguage,
+  ): Promise<TransactionalEmailDetail> {
     const em = this.emFactory();
     const email = await this.loadEmailOrThrow(em, code);
     const lang = language ?? email.languages[0] ?? 'en-US';
@@ -359,21 +438,23 @@ export class TransactionalEmailService implements TransactionalEmailSender {
       version: resolved.version,
     };
 
+    const declared = await this.declaredFor(email, reader);
     return {
       code: email.code,
-      name: email.name,
+      name: declared.name,
       ownerModule: email.ownerModule,
       group: email.groupCode,
-      description: email.description,
+      description: declared.description,
       active: email.active,
       languages: email.languages,
-      variables: email.variables,
+      variables: await this.localizedVariables(email, lang),
       scope: { salesChannelId, language: lang },
       effective,
       default: { subject: email.defaultSubject[lang] ?? '', content: defaultContentTree as PuckDataTree },
       hasGlobalOverride: globalCount > 0,
       hasChannelOverride: channelCount > 0,
-      ...this.protectionOf(email.code),
+      deactivatable: declared.deactivatable,
+      nonDeactivatableReason: declared.nonDeactivatableReason,
     };
   }
 
@@ -403,6 +484,14 @@ export class TransactionalEmailService implements TransactionalEmailSender {
 
     const em = this.emFactory();
     const email = await this.loadEmailOrThrow(em, code);
+    // What the e-mail already stores is every body it holds — each channel's
+    // and language's, and the declared default — so a channel override started
+    // from the platform-wide body keeps the images that body already has.
+    const stored = await em.find(TransactionalEmailContent, { emailId: email.id });
+    await assertEmailAssetsLinkable(this.assets, input.content, [
+      email.defaultContent,
+      ...stored.map((body) => body.content),
+    ]);
     let row = await em.findOne(TransactionalEmailContent, {
       emailId: email.id,
       salesChannelId: scope.salesChannelId,
@@ -444,7 +533,7 @@ export class TransactionalEmailService implements TransactionalEmailSender {
       language: scope.language,
     });
     if (row) {
-      await em.removeAndFlush(row);
+      await em.remove(row).flush();
       await this.audit(actor, 'transactional_email.content.reset', email.code, { scope });
     }
     const fallbackLanguage = email.languages[0];
@@ -491,13 +580,44 @@ export class TransactionalEmailService implements TransactionalEmailSender {
 
     const branding = await this.branding.resolve(input.salesChannelId);
     // Sample data drives the preview (FR-024).
-    const variables = this.sampleVariables(email.variables);
+    const variables = this.sampleVariables(await this.localizedVariables(email, lang));
     const rendered = await this.renderWith(em, resolved, branding, variables, {
       salesChannelId: input.salesChannelId,
       language: lang,
       ...(fallbackLanguage ? { fallbackLanguage } : {}),
     });
     return { subject: rendered.subject, html: rendered.html, text: rendered.text };
+  }
+
+  /**
+   * Issue #560 — the declared variables with every `sampleValueKey` resolved in
+   * `language` (a BCP-47 content language; one the platform ships no bundle for
+   * reads English). The key is relative to the declaring module's namespace,
+   * which is the e-mail's `ownerModule`. A key that resolves to the resolver's
+   * `moduleId.key` placeholder, a resolver that throws and an unwired one all
+   * leave the manifest's `sampleValue` standing: a preview with an English
+   * example is a lesser preview, never a failed one.
+   */
+  private async localizedVariables(
+    email: TransactionalEmail,
+    language: string,
+  ): Promise<EmailVariableDescriptor[]> {
+    const translator = this.translator;
+    const variables = email.variables ?? [];
+    if (!translator) return variables;
+    const bundleLanguage = bundleLanguageOf(language);
+    return Promise.all(
+      variables.map(async (variable) => {
+        const key = variable.sampleValueKey;
+        if (!key) return variable;
+        try {
+          const value = await translator.translate(email.ownerModule, key, bundleLanguage);
+          return value === `${email.ownerModule}.${key}` ? variable : { ...variable, sampleValue: value };
+        } catch {
+          return variable;
+        }
+      }),
+    );
   }
 
   private sampleVariables(
@@ -560,4 +680,12 @@ export class TransactionalEmailService implements TransactionalEmailSender {
       // Audit is best-effort; never block the operation.
     }
   }
+}
+
+/** A content language (`pl-PL`) reduced to the bundle language it reads; English otherwise. */
+function bundleLanguageOf(language: string): SupportedLanguage {
+  const primary = language.split('-', 1)[0]?.trim().toLowerCase() ?? '';
+  return (SUPPORTED_LANGUAGES as readonly string[]).includes(primary)
+    ? (primary as SupportedLanguage)
+    : 'en';
 }

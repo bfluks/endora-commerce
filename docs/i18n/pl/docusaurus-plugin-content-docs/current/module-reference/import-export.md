@@ -16,7 +16,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | | |
 | --- | --- |
 | Identyfikator modułu | `import_export` |
-| Nazwa | Import / Export |
+| Nazwa | Import / export |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-import-export` |
 | Licencja | `MIT` |
@@ -30,14 +30,17 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `catalog` | nie | degrades-without `catalogAttributeReadPort` — Centrum importu i eksportu przestaje oferować import produktów; pozostałe encje działają bez zmian. |
 | `catalog` | nie | degrades-without `catalogBulkImportPort` — Centrum importu i eksportu przestaje oferować import produktów i kategorii; pozostałe encje działają bez zmian. |
 | `catalog` | nie | degrades-without `catalogCategoryReadPort` — Centrum importu i eksportu przestaje oferować encję kategorii; pozostałe encje działają bez zmian. |
+| `catalog` | nie | degrades-without `catalogProductAvailabilityPort` — Centrum importu i eksportu przestaje oferować import produktów; pozostałe encje działają bez zmian. |
 | `catalog` | nie | degrades-without `catalogProductReadPort` — Centrum importu i eksportu przestaje oferować encje produktów i stanów magazynowych; pozostałe encje działają bez zmian. |
 | `customer_accounts` | nie | degrades-without `customerAccountReadPort` — Centrum importu i eksportu przestaje oferować eksport klientów; pozostałe encje działają bez zmian. |
 | `inventory` | nie | degrades-without `inventoryStockImportPort` — Centrum importu i eksportu przestaje oferować import stanów magazynowych; pozostałe encje działają bez zmian. |
 | `inventory` | nie | degrades-without `inventoryStockReadPort` — Centrum importu i eksportu przestaje oferować encję stanów magazynowych; pozostałe encje działają bez zmian. |
 | `orders` | nie | degrades-without `orderReadPort` — Centrum importu i eksportu przestaje oferować eksport zamówień; pozostałe encje działają bez zmian. |
 | `organizations` | nie | degrades-without `organizationDetailsPort` — Centrum importu i eksportu przestaje oferować eksport klientów; pozostałe encje działają bez zmian. |
+| `organizations` | nie | degrades-without `organizationRoleReadPort` — Centrum importu i eksportu przestaje oferować eksport klientów; pozostałe encje działają bez zmian. |
 
 ## Uprawnienia
 

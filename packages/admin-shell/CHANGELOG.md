@@ -1,5 +1,909 @@
 # @endora-commerce/admin-shell
 
+## 0.112.0
+
+### Minor Changes
+
+- 98c0411: The Admin UI sidebar's _System_ section, which had 18 entries, is now two sections (issue #1519, UX audit SHELL-11, owner decision DEC-02):
+
+  - **Access**: Users, Roles, API keys, Credentials, Audit log.
+  - **Platform**: Modules, Settings, Custom fields, Import/export, Bulk operations, Webhooks, Global search, PWA, Command hooks, API description.
+
+  Host rows are now sorted by weight together with the contributed rows. Before, they always came first, so the API description sat above Settings.
+
+  An administrator's own two-step verification is no longer in the sidebar. It is the **Security** tab of **My profile** (`/profile/security`), opened from the avatar or from the palette's _Account security_ action, which now targets that tab. `/security` redirects there, so old bookmarks still work. With `mfa` off, the profile has no tab strip and `/profile/security` opens the profile.
+
+  **For module authors.** `AdminNavSectionNameSchema` gains `'access'` and `'platform'`, and `AdminZoneNameSchema` gains `'profile.security'`, the body of the Profile's Security tab, with empty props. `'system'` is deprecated but still accepted: the shell puts such an entry under _Platform_, so a module that ships separately keeps its row. It will be removed in a major release.
+
+  **Upgrade notes.**
+
+  - An administrator who had collapsed _System_ sees both _Access_ and _Platform_ collapsed. The preference is rewritten the next time they toggle a group.
+  - A pin of `/security` in the sidebar's Pinned section no longer shows, because that destination is no longer a sidebar entry. The stored pin is kept but not displayed.
+
+- 3f7b5ae: The browser's Back and Forward buttons now ask before they leave a screen with unsaved changes (issue #1605). `AdminRoot` mounts a data router (`createBrowserRouter` with `RouterProvider`, transitions still off) instead of a component `<BrowserRouter>`; the whole app is one splat route, so the shell's `<Routes>`, links and relative paths behave as before. `useUnsavedChangesGuard` asks Save / Discard / Stay and `useUnsavedChangesPrompt` asks with the browser's confirm, both through React Router's blocker. Only a history step to another path is asked about; a step that changes only the query is left to the screen. A project that composes its own tree under a component router keeps the previous behaviour: Back and Forward are not intercepted there.
+- bfab5bd: **Breaking:** `GET /api/v1/admin/quote-requests` now answers one page instead of every quote request. The server applies `assignmentScope`, `organizationId`, `status`, `q` (a fragment of the business id, the organization name or the customer's name, or a whole id), `sort` (`updatedAt:desc` by default, `updatedAt:asc`, `total:desc`, `total:asc`) and the page (`page`, default 1; `pageSize`, default 25, at most 200). The `pagination` block is now true for the response: it adds `page`, `pageSize` and `total`, and `limit` and `hasMore` describe the page returned (`nextCursor` stays `null`; ask for the next `page`). An invalid `pageSize`, `page`, `sort`, `assignmentScope` or `organizationId` is refused with 400.
+
+  To migrate, a client that read the whole list from one call must page through it with `page` and `pageSize`, or read `pagination.total` when it only needs the count. The contracts publish the query and the envelope as `adminQuoteRequestListQuerySchema` and `adminQuoteRequestListResponseSchema`.
+
+  `SalesRepAssignmentPort` gains `listOrganizationIdsWithAssignments()`; an implementation of the port outside this repository must add it. The admin Quote Requests list now asks the server for each page, filter and sort, and offers a lowest-total sort. The home page's pending-quotes tile and the project link picker read the paged list.
+
+### Patch Changes
+
+- 7ec2630: The home page's new-orders tile now shows how many orders have the `new` status. It asks the admin orders list for one row (`pageSize=1`) and reads `pagination.total`. Before, it counted the rows on the page it got back, so it never showed more than 25.
+- 84b89ed: The admin no longer shows raw translation keys or a "page not found" message while it starts (issues #1431 and #1485). After sign-in, `App` shows a loading skeleton shaped like the shell until the operator's translation bundle and the module-presence list have loaded. The skeleton is announced as a status in the operator's language. It also opens when either request fails, so it never stays on screen for good.
+
+  `TranslationProvider`'s context, read through `useTranslationContext()`, has a new `ready` field. It is `false` until the provider's first bundle request settles, and `true` from the start when `initialBundle` is passed. After a language change it stays `true`, and the previous bundle stays on screen until the new one arrives.
+
+  `App` takes an optional `translations` prop, beside `modulePresence`. It hands a bundle the caller already has to the provider, so the shell opens on its first render. A test that renders `<App/>` and checks the shell right away should pass it. `translations={{}}` keeps the old output, where every key renders as `scope.key`.
+
+- e78d27d: Adds source comments only. Each comment marks a place where the new raw-enum lint rule is waived on purpose. Nothing these packages emit changes.
+- fd27113: Content and system admin screens drop the page descriptions that repeated their title or spoke the implementation (issue #1436, UX audit 2026-11-17, DS-02). No description any more on: the CMS page, block and template editors, Brand, the blog post editor (once saved) and category editor (non-system), the Forms list, New form and Entries, the megamenu editor, the Comparisons list and detail, Settings, Settings groups, Cache, Modules, Command hooks, API description, Users, Roles, API keys, Webhooks, Taxes, Audit log, Credentials, the global-search configuration and results. The Brand cards for colour schemes, spacing and preview drop their intro line, and the Home stock-alert card its subtitle.
+
+  Moved behind a ⓘ beside the title (`help`): the Modules screen's note on installation versus activation, the document-template default rule, and the Meta Ads note that standard events are always reported.
+
+  Shortened to one line: the document templates, Meta Ads and LinkedIn Ads descriptions, the blog addresses description, the new post and new category notes, the CMS page editor's field notes (page fields, language version, breadcrumb parent and overlay, parent path, share image), the Brand scope and type-scale notes, the forms share-answer note, the megamenu click-navigates note, the Cache screen's two action notes, the API reference note, the reset-password note and the global-search settings note.
+
+  Translation keys removed from both `en` and `pl`: `core` `platform.modules.description`, `platform.modules.cliHint` (now `platform.modules.help`), `platform.commandHooks.description`, `platform.apiDescription.description`, `home.stockAlerts.subtitle`, `adminUsers.page.descriptionPrefix`, `adminUsers.rolesLink`, `adminRoles.page.descriptionPrefix`, `adminRoles.usersLink`, `apiKeys.page.description`, `webhooks.page.description`, `taxes.page.description`, `auditLog.page.description`; cms `pageEditor.description`, `blockEditor.description`, `templateEditor.description`, `brand.description`, `brand.schemes.hint`, `brand.spacing.hint`, `brand.preview.hint`, `brand.layout.tierHint`; blog `postEditor.description.edit`, `categoryEditor.description.default`; forms `list.description`, `create.description`, `entries.description`; megamenu `editor.description`; comparisons `list.page.description`, `detail.page.description`; settings `page.description`, `groups.page.description`, `cache.page.description`; credentials `page.subtitle`; admin_search `page.configuration.description`, `page.results.description`. New keys: `core` `platform.modules.help`, document_templates `page.help`, meta_ads `customEvents.help`. A deployment that overrides a removed key can drop the override.
+
+- b2b41eb: Page headers are shorter and every page has a heading (issue #1436). Home, Profile, the products list, product create and edit, the inventory and warehouse screens and Pricing settings now draw their title as a real page heading. Page descriptions that repeated the title or described the implementation are removed (categories, bulk operations, new price book, SEO, assets library, dictionary, products list, inventory, warehouses, home, profile); the rest are one short line, in English and Polish. Longer explanations — warehouses, Pricing settings, import/export and category taxonomy revisions — moved behind an ⓘ beside the title.
+- 4fdc335: More admin screens follow the DS-03 rule that a frame inside a card is a defect unless it is a field (issue #1437, UX audit 2026-11-17).
+
+  - **My profile** is one form card with three sections (identity, author profile, password) under the one Save, and the language preference, which is saved on its own, is the one card beside it. The language Save's result is a status line beside its button, with an icon, in place of a red or green box inside the card. The language select is named by its heading. The screen is on the kit's primitives.
+  - **Organization detail, price display mode** (`price_lists`, `organization.detail.after`): the panel has a heading (_Pricing_) and renders as an `EditorSection`, so it follows the mount — one titled card at page level, a section inside a host card. It was a card without a heading.
+  - **Return detail** (`returns`): comments and the accepted clauses are rows divided by a rule, not a bordered box each.
+  - **Settings** (`settings`): a group's settings are rows divided by a rule inside the group card, not a bordered box each; a changed row keeps its tint and its _Unsaved_ badge.
+  - **Form entry notes** (`forms`): notes are rows divided by a rule, not a bordered box each.
+
+- 28181ed: One card implementation with density tokens (issue #1438, UX audit DS-04; SHELL-18 #1502). This
+  changes how every admin card looks, including the cards third-party modules render.
+
+  - `theme.css` declares `--card-pad` (16px), `--card-pad-sm` (12px), `--card-gap` (16px),
+    `--section-gap` (24px), `--fs-page-title` (20px), `--fs-section-title` (14px) and `--fs-hint`
+    (12px). A client can redeclare them after the import like any other token.
+  - `Card`, `CardHeader`, `CardContent` and `CardFooter` pad with `--card-pad` (16px) instead of
+    `p-6` (24px). `CardContent` drops its top padding only when it follows a `CardHeader`, so a
+    card without a header no longer needs `className="pt-6"`. Every part carries a `data-slot`.
+  - `CardTitle` renders an `h2` by default and takes `as` (`h2`–`h6`, or `div` to stay out of the
+    heading outline); its size is `--fs-section-title` (14px, was 16px). A `CardTitle` that wrapped
+    its own `<h2>` now nests a heading in a heading: pass the `id` to `CardTitle` and drop the inner
+    element. A test that found a card title with `getByText` still does; one that counted headings
+    now counts the card titles too.
+  - `<Card flush>` removes the content padding and clips the corners, for a table that runs to the
+    card's edge. New types: `CardProps`, `CardTitleProps`, `CardTitleElement`.
+  - `.b2b-card`, `.b2b-card--clickable` and `.b2b-card__head` / `__title` / `__sub` / `__body` /
+    `__body--flush` / `__foot` are **deprecated** but still published; they read the same tokens.
+    The only visible change there is the header's vertical padding, 14px to 12px. Use `Card`.
+
+  Every module's card call sites drop the `pt-6` workaround and the redundant `text-base` on
+  `CardTitle`, and the 14 titles that wrapped their own `<h2>` carry the `id` themselves.
+
+- 84ed7b6: Empty lists now tell "nothing here yet" apart from "your filters match nothing" (issue #1448). The products, inventory, warehouses, back-in-stock and pricing-override lists used to show one sentence for both. Now a list that its filters emptied offers _Clear filters_, and a list with no records offers its create action, if the operator may use it. The sales channels, credentials, online customers, invoice ledger deliveries, dictionary audit and command hooks screens show the kit's empty state instead of a plain grey sentence.
+
+  - **`EmptyState`'s documentation** says where the block belongs. Use it for the page's or the tab's primary region. Keep a one-line sentence for pickers, inline sub-lists and side widgets.
+  - **Header create buttons.** While a list is empty, its header no longer repeats the create button that the empty state carries: products, warehouses, inventory import, sales channels and credentials.
+  - **Removed keys.** `catalog` drops `productsList.empty.prefix`, `.button`, `.suffix` and `.readOnly`. The empty catalog now uses `productsList.empty.noData.*`.
+  - **Peer dependencies.** `mod-sales-channels`, `mod-credentials` and `mod-invoice-ledger` gain an optional peer dependency on `lucide-react` `^1`, which their admin screens now import.
+
+- 36344ed: Content screens no longer nest a button inside a link, and their labels now name their fields (issue #1465).
+
+  - **Newsletter**: _Export CSV_, _New campaign_, _New automation_ and the campaign's _Stats_ are each one link styled as a button (`<Button asChild>`), not a button inside a link. Before, each took two tab stops.
+  - **CMS page, block and template editors** and the **megamenu editor**: Name, Slug, Code, Status and Description are wired through `FormField`. The page's public address describes its slug field.
+  - **Megamenu item editor**: the URL, link target, variant, asset type, embed side and root category fields are tied to their labels. The per-language labels form a group, and each input is named by the group and its language.
+  - **PWA**: the colour captions no longer appear as labels for nothing, and the push audience choice is a radio group named "Audience".
+  - **Search boxes** on the CMS pages list, the blog post and tag lists and the transactional e-mails list are search fields with a translated name (EN + PL). Before, only a placeholder named them. The e-mails list placeholder now comes from the bundle.
+  - **Prompt actions panel**: the instruction input has a name ("Instruction" / "Polecenie"). The busy line now sits in a status region that is mounted before it has text, so screen readers announce it.
+
+  A structural admin test now rejects a button nested in a link, or a link nested in a button, anywhere in the admin sources.
+
+- bb21b86: The admin sidebar's search entry is now a button styled as a search field (issue #1480). It opens the command palette when it is clicked or activated with Enter or Space, no longer when keyboard focus merely lands on it, and it carries an accessible name and `aria-keyshortcuts="Meta+K Control+K"`. Every collapsible sidebar group header, the Pinned section's included, now exposes `aria-expanded` and names the item region it folds through `aria-controls`; group headers and the search entry get a visible focus ring. The top bar's Help button, which had no action, is removed. The design system's `.b2b-topbar__hide-mobile` class, which only that button rendered, is removed with it.
+- 79a17a3: The sign-in screen no longer shows English the kit hard-coded (issue #1481). When a password or code step fails without a backend message — the network dropped, the answer was not an error envelope — `AuthProvider` now leaves `lastLoginError` as `null` and sets `lastLoginReason` to `'sign_in_failed'` or `'verification_failed'`; the exported `LoginErrorReason` type gains those two members. A custom sign-in screen should word those two reasons itself, as `@endora-commerce/admin-shell`'s `LoginPage` does: before, it received `'Sign-in failed.'` or `'Verification failed.'` in `lastLoginError`. A `switch` over `LoginErrorReason` that was exhaustive needs the two new cases.
+
+  The two-step verification step of `LoginPage` takes its words from the shell's pre-auth copy like the rest of the sign-in screen, and its code field is described by the error it caused.
+
+- 998ac87: Banners that appear as the result of an action keep being announced now that the kit's `Alert` no longer interrupts for every variant (issue #1484). A refused or partly rejected action (activating a price book, a stale price-book save, a taxonomy revision, quick-order lines, quote-request lines unavailable on the channel) is announced at once, and so is the shell's notice to an administrator without a role. An import, undo, PDF or save result, a template-preview verdict, a brand contrast warning, a changed refund method, the organization-attribution scope notice and the information notices after an action are announced politely. Static banners present when a page loads, such as the modules screen's degraded-mode warning or a quote request's lapsed validity, are shown but no longer announced as an interruption.
+- a4455db: The Home dashboard, the command palette's prompt mode and the admin kit's shared components now use one visual system: the kit's `ui/*` primitives and Tailwind utilities instead of the legacy `b2b-*` classes and inline styles (issue #1492, UX audit CAT-17).
+
+  - Home (issue #1556): the quick actions are a short list of links instead of four full-width buttons. The stock-alert thumbnails use the sunken-surface colour token instead of a fixed grey gradient, so they follow the dark theme. The KPI tiles, the recent-activity feed and the stock alerts are kit `Card`s with `h2` titles, and the activity feed's loading state is announced.
+  - Prompt mode: the clarification text box is the kit `Input` and now has a name.
+  - Admin kit: `PaginationFooter`, the product browser and its trigger, `SaveSessionActions` and `RecordTabs` draw kit `Button`, `Select` and `Card` parts. The product browser's search box is the list toolbar's search. Its side-drawer frame stays until the kit has a drawer.
+  - The theme still defines the classes these screens stopped using: `b2b-btn--default`, `b2b-field--addon`, `b2b-input-wrap`, `b2b-card--clickable`, `b2b-card__head`, `b2b-card__sub`, `b2b-card__title`, `b2b-card__foot`, `b2b-card__body--flush`, `b2b-filterbar`, `b2b-filterbar__search`, `b2b-kpi-grid`, `b2b-home-dashboard-grid` and `b2b-thumb`. A theme override that targets one of them no longer reaches these screens.
+
+- 9f4eae3: The Modules screen (`/platform/modules`) is easier to scan (UX audit SHELL-12, issue #1520). It has a search box that matches the module's name, id or description and ignores case and diacritics. Filter chips (On · Off · Not offered · Locked) show how many modules each one holds, and the modules are grouped under the sidebar section their screens are in. Modules without a screen are listed last, under "Other modules".
+
+  Switching a module on or off is now a switch in the _Your business_ column. Before, every module that was off showed a filled "Switch on" button. Turning a module off still asks for confirmation. A module that cannot be switched off shows a locked switch with its reason as the tooltip and the description, instead of printing the reason twice. The Recent Activity choice is a switch in a new _Dashboard_ column, which is shown only to an admin who may change it. A module's description, dependencies and lock reason are behind a disclosure on its row. What either switch does is unchanged.
+
+  `ListPage` takes an optional `help`, passed to `PageHeader`'s ⓘ.
+
+  Removed `core` keys: `platform.modules.column.actions`, `platform.modules.action.enable` and `platform.modules.recentActivity.{shown,hidden,hint}`. An overlay that overrides them should override the new `platform.modules.*` keys instead.
+
+- 37fdbeb: Settings takes one sidebar row instead of three (issue #1550, UX audit SHELL-10). _Settings_, _Groups_ and _Cache and search index_ are tabs under the one _Settings_ entry in _System_; the cache tab is shown only to administrators holding `settings:write`, as its route requires. All three stay reachable from the command palette, and _Clear cache_ is now also found by "reindex", "search index" and "translations".
+
+  - **Cache and search index** (`/settings/cache`) is one card with three rows — _Clear cache_, _Rebuild search index_, _Reload translations_ — each a label, a one-line effect and its button. The namespace list stays under _Clear cache_. No button is filled. The result or error of an action appears beside its button (an `InlineStatus`) rather than as a banner at the top of the page; a failed clear keeps the selection. The page title is _Cache and search index_.
+  - **Sidebar active state**: a sidebar row now stays highlighted on the screens beneath it unless a more specific row is the one open — `/settings` is highlighted on `/settings/groups` and `/settings/cache`, and not on `/settings/pwa`. A parent row is also highlighted on a detail route that has no row of its own (for example `/inventory/<id>`).
+  - A pinned _Setting groups_ or _Clear cache_ sidebar row disappears, because those rows no longer exist; pin _Settings_ instead.
+  - The unused `quoteRequestsTab.expiry.help` string is shortened to one line; the full expiry rules remain in the Quote requests documentation.
+
+- 389caa3: The **My profile** screen no longer has its own **Language** card (issue #1553, UX audit SHELL-17). The card had a second filled Save that competed with the form's, and it repeated the language menu in the top bar, which already saves the choice at once. The UI language is now changed only from the top bar; one muted line in the profile's **Identity** section says so. The Admin UI languages documentation page describes the top-bar menu instead of the removed card.
+
+  `core` bundle keys removed: `profilePage.language.action.save`, `profilePage.language.failed`, `profilePage.language.saved`, `profilePage.section.language` and `profilePage.section.language.help`. A deployment that overrides them can drop the overrides. `profilePage.language.option.en` and `profilePage.language.option.pl` stay: the top-bar menu uses them. New key: `profile.languageHelp`, in English and Polish.
+
+- 053a022: The execution plan on `/platform/command-hooks` explains each phase once, in a legend above the actions, instead of repeating both hints in every action (issue #1554). The actions are now sections of one card, with the owning module as each section's one-line description.
+
+  The English and Polish text of `platform.commandHooks.plan.afterCommit.hint` is shorter. A deployment that overrides that key keeps its own text.
+
+- cf7c013: The _Command hooks_ outbox tab is now the admin's standard list page (issue #1749). It pages with the same _Previous_ / _Next_ footer and rows-per-page choice as every cursor-paged list, which replaces _Load more_. A status change goes back to the first page. Retrying the last row of a page asks for that page again rather than showing an empty one, and focus moves to the results. Retry stays a visible button in each row, and a failed load still offers _Try again_. `listCommandOutbox` now sends an optional `limit`. Removed bundle keys: `platform.commandHooks.outbox.loadMore`, `.loadingMore`, `.end`, `.loading` and `.column.actions`.
+- 0686447: Always pass the admin UI language to `formatDate(value, language)` and `formatDateTime(iso, language)` (`@endora-commerce/admin-kit/lib`), taking it from `useTranslationContext()` or `useAppLanguage()` (`@endora-commerce/admin-kit/i18n`). **Upgrade note:** calling either without a language is now `@deprecated`. It still falls back to the browser's locale, but that fallback will be removed in a later release, so `formatDateTime(order.placedAt)` should become `formatDateTime(order.placedAt, language)` now. The kit's field-protection summary reads the language without requiring `AppLanguageContext`, so an integration zone rendered without it keeps working.
+
+  Every admin date now goes through them, so a screen no longer mixes `17.11.2026`, `11/25/2026` and `Nov 22, 2026`: the lists, detail pages and panels of every module that called `formatDateTime` without a language, and the screens that called `toLocaleDateString` / `toLocaleString` directly (the CRM board card, the Projects stage bar and templates list, the Organization sales reps tab — which wrote every date in Polish — the blog post editor, comparisons, the dictionaries audit, display-mode overrides, the feed schedule's next run, the online-customers refresh time, the product list's update date, and the kit's comment thread, record history, field-protection summary and order reference). `endora new module` scaffolds its list's date the same way.
+
+- 691414b: **The admin top bar's notification bell and language picker are kit menus, and every top-bar control is a 44 px target on touch screens (issues #1783, #1784).**
+
+  - **`@endora-commerce/admin-kit`:** `./ui` now exports `DropdownMenuRadioGroup` and `DropdownMenuRadioItem`, a pick-one-of-N menu entry (`menuitemradio` with `aria-checked` and a check mark), and `DropdownMenuLabel`. On a coarse pointer, one rule in `theme.css` makes every control in `.b2b-topbar__actions`, and the mobile menu button, at least 44 × 44 px. The profile avatar keeps its 28 px circle and grows its target with padding. A mouse keeps the 34 px controls. The `.b2b-main .b2b-topbar__icon-btn` rule is removed: it matched nothing, because the top bar is not inside `.b2b-main`.
+  - **`@endora-commerce/admin-shell`:** the bell and the language picker were hand-made `role="menu"` panels. They now use the kit `DropdownMenu`. Focus moves into the menu when it opens. The arrow keys, Home and End move between entries. Typing jumps to a notification by its title or to a language by its name. Escape closes the menu and gives focus back to the button. The bell's menu is named by its heading. _Mark all read_ is now the last entry, after a separator, so opening the bell with Enter lands on the newest notification; it keeps the menu open. While a language is being saved, the picker's button is `aria-disabled` rather than `disabled`, so keyboard focus stays on it instead of falling to the page. It still cannot be opened until the save ends. The save error from #1769 behaves as before.
+
+- 9eee781: The Admin UI in Polish no longer shows four kinds of text in English (issue #1809).
+
+  - **Order statuses** are named in the admin's language on the Orders list, the order detail, the bulk status dialog and the Order statuses screen. The names were always stored per language; the screens read the English one.
+  - **CMS hooks**: the 23 seeded hooks, such as "Search Page Bottom", are named and described in the admin's language until an operator renames them. A renamed or custom hook keeps the operator's text.
+  - **Transactional e-mails**: each e-mail's name, description and the reason it cannot be switched off come from the sending module's bundle (`transactionalEmails.<code>.name`, `.description`, `.reason`), in the language the response is read in.
+  - **Platform → Modules**: each module's name, description and the reason it cannot be switched off come from the module's own bundle (`module.name`, `module.description`, `module.nonDeactivatableReason`). `GET /api/v1/admin/modules` gains an optional `nonDeactivatableReason` field on each row. `auth`, `currencies`, `email` and `languages` now ship translation bundles.
+
+  Each of these falls back to the English declared in code when a bundle has no entry. `endora new module` now writes `module.description` into the scaffolded bundles.
+
+- 79d15cf: The Admin UI has one, light theme (issue #1810). `@endora-commerce/admin-kit/theme.css` no longer declares the `.dark { --background: … }` token block: nothing applied it, and applied by hand it was incomplete, with a light page under dark cards and unreadable outline buttons. An instance that set `.dark` on an element by itself now gets the light tokens; to restyle the admin, redeclare the `:root` tokens instead.
+
+  The `dark:` utilities are gone too: `Badge`'s `success` and `warning` variants, the `ScopedField` "unsaved" badge, the shell's not-found notice, and the amber and emerald notices and icons in the admin screens of admin users, catalog bulk operations, the page-builder translate action and header actions, CRM propagation outcomes, custom-field carry drift, document-template item tables, tax-ID scope, product feeds and settings. Without a `dark` variant definition, Tailwind 4 compiles `dark:` to `@media (prefers-color-scheme: dark)`, so on an operating system set to dark these elements turned dark on a light page. They now render the same on every system.
+
+- fbc6c7c: The command palette (⌘K / CTRL+K) now tells a screen reader which result is highlighted (issue #481). The search input is a `combobox` that controls a `listbox`, every result is an `option` with a stable id, and the input's `aria-activedescendant` follows the highlight as the arrow keys move. Group headings label `role="group"` containers, and a record type that could not be searched is a disabled option. Keyboard behaviour is unchanged: focus stays in the input, `Enter` opens the highlighted result and `Alt+Enter` pins or unpins it.
+
+  A pinnable result now says "Pinned" or "Not pinned" in its accessible name and carries `aria-keyshortcuts="Alt+Enter"`. The pin icon beside it is no longer a `<button>`: a result's children are presentational, so the icon is a pointer shortcut hidden from assistive technology, marked `data-palette-pin` and `data-pinned`. The theme's `.b2b-palette__pin[aria-pressed="true"]` selector is now `.b2b-palette__pin[data-pinned="true"]`; a deployment stylesheet that targets the old selector must follow.
+
+  New `core` bundle keys: `appShell.palette.pin.statePinned`, `appShell.palette.pin.stateUnpinned`, `appShell.palette.results` and `appShell.palette.title` (the palette dialog's name), in English and Polish.
+
+- ed28329: Show an accessible, localized EN/PL error beside the top-bar language picker when saving the preferred language fails: the previous language is restored and another attempt is possible. Escape, an outside click or reopening the menu dismisses the error. A failed session refresh after a successful save keeps the new language (#1769).
+- 1d7c160: Command palette: the "a prompt you confirmed earlier has finished" notice is now the first option of the results listbox, reachable with the arrow keys and opened with Enter, and its arrival is announced; the highlighted row is scrolled into view as the arrow keys move (#1404).
+- 8922585: The admin shell draws its frame, top bar, notification bell, language picker, sign-in screen and boot skeleton with the kit's primitives and Tailwind tokens instead of inline styles (UX audit, issue #1492):
+
+  - The notification bell and the language menu use the theme's surface, border and accent tokens, so they follow dark mode and a client's palette. The unread pill and the unread-row bar were fixed red and blue; they are now the destructive and primary colours.
+  - The bell's name includes the unread count ("Notifications, 3 unread"), and an unread entry says so to a screen reader instead of relying on its colour bar and weight. _Mark all read_ is a kit ghost button, and entries highlight on hover and keyboard focus.
+  - An entry's age is written in the reader's language ("5 min temu" in Polish) instead of always in English.
+  - Breadcrumb links in the top bar take the theme's hover colour and underline, which the inline style suppressed. The wordmark in the sidebar is drawn in the theme's white.
+  - Command-palette notes ("Searching…", an unavailable record group) no longer show a pointer cursor.
+
+- Updated dependencies [65f9a7b]
+- Updated dependencies [3fdbe86]
+- Updated dependencies [bfc68c7]
+- Updated dependencies [9eaa409]
+- Updated dependencies [d908737]
+- Updated dependencies [3872f3d]
+- Updated dependencies [bbfcd80]
+- Updated dependencies [41b598c]
+- Updated dependencies [f5b8275]
+- Updated dependencies [467b075]
+- Updated dependencies [a56109e]
+- Updated dependencies [84b89ed]
+- Updated dependencies [b2cd2d3]
+- Updated dependencies [e5b17ae]
+- Updated dependencies [e78d27d]
+- Updated dependencies [596ce81]
+- Updated dependencies [b2b41eb]
+- Updated dependencies [932821f]
+- Updated dependencies [28181ed]
+- Updated dependencies [c15eb60]
+- Updated dependencies [33db45a]
+- Updated dependencies [cec9beb]
+- Updated dependencies [d4bda8d]
+- Updated dependencies [8e7684c]
+- Updated dependencies [87fb9c3]
+- Updated dependencies [998ac87]
+- Updated dependencies [d0a6c2c]
+- Updated dependencies [35e0829]
+- Updated dependencies [3f66b6f]
+- Updated dependencies [61bdc2a]
+- Updated dependencies [649d662]
+- Updated dependencies [38adf84]
+- Updated dependencies [7329865]
+- Updated dependencies [84ed7b6]
+- Updated dependencies [1064839]
+- Updated dependencies [d2d9d79]
+- Updated dependencies [f687479]
+- Updated dependencies [074f500]
+- Updated dependencies [7624db6]
+- Updated dependencies [cec9beb]
+- Updated dependencies [7be07f6]
+- Updated dependencies [2614e4f]
+- Updated dependencies [90320fd]
+- Updated dependencies [bb21b86]
+- Updated dependencies [79a17a3]
+- Updated dependencies [3dab0be]
+- Updated dependencies [e22b612]
+- Updated dependencies [cb75825]
+- Updated dependencies [a4455db]
+- Updated dependencies [f3b2ec8]
+- Updated dependencies [f093a02]
+- Updated dependencies [d5a077f]
+- Updated dependencies [86b9b39]
+- Updated dependencies [42febee]
+- Updated dependencies [447e829]
+- Updated dependencies [2040ae9]
+- Updated dependencies [fc7f669]
+- Updated dependencies [40b76aa]
+- Updated dependencies [eeed5c8]
+- Updated dependencies [63a657b]
+- Updated dependencies [0ecb287]
+- Updated dependencies [9a27b93]
+- Updated dependencies [2f0b69f]
+- Updated dependencies [87b9b60]
+- Updated dependencies [50d451b]
+- Updated dependencies [98c0411]
+- Updated dependencies [9f4eae3]
+- Updated dependencies [a8261aa]
+- Updated dependencies [f64646d]
+- Updated dependencies [306a659]
+- Updated dependencies [7ea72af]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [bfbcac2]
+- Updated dependencies [ee6062c]
+- Updated dependencies [820f089]
+- Updated dependencies [f33ffed]
+- Updated dependencies [4e668b5]
+- Updated dependencies [843ed42]
+- Updated dependencies [0d4c134]
+- Updated dependencies [3f7b5ae]
+- Updated dependencies [b98739c]
+- Updated dependencies [6155f4b]
+- Updated dependencies [bdcc9a4]
+- Updated dependencies [5850aac]
+- Updated dependencies [c042024]
+- Updated dependencies [8a5725e]
+- Updated dependencies [f915a24]
+- Updated dependencies [8688a1f]
+- Updated dependencies [95e5082]
+- Updated dependencies [31c0430]
+- Updated dependencies [0686447]
+- Updated dependencies [691414b]
+- Updated dependencies [8a06dc5]
+- Updated dependencies [e118ee4]
+- Updated dependencies [5fb3cd3]
+- Updated dependencies [9eee781]
+- Updated dependencies [bd47236]
+- Updated dependencies [bd47236]
+- Updated dependencies [79d15cf]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [398e6d2]
+- Updated dependencies [51c5072]
+- Updated dependencies [0e81803]
+- Updated dependencies [2e287a5]
+- Updated dependencies [fbc6c7c]
+- Updated dependencies [9d6f006]
+- Updated dependencies [49328cf]
+- Updated dependencies [b3d4843]
+- Updated dependencies [27b977d]
+- Updated dependencies [5e2a12a]
+- Updated dependencies [5518a09]
+- Updated dependencies [5e380e3]
+- Updated dependencies [bfab5bd]
+- Updated dependencies [8a0ec92]
+- Updated dependencies [81fcc3f]
+- Updated dependencies [12c63fa]
+- Updated dependencies [72637e0]
+  - @endora-commerce/contracts@0.112.0
+  - @endora-commerce/admin-kit@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- 190986e: **The _Command hooks_ screen** (`specs/176-command-hooks-outbox/` P4, FR-041) — **System → Command hooks**, at `/platform/command-hooks`, and from ⌘K / CTRL+K.
+
+  - **Execution plan** (behind `platform.modules.read`): every action an installed module declares hookable, with its owner; its `beforeCommit` hooks as a numbered list in the order they run, and its `afterCommit` handlers as an unnumbered list. Each hook says whether its module is on.
+  - **Outbox** (`/platform/command-hooks/outbox`, behind `platform.command_outbox.read`; the tab is hidden without it): the dead, waiting or in-progress deliveries, with the handler, attempts, last failure and dates, and a _Load more_ page. A failure's code is shown as stored, beside a sentence when the handler's module or the platform translates it.
+  - **Retry** on a dead delivery, offered only with `platform.command_outbox.manage`.
+  - Either tab's permission opens the screen (the System entry is gated on `platform.modules.read` or `platform.command_outbox.read`); a tab you cannot read is hidden, and an outbox-only operator asking for the plan lands on the outbox.
+  - Retrying keeps keyboard focus on the list, a delivery someone else already retried leaves the list with its sentence announced, and a failed load offers _Try again_.
+
+### Patch Changes
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- 2e603f7: Admin screens confirm destructive and consequential actions in the kit's `ConfirmDialog` rather
+  than the browser's `window.confirm()` (issue #313). This covers deleting, revoking, removing and
+  resetting across these modules, switching a module off on the Modules screen, undoing a bulk
+  edit, making a sales channel the default, and preparing a customer's basket from a quote. The
+  dialog names the action on its confirm button (for example _Delete_, _Revoke_, _Unassign_), and a
+  destructive question opens with focus on Cancel.
+
+  The three native `alert()` calls are now notices on the page: deleting an attachment type that is
+  still in use (`catalog`), unassigning a channel's default warehouse (`inventory`), and activating a
+  megamenu binding that replaces another (`megamenu`, announced through a live region). Renaming a
+  setting group (`settings`) uses a one-field dialog instead of `prompt()`. Removing a colour from
+  the page builder's palette (`page-builder-admin`) is confirmed inline in its row, because the
+  palette is already a modal.
+
+  Several of these questions were untranslated English literals. They are now bundle keys in
+  English and Polish: the country, currency and language deletes (`dictionaries`), the e-mail block
+  and template deletes (`transactional_emails`), the setting-group delete and rename and the setting
+  reset (`settings`), and the sales-channel delete and rebind questions (`sales_channels`). The
+  assets-library folder delete no longer says "OK = … / Cancel = …". `mod-i18n` adds
+  `common.confirm.title` and the subscription-cancel button labels.
+
+  Two native dialogs stay on purpose: the unsaved-changes navigation guard
+  (`use-unsaved-changes-prompt`), which has to answer synchronously inside the click it intercepts,
+  and the settings screen's discard-on-channel-switch guard, which is the same kind of guard. They
+  will be replaced together in a later change.
+
+- edee74d: `@endora-commerce/admin-shell` now accepts Vite 8 as well as Vite 7: its optional `vite` peer
+  dependency widens from `^7.3.7` to `^7.3.7 || ^8.0.0`. An admin application still building with
+  Vite 7 needs no change. To move to Vite 8, raise `vite` to `^8` in the application's own
+  `package.json`; keep `@vitejs/plugin-react` on `^5.2.0`, which accepts both majors. The package's
+  own code and exports are unchanged. Vite 8 bundles with Rolldown, so an application that sets
+  `build.rollupOptions` should check the Vite 8 migration guide.
+- Updated dependencies [baa0dae]
+- Updated dependencies [ee0698d]
+- Updated dependencies [9c8efbe]
+- Updated dependencies [3de70b4]
+- Updated dependencies [2ee4923]
+- Updated dependencies [e9df6b5]
+- Updated dependencies [3254098]
+- Updated dependencies [7616ef1]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [c58acd1]
+- Updated dependencies [fc91398]
+- Updated dependencies [feaa40b]
+- Updated dependencies [d2f179f]
+- Updated dependencies [d16b343]
+- Updated dependencies [34b3387]
+- Updated dependencies [e283396]
+- Updated dependencies [4ecb155]
+- Updated dependencies [ff7bd10]
+- Updated dependencies [097b599]
+- Updated dependencies [761d9c4]
+- Updated dependencies [8e7f794]
+- Updated dependencies [8e7f794]
+- Updated dependencies [f39d37f]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [695636f]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [f5caa4e]
+- Updated dependencies [d14a4fd]
+- Updated dependencies [86a92af]
+- Updated dependencies [ee2a111]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [bfa1ac4]
+- Updated dependencies [aaa50ff]
+- Updated dependencies [6e528ad]
+- Updated dependencies [eedda68]
+- Updated dependencies [2e603f7]
+- Updated dependencies [73e8e8c]
+- Updated dependencies [bf257b8]
+- Updated dependencies [d591709]
+- Updated dependencies [577e94c]
+- Updated dependencies [e435bad]
+- Updated dependencies [7bdf512]
+- Updated dependencies [5c148de]
+- Updated dependencies [e435bad]
+- Updated dependencies [5c148de]
+- Updated dependencies [036865c]
+- Updated dependencies [0beb869]
+- Updated dependencies [37532da]
+- Updated dependencies [bfdbeaf]
+- Updated dependencies [65f7abc]
+- Updated dependencies [a998fee]
+- Updated dependencies [54ae028]
+- Updated dependencies [20cda0c]
+- Updated dependencies [48b2505]
+- Updated dependencies [c24bd3c]
+- Updated dependencies [6b664cd]
+- Updated dependencies [cd05402]
+- Updated dependencies [91272e6]
+- Updated dependencies [eb4dbc6]
+- Updated dependencies [e2669cd]
+- Updated dependencies [aec841a]
+- Updated dependencies [da2b459]
+- Updated dependencies [77904b3]
+- Updated dependencies [4ab926c]
+- Updated dependencies [a3b1da5]
+- Updated dependencies [28fc1c7]
+- Updated dependencies [2b12d58]
+- Updated dependencies [9110863]
+- Updated dependencies [2905024]
+- Updated dependencies [ae1cedf]
+- Updated dependencies [6f0debc]
+- Updated dependencies [d6e7a55]
+- Updated dependencies [62d3e2d]
+- Updated dependencies [0b2f558]
+- Updated dependencies [dc9bbea]
+- Updated dependencies [7a3673f]
+- Updated dependencies [1c3366d]
+- Updated dependencies [ea965bb]
+- Updated dependencies [fc08f90]
+- Updated dependencies [d34fe02]
+- Updated dependencies [59b5246]
+- Updated dependencies [c55dcf5]
+- Updated dependencies [3e7b0b6]
+- Updated dependencies [d68aa70]
+- Updated dependencies [0b991d6]
+- Updated dependencies [9af7a64]
+- Updated dependencies [ecbebe2]
+- Updated dependencies [e61a12b]
+- Updated dependencies [d362c3c]
+- Updated dependencies [ef9630f]
+- Updated dependencies [b7a9c8e]
+- Updated dependencies [75f89d2]
+- Updated dependencies [ca66684]
+- Updated dependencies [b6fd6df]
+- Updated dependencies [6658f0f]
+- Updated dependencies [877477b]
+- Updated dependencies [767d5de]
+- Updated dependencies [d0c5dc8]
+- Updated dependencies [ac094f5]
+- Updated dependencies [61a6edf]
+- Updated dependencies [dd869ee]
+- Updated dependencies [ff6b599]
+- Updated dependencies [ac65359]
+- Updated dependencies [49b43de]
+- Updated dependencies [5f8eede]
+- Updated dependencies [44529a4]
+- Updated dependencies [af88938]
+- Updated dependencies [42a9a4b]
+- Updated dependencies [8ae3f58]
+- Updated dependencies [65cdd0e]
+  - @endora-commerce/admin-kit@0.111.0
+  - @endora-commerce/contracts@0.111.0
+
+## 0.110.0
+
+### Minor Changes
+
+- 9d9c8df: Blog post authors and administrator author profiles (feature 171, US6–US7).
+
+  An administrator keeps an avatar (a library asset) and an _about me_ text per language on their
+  profile page: `PATCH /api/v1/admin/me` and `PATCH /api/v1/admin/admin-users/:id` take
+  `avatarAssetId` and `bio`; an avatar that is no live asset is refused with
+  `422 ADMIN_USER_AVATAR_NOT_FOUND`. The library counts an avatar as a use of the asset (reference kind
+  `admin_user_avatar`). `admin_users` declares `assets_library` as a non-binding dependency.
+
+  A blog post names one author, an administrator (`authorAdminUserId` on create and patch;
+  `422 BLOG_AUTHOR_NOT_FOUND` for anyone but an active administrator). Editors with `blog.write` pick
+  one from `GET /api/v1/admin/blog/author-candidates` (names and avatars only). The storefront shows the
+  author's name, avatar and biography on the post page, the name on cards and a `Person` in the post's
+  JSON-LD; an inactive author is still shown, a deleted one is not. `blog` now depends on `admin_users`.
+
+  `@endora-commerce/contracts`: `AdminUserRecord.avatarAssetId` and `.bio`, and
+  `AdminUserReadPort.findByAvatarAssetIds` — **an implementer of the port must add it**;
+  `adminUserSchema.avatarAssetId`/`.bio`; `ADMIN_USER_BIO_MAX_LENGTH`; `blogAuthorSchema`,
+  `blogAuthorCardSchema`, `blogAuthorCandidateSchema`, `blogPostAuthorAdminSchema`; `authorId` and
+  `author` on post cards and the resolved post; `assetReferenceKindSchema` gains `admin_user_avatar`.
+  `@endora-commerce/admin-kit`: `AdminMe.adminUser.avatarAssetId` and `.bio`.
+
+- 248bf1b: The audit log names a customer who acted for themselves (issue #741; `specs/170-organization-roles/` FR-065). Before this change, a role, invitation or member change made by an Organization administrator on the storefront was shown as _system_.
+
+  - `@endora-commerce/contracts`: `auditLogEntrySchema` gains `actorCustomerAccountId`, nullable and optional. A payload without it still parses.
+  - `@endora-commerce/mod-audit-logs`: each row from `GET /api/v1/admin/audit-log` carries `actorCustomerAccountId` and `actorCustomerLabel`. The label comes from the `customer_account` audit reference, the same lookup already used for impersonated customers. The audit log viewer renders such a row as _Customer: <label>_. The audit log viewer falls back to the short account id when there is no label.
+  - **Breaking:** in `GET /api/v1/admin/audit-log/recent-activity`, `actorKind` gains the value `'customer'` beside `'admin'` and `'system'`. For those rows `actorDisplayName` is the customer's label. A consumer that switches exhaustively on `actorKind` must handle the new value.
+  - `@endora-commerce/admin-shell`: the Recent activity card prefixes a customer actor with _Customer:_.
+  - `@endora-commerce/mod-customer-accounts`: the `customer_account` audit reference now names the person as `<first> <last> (<e-mail>)`, or the e-mail alone when the account has no name. Before, it was the Organization's name. Impersonation rows (`… (as <customer>)` on Recent activity) now name the person too. `registerCustomerAccountAuditReferences` no longer takes an `OrganizationDetailsPort`.
+  - `@endora-commerce/mod-i18n`: adds `auditLog.actor.customer` and `home.activity.actor.customer` in English and Polish.
+
+- cea1470: **Breaking (redirect contract):** `LoginPage` words a refused federated sign-in from its `federatedSignInError` code, with the English lines in `federatedSignInErrorCopy` (`preauth-login-copy.ts`; the pre-auth screen is English-only by construction). It never prints the `?error=` value: anything that is not a contract code, a crafted sentence or a sentence an older `mod-mfa` sent included, shows the generic "Sign-in failed". The `/expired/i` test on the message text is gone. The alert is titled "Session expired" for the federated code `sign_in_expired` and for `lastLoginReason === 'session_expired'` (an idle session that answered 401). Every other message is titled "Sign-in failed". Needs `@endora-commerce/mod-mfa` and `@endora-commerce/admin-kit` from the same release (issue #813).
+
+### Patch Changes
+
+- 5cbffb9: A signed-in admin who opens `/login` (a bookmark, a link in an e-mail) is redirected instead of seeing "Page not found" (issue #859). `App` gains a `/login` route for the authenticated tree. It leads to the `?next=` target when that is a path of this application, and to the dashboard (`/`) otherwise. Nothing else in the query is carried over, so `?error=` is still never shown.
+
+  `readReturnTo(params, param?)` in `@endora-commerce/admin-kit/lib` takes an optional parameter name, which defaults to `returnTo`. It reads `next` by the same rule: a path of this application only, never a scheme, a host or `//`. Existing calls are unchanged.
+
+- Updated dependencies [18cce2e]
+- Updated dependencies [9cfb28b]
+- Updated dependencies [a206da9]
+- Updated dependencies [34485ae]
+- Updated dependencies [0f1717c]
+- Updated dependencies [86e8761]
+- Updated dependencies [9bfb0b8]
+- Updated dependencies [ed5cf6a]
+- Updated dependencies [2da23d2]
+- Updated dependencies [2da23d2]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [5303aab]
+- Updated dependencies [16f85f4]
+- Updated dependencies [270aa2b]
+- Updated dependencies [3f020ba]
+- Updated dependencies [3f020ba]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [bf1cc2d]
+- Updated dependencies [ff60e93]
+- Updated dependencies [6f19230]
+- Updated dependencies [77b8c37]
+- Updated dependencies [65104b8]
+- Updated dependencies [7acaa33]
+- Updated dependencies [7019c71]
+- Updated dependencies [4eee98b]
+- Updated dependencies [14ac256]
+- Updated dependencies [248bf1b]
+- Updated dependencies [4cf529d]
+- Updated dependencies [5e4dd48]
+- Updated dependencies [75b053f]
+- Updated dependencies [54fc8f1]
+- Updated dependencies [dac5795]
+- Updated dependencies [5bbb389]
+- Updated dependencies [d69e765]
+- Updated dependencies [dbc1cef]
+- Updated dependencies [a6bc891]
+- Updated dependencies [a9398c8]
+- Updated dependencies [0b56038]
+- Updated dependencies [717e4c6]
+- Updated dependencies [cea1470]
+- Updated dependencies [cea1470]
+- Updated dependencies [29d7e90]
+- Updated dependencies [7f2fa6e]
+- Updated dependencies [57145f7]
+- Updated dependencies [58a1632]
+- Updated dependencies [e46d233]
+- Updated dependencies [b476f44]
+- Updated dependencies [14fe4fb]
+- Updated dependencies [76d89ab]
+- Updated dependencies [5cbffb9]
+- Updated dependencies [6bd2ab7]
+- Updated dependencies [a3502c0]
+- Updated dependencies [7a73cc8]
+- Updated dependencies [5ff8302]
+- Updated dependencies [fc7db4c]
+- Updated dependencies [c34b405]
+- Updated dependencies [5af8c25]
+- Updated dependencies [48f055e]
+- Updated dependencies [bf50b85]
+- Updated dependencies [2c6fba0]
+- Updated dependencies [0801f69]
+- Updated dependencies [d1c0d13]
+- Updated dependencies [974be57]
+- Updated dependencies [32b4d0c]
+- Updated dependencies [3355e60]
+- Updated dependencies [7ce9b8a]
+  - @endora-commerce/contracts@0.110.0
+  - @endora-commerce/admin-kit@0.110.0
+
+## 0.109.0
+
+### Minor Changes
+
+- 476c5aa: The signed-in administrator's Admin UI preferences, kept on the server, and a Pinned section in the sidebar (feature 164).
+
+  - **`useAdminPreference(key)` and `useAdminPreferencesStatus()`** (`@endora-commerce/admin-kit/lib`). `AuthProvider` now provides the signed-in administrator's preferences itself — no extra provider to mount. `useAdminPreference('sidebarPins' | 'sidebarCollapsedGroups' | 'sidebarRailMode')` returns the value and a setter that applies at once and saves in the background, newest value last, retried on reconnect and when the page returns to the foreground. `useAdminPreferencesStatus()` reports whether the preferences loaded and whether a save failed. A session seeded through `AuthProvider`'s `initial` without `preferences` reads the defaults; a fetched one without them opens with the defaults and saves nothing until a later load succeeds. `AdminMe` gains `preferences?: AdminPreferences | null`.
+  - **Pinned sidebar section** (`@endora-commerce/admin-shell`). Every sidebar entry has a pin button after its link (a Tab stop of its own; always visible with a 44 px target on touch). Pinned entries appear first, in a section of their own, in the expanded sidebar, the mobile drawer and — as the first icon — the collapsed rail, where its fly-out lists the pins with an unpin button. A pin whose entry the administrator cannot see is not shown. Pinning and unpinning are announced.
+  - **Reordering pins** in the expanded sidebar and the drawer, with the kit's `useReorderList`: drag a row, or focus its handle and use Space and the arrow keys (Escape cancels), or the up/down buttons on touch screens; every move is announced. A pin that is hidden at the moment keeps its place.
+  - **Pinning from the command palette.** A result whose destination is a sidebar entry has a pin button beside it, and `Alt+Enter` (`⌥↵`) pins or unpins the highlighted result; `Enter` still opens it. No palette entry or group is added.
+  - **`usePageSizePreference(scope)` is server-backed**, same signature: each list's page size is the signed-in administrator's, kept on the server per list (default 20); it is read when the list opens, so a change made on another device applies the next time the list opens. Folded sidebar groups (the Pinned section folds as `pinned`) and rail mode are server-held too, and present in the first render. Nothing is kept in `localStorage` any more.
+  - **One-time carry-over on upgrade.** On first load the browser's remembered page sizes **for the signed-in administrator** are sent to the server — a value already there wins — and removed once it confirmed; another administrator's are left alone. The two old sidebar values (`b2b-admin.nav.collapsed-groups`, `b2b-admin.nav.rail-mode`) were not tied to an administrator, so they are removed without being imported: everyone opens in the default sidebar layout once.
+  - **A failed save** keeps the change on screen and shows one dismissible notice below the top bar.
+  - **New `core` strings** (`@endora-commerce/mod-i18n`, English and Polish): `appShell.pinned.*` (including `appShell.pinned.reorder.*`), `appShell.palette.pin.*`, `adminPreferences.saveFailed`, `adminPreferences.dismiss`.
+  - **Theme** (`@endora-commerce/admin-kit/theme.css`): `.b2b-nav-row`, `.b2b-nav-pin`, `.b2b-nav-reorder-handle`, `.b2b-palette__pin` and the notice's classes.
+
+- 11b0eb8: The contract surface of the new `tasks` and `projects` modules, one shared reference grammar,
+  and a new sidebar section.
+
+  **`@endora-commerce/contracts`** gains, exported from the package root:
+
+  - `tasks.ts` — the Tasks admin API schemas (`TaskListQuerySchema`, `CreateTaskBodySchema`,
+    `UpdateTaskBodySchema`, `TaskSummarySchema`, `TaskDetailSchema`, `TaskContextSchema` and their
+    siblings, with inferred types), `TASKS_EVENTS` and the event payload types, `TASKS_ERROR_CODES`,
+    and the interfaces another module uses: `TaskReadPort`, `TaskWritePort`,
+    `TaskContextRegistryPort` with `TaskContextDescriptor`;
+  - `projects.ts` — the Projects admin API schemas (`ProjectListQuerySchema`,
+    `CreateProjectBodySchema`, `CloseProjectBodySchema`, `ProjectTemplateBodySchema`,
+    `ProjectAnalyticsQuerySchema`, `ProjectDetailSchema` and their siblings), `PROJECTS_EVENTS` and
+    the event payload types, `PROJECTS_ERROR_CODES`, and `ProjectReadPort`,
+    `ProjectStageGuardRegistryPort` with `ProjectStageGuard`;
+  - `record-references.ts` — the `[[<type>:<uuid>]]` reference grammar under neutral names
+    (`recordReferenceTypeSchema`, `formatRecordReferenceToken`, `extractRecordReferenceTokens`,
+    `splitRecordReferenceText`, `mentionedAdminUserIds`, `RecordReferenceSchema`), the `@@` lookup
+    answer `RecordDocumentLookupResponseSchema`, and the shared `RecordHistoryPageSchema`;
+  - `record-rich-text.ts` — the formatted-text grammar (`parseRecordRichText`,
+    `formatRecordRichText`, `recordRichTextToPlain`, `isSafeRecordRichHref`).
+
+  `ERROR_CODES` gains the codes the two modules raise — `TASK_NOT_FOUND`, `TASK_CONTEXT_INVALID`,
+  `TASK_ASSIGNEE_INVALID` and the `PROJECT_*` codes of `PROJECTS_ERROR_CODES`.
+
+  **`AdminZoneNameSchema` has a new member, `'task.detail.after'`**, with its props
+  `TaskDetailZoneProps { taskId }` in `AdminZonePropsMap` — the zone a Task's screen mounts after its
+  content. A consumer that switches exhaustively over `AdminZoneName` gets a compile error until it
+  handles the new member.
+
+  **The reference grammar reads five types where it read three**: `quote_request` and `task` join
+  `product`, `order` and `admin_user`. Every CRM name — `opportunityReferenceTypeSchema`,
+  `formatOpportunityReferenceToken`, `extractOpportunityReferenceTokens`,
+  `splitOpportunityReferenceText`, `OpportunityReferenceSchema`, `parseOpportunityRichText` and the
+  rest of `crm.ts` §9 and `crm-rich-text.ts` — is still exported, now as an alias of the shared
+  one. A text stored before reads as it did. A consumer that switches exhaustively over
+  `OpportunityReferenceType`, or indexes a `Record` by it, gets a compile error until it handles
+  the two new members.
+
+  **`assetReferenceKindSchema` has a new member, `'project_attachment'`** — a file a Project
+  uses, which the media library then refuses to delete. A consumer that switches exhaustively over
+  `AssetReferenceKind` gets a compile error until it handles the new member.
+
+  **`AdminNavSectionNameSchema` has a new member, `'work'`**, and `@endora-commerce/admin-shell`
+  declares the section after _CRM_, labelled "Projects & tasks" / "Projekty i zadania"
+  (`appShell.section.work` in `@endora-commerce/mod-i18n`). It renders only while a module
+  contributes a visible entry to it. A consumer that switches exhaustively over
+  `AdminNavSectionName` gets a compile error until it handles the new member.
+
+### Patch Changes
+
+- 42b1038: `@endora-commerce/admin-shell` no longer carries its 67 re-export shims over `@endora-commerce/admin-kit` (`lib/api-client`, `lib/auth`, `components/ui/*`, `i18n/*` and the rest). The shell imports every one of those bindings from `@endora-commerce/admin-kit/lib`, `/ui`, `/components` or `/i18n` directly. None of the shims was reachable through the package's `exports` map, so nothing a consumer can import has changed: `AuthProvider` and the `AdminMe` / `AuthProviderProps` types are still exported from the package root, and are the kit's own bindings as before. A test that replaces one of these bindings with `vi.mock` must name the kit specifier (for example `vi.mock('@endora-commerce/admin-kit/lib', …)`, spreading the original module) — a mock on an old `admin-shell/src/...` path no longer has a file to resolve to.
+- 1b1c43e: Both packages now declare `"sideEffects": ["*.css"]` in `package.json`. No JavaScript file in either package does anything when it is imported, so a bundler can drop every barrel member a consumer does not use. The CSS files the packages ship (`theme.css`, `tailwind.css`) are still treated as side-effectful, so a stylesheet imported from JavaScript is kept.
+
+  The exported API does not change. In this repository's admin build, the entry chunk shrank from 2454.5 kB to 806.8 kB (gzip: 774.6 kB to 231.6 kB). A consumer that imported from the barrels gets a smaller bundle and does not need to change anything.
+
+- ffb2aec: Every signed-in administrator can now read and acknowledge their own notifications on the Admin UI's bell, whatever their role. Before, the bell and its API needed `admin:read`, so a narrow role such as a sales representative had Task and CRM notifications recorded for them that they could never open.
+
+  - `@endora-commerce/mod-admin-notifications`: `GET /api/v1/admin/notifications`, `POST /api/v1/admin/notifications/:id/read` and `POST /api/v1/admin/notifications/mark-all-read` are gated on an administrator session with no permission code. `admin:read` now decides only whether the `all_admins` broadcasts are listed, counted and acknowledgeable; for an administrator without it, a broadcast's id answers `404` like any notification that is not theirs. `AdminNotificationService.listForAdmin`, `markRead`, `markAllRead` and `countUnreadForAdmin` take a required `includeBroadcasts` flag. The module now depends on `admin_roles`, whose permission service answers that question. The permission's label is now _View notifications sent to all admins_.
+  - `@endora-commerce/admin-shell`: the header shows the notification bell to every administrator while the Admin notifications module is on.
+  - `@endora-commerce/mod-i18n`: the English and Polish labels of `admin:read` follow the new meaning.
+  - `@endora-commerce/mod-tasks`: the module page says that every administrator reads their own notifications without a permission.
+
+- 6e8d6d0: The ⌘K command palette now matches a query word by word: every word typed must occur somewhere in the row — its label, description or any keyword — instead of the whole query having to appear, contiguously, in one of them. A single-word query matches exactly what it matched before; matching stays case- and diacritic-insensitive.
+
+  Before this, `kanał sprzedaży` did not find the `Kanały sprzedaży` screen, and `sales channels` did not find it in a Polish-language admin, because each word lived in a different field. The rule is the same for the Actions, Navigate and Assistant groups.
+
+  `@endora-commerce/mod-sales-channels` adds the keyword `kanały` to its `open-sales-channels` palette action, so an English-language admin finds the screen by its Polish name too. The new keyword reaches the palette on the next boot, which reconciles `module_actions` from the manifest.
+
+- Updated dependencies [42b1038]
+- Updated dependencies [9b45768]
+- Updated dependencies [d2acc82]
+- Updated dependencies [22604fa]
+- Updated dependencies [c3165da]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [e64ed74]
+- Updated dependencies [e03e6a9]
+- Updated dependencies [50338a6]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [22604fa]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [9ff8307]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [07f3764]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [ea892d5]
+- Updated dependencies [678fed1]
+- Updated dependencies [dcbd154]
+- Updated dependencies [a76d6ee]
+- Updated dependencies [22604fa]
+- Updated dependencies [9a38360]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [bdef54c]
+- Updated dependencies [1b4f2b7]
+- Updated dependencies [d560d58]
+- Updated dependencies [dd6deb2]
+- Updated dependencies [3f697a3]
+- Updated dependencies [df0a90e]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [774d23e]
+- Updated dependencies [4cb0a7d]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [f148418]
+- Updated dependencies [476c5aa]
+- Updated dependencies [8ef189b]
+- Updated dependencies [4bc5c7f]
+- Updated dependencies [eba4fd8]
+- Updated dependencies [61fc321]
+- Updated dependencies [9b3e7f0]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [b7baf8a]
+- Updated dependencies [1b1c43e]
+- Updated dependencies [56e237d]
+- Updated dependencies [d50b874]
+- Updated dependencies [0a816a0]
+- Updated dependencies [f261ed3]
+- Updated dependencies [d68fb89]
+- Updated dependencies [c73366c]
+- Updated dependencies [b25d8be]
+- Updated dependencies [5038a3a]
+- Updated dependencies [df95f59]
+- Updated dependencies [1fd4822]
+- Updated dependencies [0f5bcde]
+- Updated dependencies [c72a83e]
+- Updated dependencies [42189ce]
+- Updated dependencies [d9053a7]
+- Updated dependencies [23489bf]
+- Updated dependencies [f40ce92]
+- Updated dependencies [55864a1]
+- Updated dependencies [ed85493]
+- Updated dependencies [3174251]
+- Updated dependencies [55864a1]
+- Updated dependencies [11b0eb8]
+- Updated dependencies [b8b6eed]
+- Updated dependencies [2aa2c9b]
+- Updated dependencies [883d192]
+- Updated dependencies [5114576]
+- Updated dependencies [8f7c38e]
+- Updated dependencies [1846755]
+  - @endora-commerce/admin-kit@0.109.0
+  - @endora-commerce/contracts@0.109.0
+
+## 0.108.0
+
+### Minor Changes
+
+- 53e88c7: _Send feedback_ beside the release in the Admin UI sidebar (an icon of its own when the sidebar is collapsed), shown while the `admin_feedback` module is present. It opens a dialog — the feedback (required), the sender's e-mail (the signed-in administrator's, editable) and an optional phone — that posts to `POST /api/v1/admin/feedback`, and says every outcome: thanks, sending switched off on the instance, too many messages, or not delivered, always with `support@endora.software` to write to by hand and with what was typed kept. New `appShell.feedback.*` keys in the core bundle (EN, PL); `theme.css` gains `.b2b-sidebar__feedback` and `.b2b-sidebar__feedback-rail-row`.
+
+### Patch Changes
+
+- b4a47be: The _Send feedback_ dialog is drawn over the whole page again on a phone. It is now rendered into the document body instead of inside the sidebar, which coloured its title and labels with the sidebar's light text and — being a drawer moved with `transform` on narrow screens — confined the dialog and its backdrop to the drawer.
+- 3a9dc6e: Raise `vite` to `^7.3.7`. It includes a dev-server fix that keeps module ids, not URLs, in `safeModulePaths`. `@endora-commerce/admin-shell`'s generated README lists the new peer range.
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- bf9881f: The command palette finds records as well as screens and actions.
+
+  On every open the palette asks `GET /api/v1/admin/global-search/capability`; when the answer names
+  at least one record type, typing at least the minimum search length searches records after a 250 ms
+  pause (the previous request aborted, a stale answer ignored) and shows one group per record type
+  after _Actions_, with server-resolved titles, a status badge, a "more results" hint and a note for a
+  type that could not be searched. Records join the palette's one Arrow/Enter list; a final row opens
+  `/global-search?q=…`. A refused or failed probe — global search switched off or not installed —
+  leaves the palette exactly as it was. A live region announces the number of records found.
+
+  The `core` bundle gains five keys in English and Polish: `appShell.palette.records.searching`,
+  `.more`, `.unavailable`, `.seeAll` and `.announce`, so a host needs `@endora-commerce/mod-i18n` at
+  this version.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+### Patch Changes
+
+- a57515b: The sidebar shows the release number in a section of its own: the logo, a divider, the version
+  badge, a divider, then the rest of the sidebar. The badge no longer overlaps the logo's header.
+  The collapsed sidebar still hides it and keeps the release in the logo's tooltip.
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

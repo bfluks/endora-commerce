@@ -3,10 +3,12 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { answerConfirm } from '../../helpers/confirm-dialog';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 const getSpy = vi.fn();
 const patchSpy = vi.fn();
+const postSpy = vi.fn();
 
 // The **kit's** barrel, not `@/lib/api-client`. The screen is
 // `@endora-commerce/mod-quote-requests/admin`'s since feature 091's batch 12
@@ -21,7 +23,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
     ...actual,
     apiClient: {
       get: (...args: unknown[]) => getSpy(...args),
-      post: vi.fn(),
+      post: (...args: unknown[]) => postSpy(...args),
       put: vi.fn(),
       patch: (...args: unknown[]) => patchSpy(...args),
       delete: vi.fn(),
@@ -56,6 +58,8 @@ const BUNDLE = passthroughBundle('core', [
   'rfq.detail.badge.validityEnded',
   'rfq.detail.cancelRfq',
   'rfq.detail.convert.placeOrder',
+  'rfq.detail.convert.confirm',
+  'rfq.detail.convert.success',
   'rfq.detail.copyHint',
   'rfq.detail.tabs.overview',
   'rfq.detail.tabs.modify',
@@ -77,15 +81,29 @@ const INTERPOLATED: Record<string, string> = {
   'rfq.detail.validity.help.keepActive': 'keep the current deadline, {date}',
   'rfq.detail.validity.help.keepLapsed': 'keep the deadline that has passed, {date}',
   'rfq.detail.validity.help.preview': 'saving sets the deadline to {date}',
-  'rfq.detail.validity.help.previewImmediate': 'ends validity immediately ({date})',
-  'rfq.detail.validity.error.days': 'enter a whole number of days',
+  'rfq.detail.validity.error.days': 'enter a whole number of days from 0 to 3650',
   'rfq.detail.meta.expires': 'expires {date}',
   'rfq.detail.meta.validityEnded': 'validity ended {date}',
 };
 
-const FULL_BUNDLE = { core: { ...BUNDLE['core'], ...INTERPOLATED } };
+/** `specs/192-quote-request-draft-share/` — the module's own sentences about the days. */
+const OWN: Record<string, string> = {
+  'validity.unshared.field': 'valid for (days from sharing)',
+  'validity.unshared.days.one': 'valid for {days} day from sharing',
+  'validity.unshared.days.other': 'valid for {days} days from sharing',
+  'validity.unshared.none': 'no deadline after sharing',
+  'validity.previewNone': '0 days: saving removes the deadline',
+  'share.badge.unshared': 'draft-badge',
+  'share.meta.unshared': 'not shared yet',
+  'share.meta.validityDays.one': 'valid {days} day from sharing',
+  'share.meta.validityDays.other': 'valid {days} days from sharing',
+};
+
+const FULL_BUNDLE = { core: { ...BUNDLE['core'], ...INTERPOLATED }, quote_requests: OWN };
 
 interface RfqOverrides {
+  sharedWithCustomer?: boolean;
+  shareValidityDays?: number | null;
   status?: string;
   expiresAt?: string | null;
   awaitingCustomerRevisionAcceptance?: boolean;
@@ -130,6 +148,8 @@ function rfqPayload(overrides: RfqOverrides = {}): Record<string, unknown> {
     expiredAt: null,
     expiresAt: overrides.expiresAt === undefined ? null : overrides.expiresAt,
     convertedOrderId: null,
+    ...(overrides.sharedWithCustomer !== undefined ? { sharedWithCustomer: overrides.sharedWithCustomer } : {}),
+    ...(overrides.shareValidityDays !== undefined ? { shareValidityDays: overrides.shareValidityDays } : {}),
     taxRate: 0,
     createdAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
@@ -172,15 +192,30 @@ beforeEach(() => {
   getSpy.mockReset();
   patchSpy.mockReset();
   patchSpy.mockResolvedValue({ data: {} });
+  postSpy.mockReset();
+  vi.restoreAllMocks();
 });
+
+function lapsedBanner(): HTMLElement {
+  const banner = screen.getByText(/validity ended on/).closest<HTMLElement>('[data-slot="alert"]');
+  if (banner === null) throw new Error('the lapsed-validity banner is not rendered');
+  return banner;
+}
+
+async function findLapsedBanner(): Promise<HTMLElement> {
+  await screen.findByText(/validity ended on/);
+  return lapsedBanner();
+}
 
 describe('RfqDetail — the operator sets and changes the validity deadline', () => {
   it('tells the operator a lapsed request is lapsed, and holds back the actions that can only be refused', async () => {
     renderDetail({ status: 'Pending', expiresAt: LAPSED_AT });
 
     expect(await screen.findByText('rfq.detail.badge.validityEnded')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('validity ended on');
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    // A static banner of the record's state: shown, not announced as an interruption (#1484).
+    expect(lapsedBanner()).not.toHaveAttribute('role');
+    expect(lapsedBanner()).toHaveTextContent('validity ended on');
+    expect(lapsedBanner()).toHaveTextContent(
       'remedy: set a new deadline under Modify',
     );
     // The header no longer promises a date the platform has stopped honouring:
@@ -197,7 +232,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
 
     await screen.findByText('rfq.detail.tabs.overview');
     expect(screen.queryByText('rfq.detail.badge.validityEnded')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="alert"]')).toBeNull();
     expect(screen.getByRole('button', { name: /rfq\.detail\.approve/ })).toBeEnabled();
   });
 
@@ -235,12 +270,15 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     await user.type(field, '14');
 
     const help = document.getElementById(field.getAttribute('aria-describedby') ?? '');
-    const expected = new Date(Date.now() + 14 * 86_400_000).toLocaleString().slice(0, 10);
+    // The kit's medium date in the admin language (#1776); the time is left out of the match.
+    const expected = new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(Date.now() + 14 * 86_400_000));
     expect(help).toHaveTextContent('saving sets the deadline to');
     expect(help?.textContent ?? '').toContain(expected);
   });
 
-  it('says what a zero-day deadline does rather than looking like "no deadline"', async () => {
+  // `specs/192-quote-request-draft-share/` FR-032 (owner decision of 2026-11-24,
+  // server since b4e3b74fe): 0 days removes the deadline; it never ends validity now.
+  it('says a zero-day revision removes the deadline, and sends the zero', async () => {
     const user = userEvent.setup();
     renderDetail({ status: 'Pending', expiresAt: futureIso(7) });
 
@@ -248,9 +286,30 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     const field = screen.getByLabelText(/rfq\.detail\.validity\.field/);
     await user.type(field, '0');
 
-    expect(
-      document.getElementById(field.getAttribute('aria-describedby') ?? ''),
-    ).toHaveTextContent('ends validity immediately');
+    const help = document.getElementById(field.getAttribute('aria-describedby') ?? '');
+    expect(help).toHaveTextContent('0 days: saving removes the deadline');
+    expect(field).not.toHaveAttribute('aria-invalid');
+
+    await user.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect((patchSpy.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({ expiresInDays: 0 });
+  });
+
+  it('refuses more days than the contract allows (3650), and sends nothing', async () => {
+    const user = userEvent.setup();
+    renderDetail({ status: 'Pending', expiresAt: null });
+
+    await user.click(await screen.findByRole('tab', { name: /rfq\.detail\.tabs\.modify/ }));
+    const field = screen.getByLabelText(/rfq\.detail\.validity\.field/);
+    expect(field).toHaveAttribute('max', '3650');
+    await user.type(field, '3651');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(document.getElementById(field.getAttribute('aria-describedby') ?? '')).toHaveTextContent(
+      'from 0 to 3650',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
+    expect(patchSpy).not.toHaveBeenCalled();
   });
 
   it('refuses a deadline the contract would refuse, and sends nothing', async () => {
@@ -277,7 +336,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     // The operator meets the lapse on the overview and takes the remedy the
     // banner offers, rather than having to know that "Modify" is where dates
     // live.
-    const banner = await screen.findByRole('alert');
+    const banner = await findLapsedBanner();
     await user.click(
       within(banner).getByRole('button', { name: /rfq\.detail\.validity\.lapsed\.setNewDeadline/ }),
     );
@@ -326,7 +385,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
   it('does not offer a re-date on an approved request, because `modify` refuses one', async () => {
     renderDetail({ status: 'Approved', expiresAt: LAPSED_AT, awaitingCustomerRevisionAcceptance: false });
 
-    const banner = await screen.findByRole('alert');
+    const banner = await findLapsedBanner();
     expect(banner).toHaveTextContent('remedy: ask the customer to resubmit');
     expect(
       within(banner).queryByRole('button', {
@@ -343,6 +402,125 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
 
     await screen.findByText('rfq.detail.tabs.overview');
     expect(screen.queryByText('rfq.detail.badge.validityEnded')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="alert"]')).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #170 — the order action on an approved request
+  // -------------------------------------------------------------------------
+
+  it('prepares the customer\'s basket through the admin endpoint, after confirming', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    postSpy.mockResolvedValue({
+      data: { cartId: '00000000-0000-4000-8000-0000000000c1', customerAccountId: 'cust-1', itemCount: 1 },
+    });
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+
+    const dialog = await answerConfirm(true);
+    expect(dialog).toHaveTextContent('rfq.detail.convert.confirm');
+    // Not the storefront's `convert-to-order`: that route is customer-only and
+    // answers an administrator with 401, which signs the operator out.
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+        {},
+      ),
+    );
+    expect(await screen.findByText('rfq.detail.convert.success')).toBeInTheDocument();
+  });
+
+  it('sends nothing when the operator does not confirm', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+    await answerConfirm(false);
+
+    // Only the basket endpoint: the reference-price probe is itself a POST
+    // (`/price-books/resolve`, feature 160), and it is a read, not a send.
+    expect(postSpy).not.toHaveBeenCalledWith(
+      `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+      expect.anything(),
+    );
+  });
+});
+
+describe('RfqDetail — the days of a quote not shared yet (specs/192-quote-request-draft-share/, US3)', () => {
+  const unshared = (days: number | null): RfqOverrides => ({
+    status: 'Created from admin',
+    sharedWithCustomer: false,
+    shareValidityDays: days,
+    expiresAt: null,
+  });
+
+  async function openModify(): Promise<HTMLElement> {
+    await userEvent.click(await screen.findByRole('tab', { name: /rfq\.detail\.tabs\.modify/ }));
+    return screen.getByLabelText('valid for (days from sharing)');
+  }
+
+  function helpOf(field: HTMLElement): HTMLElement | null {
+    return document.getElementById(field.getAttribute('aria-describedby') ?? '');
+  }
+
+  it('shows the days and that they count from sharing — and no date', async () => {
+    renderDetail(unshared(30));
+
+    const field = await openModify();
+    expect(field).toHaveValue(30);
+    expect(helpOf(field)).toHaveTextContent('valid for 30 days from sharing');
+    const meta = document.querySelector('header p')?.textContent ?? '';
+    expect(meta).toContain('not shared yet');
+    expect(meta).toContain('valid 30 days from sharing');
+    expect(meta).not.toContain('expires');
+  });
+
+  it('says no deadline for no days, and for zero', async () => {
+    const user = userEvent.setup();
+    renderDetail(unshared(null));
+
+    const field = await openModify();
+    expect(field).toHaveValue(null);
+    expect(helpOf(field)).toHaveTextContent('no deadline after sharing');
+    await user.type(field, '0');
+    expect(helpOf(field)).toHaveTextContent('no deadline after sharing');
+  });
+
+  it('is not an unsaved change when it opens holding the quote\'s days', async () => {
+    renderDetail(unshared(30));
+
+    await openModify();
+    // The tab's unsaved marker is absent and Save sends nothing about the days.
+    expect(screen.getByRole('tab', { name: /rfq\.detail\.tabs\.modify/ })).not.toHaveAccessibleName(/unsaved/i);
+    await userEvent.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect((patchSpy.mock.calls[0] as [string, Record<string, unknown>])[1]).not.toHaveProperty('expiresInDays');
+  });
+
+  it('sends the typed number', async () => {
+    const user = userEvent.setup();
+    renderDetail(unshared(30));
+
+    const field = await openModify();
+    await user.clear(field);
+    await user.type(field, '45');
+    await user.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect((patchSpy.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({ expiresInDays: 45 });
+  });
+
+  it('sends null once the operator empties the field — no deadline', async () => {
+    const user = userEvent.setup();
+    renderDetail(unshared(30));
+
+    const field = await openModify();
+    await user.clear(field);
+    expect(helpOf(field)).toHaveTextContent('no deadline after sharing');
+    await user.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect((patchSpy.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({ expiresInDays: null });
   });
 });

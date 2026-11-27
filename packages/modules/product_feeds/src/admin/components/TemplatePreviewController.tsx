@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, Search } from 'lucide-react';
+import { AlertTriangle, Check } from 'lucide-react';
 import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
-import { useFocusTrap } from '@endora-commerce/admin-kit/components';
+import { ListToolbarSearch, useFocusTrap } from '@endora-commerce/admin-kit/components';
 import { ApiError, apiClient, normalize } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { TemplatePreview } from '../api.js';
@@ -43,11 +43,12 @@ export interface TemplatePreviewControllerProps {
 interface AdminProductSummary {
   id: string;
   sku: string;
-  name: Record<string, string>;
+  /** Feature 174 (FR-031) — the Global name; the admin list answers no per-language map. */
+  name: string;
 }
 
-function pickName(name: Record<string, string>, fallback: string): string {
-  return name['en-US']?.trim() || Object.values(name).find((v) => v.trim() !== '') || fallback;
+function productLabel(name: string, fallback: string): string {
+  return name.trim() || fallback;
 }
 
 export function TemplatePreviewController(props: TemplatePreviewControllerProps): ReactNode {
@@ -127,7 +128,8 @@ export function TemplatePreviewVerdict(props: TemplatePreviewVerdictProps): Reac
   if (loading || !preview) return null;
 
   return (
-    <Alert variant={preview.wouldEmitItem ? 'success' : 'destructive'}>
+    // A verdict that follows the operator's edits: announced politely, even when it is "skipped" (#1484).
+    <Alert variant={preview.wouldEmitItem ? 'success' : 'destructive'} live="polite">
       <AlertDescription className="flex items-center gap-2">
         {preview.wouldEmitItem ? (
           <Check size={14} aria-hidden="true" />
@@ -145,7 +147,7 @@ export function TemplatePreviewVerdict(props: TemplatePreviewVerdictProps): Reac
 /** The muted call-to-action shown above the list while the preview is off. */
 export function PreviewCallToAction(): ReactNode {
   const t = useTranslation('product_feeds');
-  return <p className="b2b-help">{t('builder.help.pickProduct')}</p>;
+  return <p className="m-0 text-xs text-muted-foreground">{t('builder.help.pickProduct')}</p>;
 }
 
 function ProductPickerDrawer(props: {
@@ -184,7 +186,7 @@ function ProductPickerDrawer(props: {
     (product) =>
       needle === '' ||
       normalize(product.sku).includes(needle) ||
-      normalize(pickName(product.name, product.sku)).includes(needle),
+      normalize(productLabel(product.name, product.sku)).includes(needle),
   );
 
   return (
@@ -199,23 +201,27 @@ function ProductPickerDrawer(props: {
       >
         <div className="b2b-drawer__head">
           <div className="b2b-drawer__title">{t('builder.preview.pick')}</div>
-          <div className="b2b-card__sub">{t('builder.help.pickProduct')}</div>
+          <p className="m-0 mt-0.5 text-xs text-muted-foreground">{t('builder.help.pickProduct')}</p>
         </div>
         <div className="b2b-drawer__body">
-          <div className="b2b-input-wrap" style={{ marginBottom: 12 }}>
-            <Search size={14} className="lead" aria-hidden="true" />
-            <input
-              autoFocus
-              className="b2b-field b2b-field--addon"
-              placeholder={t('builder.preview.search')}
-              value={query}
-              onChange={(event): void => setQuery(event.target.value)}
-            />
-          </div>
+          {/* Issue #1492 (CAT-17): the kit's search box — named, not only a
+              placeholder (WCAG 4.1.2) — instead of a bare legacy field. */}
+          <ListToolbarSearch
+            autoFocus
+            className="mb-3 sm:max-w-none"
+            label={t('builder.preview.search')}
+            placeholder={t('builder.preview.search')}
+            value={query}
+            onValueChange={setQuery}
+          />
           {error !== null ? (
-            <p className="b2b-help text-destructive">{error}</p>
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           ) : loading ? (
-            <p className="b2b-help">{t('builder.preview.loading')}</p>
+            <p role="status" className="m-0 text-sm text-muted-foreground">
+              {t('builder.preview.loading')}
+            </p>
           ) : (
             <ul className="m-0 max-h-96 list-none overflow-auto p-0">
               {candidates.slice(0, 100).map((product) => (
@@ -227,14 +233,14 @@ function ProductPickerDrawer(props: {
                       props.onPick({
                         productId: product.id,
                         sku: product.sku,
-                        name: pickName(product.name, product.sku),
+                        name: productLabel(product.name, product.sku),
                       })
                     }
                   >
                     <span className="block text-sm font-medium">
-                      {pickName(product.name, product.sku)}
+                      {productLabel(product.name, product.sku)}
                     </span>
-                    <span className="b2b-mono block text-xs text-muted-foreground">
+                    <span className="block font-mono text-xs text-muted-foreground">
                       {product.sku}
                     </span>
                   </button>

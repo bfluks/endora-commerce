@@ -1,12 +1,20 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
+  EntityExtensionReadOptions,
+  QuoteRequestAmount,
   QuoteRequestLineRecord,
   QuoteRequestReadPort,
   QuoteRequestRecord,
+  SupportedLanguage,
+  WithEntityExtensions,
 } from '@endora-commerce/contracts';
-import { OPEN_QUOTE_REQUEST_STATUSES } from '@endora-commerce/contracts';
+import { OPEN_QUOTE_REQUEST_STATUSES, isUuidShape } from '@endora-commerce/contracts';
+import { lazyEntityExtensionReads, type EntityExtensionReads } from '@endora-commerce/platform/kernel';
 import { QuoteRequest } from '../entities/quote-request.entity.js';
 import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
+import { loadArrangedQuoteLines, toLineGroup } from './line-order.js';
+import { quoteRequestAmount } from './quote-amount.js';
+import { quoteRequestStatusName, type QuoteRequestsTranslate } from './quote-request-status-name.js';
 
 /**
  * The row-level read model `quote_requests` publishes (feature 075, Phase P).
@@ -18,13 +26,36 @@ import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
  *
  * The full customer-facing projection stays `RfqService` — this is the row,
  * for the callers that only need to count or cross-reference one.
+ *
+ * `findById`, `findByBusinessId` and `findByIds` take `options.include`
+ * (`specs/187-side-table-extensions/` FR-058): the quotes found under the
+ * caller's scope, on the entity manager that found them, are handed to the
+ * platform's `entityExtensionReads`. Without `include` nothing is resolved.
  */
-export class QuoteRequestReadService implements QuoteRequestReadPort {
-  constructor(private readonly emFactory: () => EntityManager) {}
+const HOST = 'quote_requests.QuoteRequest';
 
-  async findById(id: string): Promise<QuoteRequestRecord | null> {
-    const quote = await this.emFactory().findOne(QuoteRequest, { id });
-    return quote ? toQuoteRequestRecord(quote) : null;
+export class QuoteRequestReadService implements QuoteRequestReadPort {
+  constructor(
+    private readonly emFactory: () => EntityManager,
+    /** This module's own bundle — the wording {@link statusName} answers in. */
+    private readonly translate: QuoteRequestsTranslate,
+    /** The kernel's `entityExtensionReads`; absent in a hand-built service, which has no loader to offer. */
+    private readonly extensionReads: EntityExtensionReads = lazyEntityExtensionReads(() => undefined),
+  ) {}
+
+  /** Issue #455 — a status by this module's own name for it, in `language`. */
+  statusName(status: string, language: SupportedLanguage): Promise<string> {
+    return quoteRequestStatusName(this.translate, status, language);
+  }
+
+  async findById(
+    id: string,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord> | null> {
+    if (!isUuidShape(id)) return null;
+    const em = this.emFactory();
+    const quote = await em.findOne(QuoteRequest, { id });
+    return quote ? this.#attachOne(toQuoteRequestRecord(quote), options, em) : null;
   }
 
   /**
@@ -32,9 +63,13 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
    * passes one) and the column carries a unique index, so `findOne` is the
    * whole of the lookup.
    */
-  async findByBusinessId(businessId: string): Promise<QuoteRequestRecord | null> {
-    const quote = await this.emFactory().findOne(QuoteRequest, { businessId });
-    return quote ? toQuoteRequestRecord(quote) : null;
+  async findByBusinessId(
+    businessId: string,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord> | null> {
+    const em = this.emFactory();
+    const quote = await em.findOne(QuoteRequest, { businessId });
+    return quote ? this.#attachOne(toQuoteRequestRecord(quote), options, em) : null;
   }
 
   async listOpenForOrganizations(
@@ -61,14 +96,15 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
    * the cart price in `desiredUnitPrice` (FR-008) — it is the line's reference
    * now, so a reader that used to find it there reads `referenceUnitPrice`.
    * Both are `null` when the line stores no reference.
+   *
+   * Feature 159 (FR-011, FR-087) — the lines in display order, each with its
+   * `position` and its `group` (`null` when ungrouped); an ungrouped quote
+   * keeps its insertion order.
    */
   async listItems(quoteRequestId: string): Promise<QuoteRequestLineRecord[]> {
-    const items = await this.emFactory().find(
-      QuoteRequestItem,
-      { quoteRequestId },
-      { orderBy: { createdAt: 'asc' } },
-    );
-    return items.map((item) => ({
+    const arranged = await loadArrangedQuoteLines(this.emFactory(), quoteRequestId);
+    const groupById = new Map(arranged.groups.map((group) => [group.id, toLineGroup(group)]));
+    return arranged.lines.map((item) => ({
       id: item.id,
       quoteRequestId: item.quoteRequestId,
       productId: item.productId,
@@ -77,12 +113,74 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
       quantity: item.quantity,
       packagingUnitName: item.packagingUnitName ?? null,
       packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
+      packagingUnitId: item.packagingUnitId ?? null,
       lineCurrency: item.lineCurrency,
       agreedUnitPrice: item.agreedUnitPrice ?? null,
       desiredUnitPrice: item.desiredUnitPrice ?? null,
       referenceUnitPrice: item.referenceUnitPrice ?? null,
       referenceCurrency: item.referenceCurrency ?? null,
+      position: item.position,
+      group: (item.groupId ? groupById.get(item.groupId) : undefined) ?? null,
     }));
+  }
+
+  /**
+   * Issue #456 — the one amount rule (`quote-amount.ts`), so that `crm` and
+   * `projects` stop valuing `listItems` themselves. The quote is looked up
+   * first, under the caller's scope, so a quote `findById` would not answer is
+   * not valued either.
+   */
+  async amountOf(quoteRequestId: string): Promise<QuoteRequestAmount | null> {
+    if (!isUuidShape(quoteRequestId)) return null;
+    const em = this.emFactory();
+    const quote = await em.findOne(QuoteRequest, { id: quoteRequestId });
+    if (!quote) return null;
+    return quoteRequestAmount(await em.find(QuoteRequestItem, { quoteRequestId: quote.id }));
+  }
+
+  /**
+   * Issue #457 — {@link findById} for many ids in one statement, under the
+   * same scoped EntityManager, so an out-of-scope quote is absent exactly as
+   * `findById` answers `null` for it.
+   */
+  async findByIds(
+    ids: readonly string[],
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord>[]> {
+    const candidates = [...new Set(ids.filter(isUuidShape))];
+    if (candidates.length === 0) return [];
+    const em = this.emFactory();
+    const quotes = await em.find(QuoteRequest, { id: { $in: candidates } });
+    return [...(await this.extensionReads.attach(HOST, quotes.map(toQuoteRequestRecord), options, em))];
+  }
+
+  async #attachOne(
+    record: QuoteRequestRecord,
+    options: EntityExtensionReadOptions | undefined,
+    em: EntityManager,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord>> {
+    const [attached] = await this.extensionReads.attach(HOST, [record], options, em);
+    return attached ?? record;
+  }
+
+  /**
+   * Issue #457 — {@link amountOf} for many quotes in two statements: the
+   * quotes under the caller's scope, then the lines of the ones found. A quote
+   * not found has no entry, as `amountOf` answers `null` for it.
+   */
+  async amountsOf(quoteRequestIds: readonly string[]): Promise<Map<string, QuoteRequestAmount>> {
+    const candidates = [...new Set(quoteRequestIds.filter(isUuidShape))];
+    const amounts = new Map<string, QuoteRequestAmount>();
+    if (candidates.length === 0) return amounts;
+    const em = this.emFactory();
+    const quotes = await em.find(QuoteRequest, { id: { $in: candidates } });
+    if (quotes.length === 0) return amounts;
+    const linesByQuote = new Map<string, QuoteRequestItem[]>(quotes.map((quote) => [quote.id, []]));
+    for (const item of await em.find(QuoteRequestItem, { quoteRequestId: { $in: [...linesByQuote.keys()] } })) {
+      linesByQuote.get(item.quoteRequestId)?.push(item);
+    }
+    for (const [id, lines] of linesByQuote) amounts.set(id, quoteRequestAmount(lines));
+    return amounts;
   }
 }
 
@@ -109,6 +207,7 @@ export function toQuoteRequestRecord(quote: QuoteRequest): QuoteRequestRecord {
     expiresAt: quote.expiresAt ?? null,
     convertedOrderId: quote.convertedOrderId ?? null,
     customFieldValues: quote.customFieldValues ?? {},
+    sharedWithCustomer: quote.sharedWithCustomer,
     version: quote.version,
     createdAt: quote.createdAt,
     updatedAt: quote.updatedAt,

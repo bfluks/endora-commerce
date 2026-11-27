@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { AssetUploader } from '@endora-commerce/admin-kit/components';
+import { AssetUploader, useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import { toAbsoluteAssetUrl } from '@endora-commerce/admin-kit/lib';
 import { FolderTree } from '../components/FolderTree.js';
 import { AssetDetailDrawer } from '../components/AssetDetailDrawer.js';
@@ -17,6 +17,8 @@ import {
 
 export function LibraryPage(): ReactNode {
   const t = useTranslation('assets_library');
+  const tc = useTranslation('core');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [folders, setFolders] = useState<AssetFolder[]>([]);
   const [folderId, setFolderId] = useState<string | null>(null); // null = Unsorted (root)
   const [items, setItems] = useState<AssetSummary[]>([]);
@@ -133,9 +135,25 @@ export function LibraryPage(): ReactNode {
 
   const onDeleteFolder = async (id: string): Promise<void> => {
     try {
-      const choice = window.confirm(
-        t('folders.deleteConfirm'),
-      );
+      // Name the files whose shareable links live in this folder (owner ruling
+      // S4). The contents move to the parent, links and all; a count that
+      // cannot be read leaves the plain confirmation.
+      let permalinked = 0;
+      try {
+        permalinked = await assetsLibraryClient.countFolderPermalinks(id);
+      } catch {
+        permalinked = 0;
+      }
+      const choice = await confirm({
+        message: (
+          <>
+            <p>{t('folders.deleteConfirm')}</p>
+            {permalinked > 0 ? <p className="mt-2">{t('folders.permalinkNotice', { count: permalinked })}</p> : null}
+          </>
+        ),
+        confirmLabel: tc('common.action.delete'),
+        destructive: true,
+      });
       if (!choice) return;
       const out = await assetsLibraryClient.deleteFolder(id, {
         ifNonEmpty: 'moveContentsToParent',
@@ -151,10 +169,7 @@ export function LibraryPage(): ReactNode {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t('page.title')}
-        description={t('page.description')}
-      />
+      <PageHeader title={t('page.title')} />
 
       {error ? (
         <Alert variant="destructive">
@@ -162,7 +177,7 @@ export function LibraryPage(): ReactNode {
         </Alert>
       ) : null}
       {info ? (
-        <Alert>
+        <Alert live="polite">
           <AlertDescription>{info}</AlertDescription>
         </Alert>
       ) : null}
@@ -171,7 +186,7 @@ export function LibraryPage(): ReactNode {
         {/* Folder tree */}
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle className="text-base">{t('folders.title')}</CardTitle>
+            <CardTitle>{t('folders.title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <FolderTree
@@ -188,7 +203,7 @@ export function LibraryPage(): ReactNode {
         {/* Grid */}
         <Card className={selected ? 'col-span-6' : 'col-span-9'}>
           <CardHeader className="flex flex-row items-center justify-between gap-2">
-            <CardTitle className="text-base">{t('assets.title')}</CardTitle>
+            <CardTitle>{t('assets.title')}</CardTitle>
             <div className="flex items-center gap-2">
               <Input
                 value={q}
@@ -270,6 +285,7 @@ export function LibraryPage(): ReactNode {
         {selected ? (
           <div className="col-span-3">
             <AssetDetailDrawer
+              key={selected}
               assetId={selected}
               onChanged={(): void => {
                 void loadItems();
@@ -279,6 +295,7 @@ export function LibraryPage(): ReactNode {
           </div>
         ) : null}
       </div>
+      {confirmDialog}
     </div>
   );
 }

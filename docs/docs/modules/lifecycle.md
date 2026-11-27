@@ -1,9 +1,9 @@
 ---
-title: Module Lifecycle
+title: Module lifecycle
 description: CLI-driven install / uninstall / enable / disable / status for every backend module + dependency validation + first-boot reconciliation
 ---
 
-# Module Lifecycle
+# Module lifecycle
 
 Platform-internal subsystem that turns every backend module into a first-class lifecycle citizen: declarative manifest, dependency graph, install / uninstall / enable / disable / status, persisted registry, transactional install with migration rollback, and a per-process enabled-set cache — refreshed over Redis pub/sub — that gates HTTP routes, BullMQ workers, and event subscribers without restarting the process.
 
@@ -27,20 +27,8 @@ whoever runs the business, and neither overwrites the other.
 
 ## CLI commands
 
-Every command is wired in `backend/package.json`:
-
-```bash
-pnpm --filter backend run module:install <id> [--dry-run] [--json]
-pnpm --filter backend run module:uninstall <id> [--hard] [--force] [--json]
-pnpm --filter backend run module:enable <id> [--json]
-pnpm --filter backend run module:disable <id> [--cascade] [--json]
-pnpm --filter backend run module:status [<id>] [--filter=<state>] [--json]
-```
-
-### In an instance
-
-An instance — the tree `npx create-endora-commerce` writes — declares the same five commands at
-its root, and they take the same arguments and return the same exit codes:
+An instance — the tree `npx create-endora-commerce` writes — declares the five commands at its
+root. Run them there:
 
 ```bash
 pnpm run module:install <id> [--dry-run] [--json]     # or: pnpm run module:install --all
@@ -50,11 +38,33 @@ pnpm run module:disable <id> [--cascade] [--json]
 pnpm run module:status [<id>] [--filter=<state>] [--json]
 ```
 
+In a checkout of the Endora Commerce repository the same five are wired in
+`backend/package.json`, take the same arguments and return the same exit codes:
+
+```bash
+pnpm --filter backend run module:install <id> [--dry-run] [--json]
+pnpm --filter backend run module:uninstall <id> [--hard] [--force] [--json]
+pnpm --filter backend run module:enable <id> [--json]
+pnpm --filter backend run module:disable <id> [--cascade] [--json]
+pnpm --filter backend run module:status [<id>] [--filter=<state>] [--json]
+```
+
+The repository form does nothing in an instance: the backend member there has another name, so
+pnpm prints `No projects matched the filters` and exits `0` without running the command.
+
+`module:status <id>` lists the module's migrations under its row: each by class name, with its
+origin (`core`, `external` for an installed package, `overlay` for a deployment's overlay module,
+`generated`) and whether this database has applied it or it is still pending. With `--json` every
+row carries the same list as `migrations`.
+
+### In an instance
+
 They cover the module packages the instance installed and its own overlay modules under
 `apps/<deployment>/modules/` alike. A running API or worker hears a change made by one of these
-commands without a restart. An overlay module that ships a `migrations/` or `entities/` directory
-stops every one of them before a database is opened — see
-[Overlay pattern](../architecture/overlay-pattern.md#fail-closed-guards).
+commands without a restart. An overlay module that owns tables has the lifecycle a core module
+has: `migrate` and `module:install` apply its migrations, `module:status <id>` lists them with
+origin `overlay`, switching it off or a soft uninstall leaves its tables and rows alone, and
+`module:uninstall <id> --hard --force` reverts its migrations, newest first.
 
 On releases up to and including `0.100.2`, `module:enable`, `module:disable` and a soft
 `module:uninstall` printed success in an instance and changed nothing, and a hard uninstall was
@@ -98,7 +108,7 @@ import { defineModuleManifest, defineModuleSettingsManifest } from '@endora-comm
 export const manifest = defineModuleManifest({
   id: 'pricing',
   name: 'Pricing',
-  description: 'Customer-group pricing with brackets and display modes.',
+  description: 'Price books and price display modes.',
   version: '1.0.0',
   dependencies: ['settings', 'sales_channels'],
   settings: defineModuleSettingsManifest({
@@ -232,7 +242,7 @@ export const manifest = defineModuleManifest({
 
 export async function installHook({ em, log }) {
   log.info('coupons: seeding default policy presets');
-  // await em.persistAndFlush(...);
+  // await em.persist(...).flush();
 }
 
 export async function uninstallHook({ em, hard, log }) {
@@ -271,7 +281,11 @@ pnpm --filter backend run composer:generate
 
 The module package's own `package.json` is generated too, by a second command, and its
 output changes what the workspace declares — so run an install in the same breath and
-commit `pnpm-lock.yaml` with it:
+commit `pnpm-lock.yaml` with it. The same command declares the new package in
+`backend/package.json` (and, when it ships `src/admin/`, in `admin/package.json`) — do not
+add those entries by hand. Build the package before running it a second time: once a
+package has a `package.json`, `manifests:generate` and `manifests:check` refuse it until
+its `dist` exists.
 
 ```bash
 pnpm --filter backend run manifests:generate

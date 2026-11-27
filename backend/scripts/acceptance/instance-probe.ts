@@ -107,6 +107,7 @@ function classifyError(error: unknown): never {
 
 async function phaseSchema(): Promise<AssertionResult[]> {
   const { initOrm, closeOrm } = await import('../../src/db/index.js');
+  const { migrateUpVerified } = await import('@endora-commerce/platform/db');
   const results: AssertionResult[] = [];
 
   let orm: Awaited<ReturnType<typeof initOrm>>;
@@ -117,9 +118,10 @@ async function phaseSchema(): Promise<AssertionResult[]> {
   }
 
   try {
-    const migrator = orm.getMigrator();
+    // As the instance's own migrate entry does (`specs/178-extensible-columns/`
+    // FR-025): the verified run, never a bare `migrator.up()`.
     try {
-      await migrator.up();
+      await migrateUpVerified(orm);
     } catch (error) {
       classifyError(error);
     }
@@ -199,7 +201,10 @@ async function phaseSchema(): Promise<AssertionResult[]> {
       }
       const entity = declared[0] as new () => object;
       const metadata = orm.getMetadata();
-      if (!metadata.has(entity.name)) {
+      // MikroORM 7 (#1866) keys metadata by class, and `has(name)` asks the
+      // class-keyed map, so a string answers `false` whatever is registered;
+      // `find` takes the class and also reads the class-name index.
+      if (metadata.find(entity) === undefined) {
         a4 = {
           id: 'A4',
           title: 'the ORM can query the package entity',
@@ -211,7 +216,13 @@ async function phaseSchema(): Promise<AssertionResult[]> {
             'and compilation removes that probe',
         };
       } else {
-        await orm.em.fork().find(entity as never, {});
+        // Widened through the sanctioned escape hatch: the entity is
+        // `@OrgScoped()`, so an unscoped read is refused by design (#1849), and
+        // this probe has no tenant of its own to scope one to.
+        const { withSystemScope } = await import('@endora-commerce/platform/tenancy');
+        await withSystemScope('acceptance: A4 reads the package entity', () =>
+          orm.em.fork().find(entity as never, {}),
+        );
         a4 = {
           id: 'A4',
           title: 'the ORM can query the package entity',
@@ -582,6 +593,135 @@ async function phaseGate(active: boolean): Promise<AssertionResult[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Phase `command-hook` — A11
+// ---------------------------------------------------------------------------
+
+/** A11's literals, spelled here and in the package's `./backend`, which share nothing else. */
+const HOOK_MARKER = 'ACCEPTANCE-HOOK ';
+const HOOK_REFUSAL = 'ACCEPTANCE_PROBE_REFUSED';
+
+/**
+ * An installed package takes part in another package's write through a
+ * command hook (`specs/176-command-hooks-outbox/` FR-025).
+ *
+ * The package hooks `organizations`' `organization.register` — the anonymous
+ * storefront registration, which this process can call without an operator's
+ * session — and the phase registers twice through the composed application:
+ *
+ *  - a marked name: the registration answers 201 and the package's own row,
+ *    written by its hook, exists for the new Organization — committed in the
+ *    registration's transaction;
+ *  - a marked name carrying `VETO`: the answer is the package's own
+ *    `409 ACCEPTANCE_PROBE_REFUSED`, and neither the Organization nor the
+ *    package's row exists — the veto rolled the whole write back.
+ *
+ * Composition itself is part of the claim: it succeeds only because the
+ * package's manifest depends on `organizations` and `organizations` declares
+ * the action hookable, so a refusal there leaves through `phaseError`.
+ */
+async function phaseCommandHook(): Promise<AssertionResult[]> {
+  const title = "an installed package's command hook runs inside another package's write";
+  const refuses = 'an instance that can extend a core write only by forking it';
+  const { composeApp } = await import('../../src/composition.js');
+  const { deploymentRoot } = await import('../../src/overlay/overlay-roots.js');
+  const { buildServer } = await import('@endora-commerce/platform/composition');
+  const { enterSystemScope } = await import('@endora-commerce/platform/kernel');
+
+  let composition: Awaited<ReturnType<typeof composeApp>>;
+  try {
+    composition = await composeApp({ deploymentRoot: deploymentRoot() });
+  } catch (error) {
+    classifyError(error);
+  }
+  try {
+    const app = await buildServer({
+      sessionCookieSecret: 'acceptance-secret',
+      openApi: { title: 'Acceptance probe', version: '0.0.0', serverUrl: 'http://localhost:3001' },
+      modules: composition.modules,
+      errorEnvelope: composition.errorEnvelope,
+      apiInterceptors: composition.apiInterceptors,
+      disableRateLimit: true,
+    });
+    try {
+      const stamp = Date.now().toString().slice(-9);
+      const registration = (suffix: string, taxId: string): Record<string, unknown> => ({
+        organization: {
+          name: `${HOOK_MARKER}${suffix} ${stamp}`,
+          taxId,
+          registeredAddress: { street: 'ul. Testowa 1', city: 'Warszawa', postalCode: '00-001', country: 'PL' },
+        },
+        firstUser: {
+          email: `acceptance-hook-${suffix.toLowerCase()}-${stamp}@example.test`,
+          password: 'a-very-strong-password-123!',
+          firstName: 'Ada',
+          lastName: 'Probe',
+        },
+        acceptedTermsVersion: '1.0.0',
+      });
+      const rowsFor = async (taxId: string): Promise<{ organizations: number; rows: number }> =>
+        enterSystemScope(
+          'acceptance: read the command-hook outcome',
+          async () => {
+            const em = composition.orm.em.fork();
+            const organizations = (await em.execute(
+              'select id from organizations where tax_id = ?',
+              [taxId],
+            )) as Array<{ id: string }>;
+            const rows = organizations[0]
+              ? ((await em.execute(`select count(*)::int as n from ${TABLE} where organization_id = ?`, [
+                  organizations[0].id,
+                ])) as Array<{ n: number }>)
+              : [{ n: 0 }];
+            return { organizations: organizations.length, rows: rows[0]?.n ?? 0 };
+          },
+          { entryPoint: 'cli' },
+        );
+
+      const keptTaxId = `PL${stamp}1`;
+      const kept = await app.inject({
+        method: 'POST',
+        url: '/api/v1/organizations/register',
+        payload: registration('KEPT', keptTaxId),
+      });
+      const keptState = await rowsFor(keptTaxId);
+
+      const vetoTaxId = `PL${stamp}2`;
+      const vetoed = await app.inject({
+        method: 'POST',
+        url: '/api/v1/organizations/register',
+        payload: registration('VETO', vetoTaxId),
+      });
+      const vetoState = await rowsFor(vetoTaxId);
+
+      const ran = kept.statusCode === 201 && keptState.organizations === 1 && keptState.rows === 1;
+      const vetoWorked =
+        vetoed.statusCode === 409 &&
+        vetoed.body.includes(HOOK_REFUSAL) &&
+        vetoState.organizations === 0 &&
+        vetoState.rows === 0;
+      return [
+        {
+          id: 'A11',
+          title,
+          refuses,
+          status: ran && vetoWorked ? 'pass' : 'fail',
+          detail:
+            `a marked registration answered ${kept.statusCode} and left ${keptState.organizations} ` +
+            `organization(s) and ${keptState.rows} package row(s); a vetoed one answered ` +
+            `${vetoed.statusCode} (${vetoed.body.slice(0, 160)}) and left ${vetoState.organizations} ` +
+            `organization(s) and ${vetoState.rows} package row(s)` +
+            (kept.statusCode === 201 ? '' : `; the first answer was ${kept.body.slice(0, 200)}`),
+        },
+      ];
+    } finally {
+      await app.close();
+    }
+  } finally {
+    await composition.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase `uninstall` — A7
 // ---------------------------------------------------------------------------
 
@@ -886,6 +1026,9 @@ async function main(): Promise<void> {
         break;
       case 'overlay-decoration':
         results = await phaseOverlayDecoration();
+        break;
+      case 'command-hook':
+        results = await phaseCommandHook();
         break;
       case 'uninstall':
         results = await phaseUninstall();

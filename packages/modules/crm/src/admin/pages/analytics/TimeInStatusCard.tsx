@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { OpportunityTimeInStatusRow, OpportunityWorkflowStatus } from '@endora-commerce/contracts';
-import { EChart, type EChartProps } from '@endora-commerce/admin-kit/components';
+import { EChart, type EChartProps, FigureCard, prefersReducedMotion, useChartColors, useFigure } from '@endora-commerce/admin-kit/components';
 import { statusBadgeStyle } from '@endora-commerce/admin-kit/lib';
 import {
   Badge,
@@ -13,12 +13,10 @@ import {
   TableRow,
 } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmAnalyticsApi, type AnalyticsFilters } from '../../analytics-api.js';
+import { crmAnalyticsApi, type AnalyticsAnswer, type AnalyticsFilters } from '../../analytics-api.js';
 import { daysOf, durationLabel } from '../../lib/analytics-format.js';
 import { workflowStatusLabel } from '../../lib/labels.js';
-import { prefersReducedMotion, useChartColors } from '../../lib/use-chart-colors.js';
-import { useFigure } from '../../lib/use-figure.js';
-import { FigureCard } from './FigureCard.js';
+import { useReportedTimeZone } from '../../lib/reporting-time-zone.js';
 
 export interface TimeInStatusCardProps {
   filters: AnalyticsFilters | null;
@@ -42,11 +40,11 @@ export function TimeInStatusCard({ filters, statuses }: TimeInStatusCardProps): 
   const load = useMemo(
     () =>
       filters
-        ? (): Promise<OpportunityTimeInStatusRow[]> => crmAnalyticsApi.timeInStatus(filters, selected)
+        ? (): Promise<AnalyticsAnswer<OpportunityTimeInStatusRow[]>> => crmAnalyticsApi.timeInStatus(filters, selected)
         : null,
     [filters, selected],
   );
-  const figure = useFigure(load);
+  const figure = useFigure(useReportedTimeZone(load));
 
   const byCode = useMemo(
     () => new Map((statuses ?? []).map((status) => [status.code, status])),
@@ -103,6 +101,7 @@ export function TimeInStatusCard({ filters, statuses }: TimeInStatusCardProps): 
 
   return (
     <FigureCard
+      errorFallback={t('analytics.error.load')}
       title={t('analytics.status.title')}
       description={t('analytics.status.description')}
       figure={figure}

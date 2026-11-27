@@ -122,8 +122,8 @@ znaki szesnastkowe dekodują się do 48 bajtów, a nie 32).
 | --- | --- | --- | --- |
 | `SESSION_COOKIE_SECRET` | `openssl rand -hex 32` | Backend i worker kończą działanie przy starcie z komunikatem `SESSION_COOKIE_SECRET must be set in production`. | Akceptowany jest każdy niepusty ciąg, więc wartość zastępcza działa i podpisuje ciasteczka publicznie znanym kluczem. |
 | `NEWSLETTER_TOKEN_SECRET` | `openssl rand -base64 32` | Działa. Linki potwierdzenia i wypisania z newslettera są podpisywane kluczem `SESSION_COOKIE_SECRET` (`packages/platform/src/composition/newsletter-token-secret.ts`), więc zmiana klucza sesji unieważnia każdy link, który wciąż czeka w skrzynce odbiorcy. Ustaw go, aby oba klucze można było zmieniać niezależnie. | Jako klucz podpisujący akceptowany jest każdy niepusty ciąg. |
-| `SETTINGS_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (musi dekodować się do 32 bajtów) | Backend startuje i zapisuje w logu `[settings] SETTINGS_SECRET_ENCRYPTION_KEY is not set`. Sekretnych ustawień i sekretnych pól danych uwierzytelniających (np. tokenu API zapisywanego przez moduł) nie da się zapisać ani odczytać, dopóki klucz nie zostanie ustawiony, a backend uruchomiony ponownie. | Nie jest sprawdzany przy starcie. Backend uruchamia się **bez ostrzeżenia**, a potem każdy zapis sekretnego ustawienia kończy się błędem `SETTINGS_SECRET_ENCRYPTION_KEY is misconfigured — it must decode to 32 bytes (got N)`, zgłaszanym przez moduł `credentials`. |
-| `MFA_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (musi dekodować się do 32 bajtów) | Moduł `mfa` udostępnia swoje ekrany, ale odrzuca każdą rejestrację drugiego składnika, więc żaden administrator nie włączy 2FA (D4). | Gdy `mfa` jest zainstalowany, backend nie startuje: `MFA_SECRET_ENCRYPTION_KEY must decode to 32 bytes (got N)`. |
+| `SETTINGS_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (musi dekodować się do 32 bajtów) | Backend startuje i zapisuje w logu `[settings] SETTINGS_SECRET_ENCRYPTION_KEY is not set`. Sekretnych ustawień i sekretnych pól danych uwierzytelniających (np. tokenu API zapisywanego przez moduł) nie da się zapisać ani odczytać, dopóki klucz nie zostanie ustawiony, a backend uruchomiony ponownie. Sekretne ustawienie, które wciąż przechowuje wartość jawnym tekstem (zapisaną, zanim jego typ zmienił się na sekretny), przy każdym starcie dostaje też ostrzeżenie z jego kodem i informacją, że klucza brakuje; wartość zostaje zaszyfrowana przy pierwszym starcie z poprawnym kluczem. | Nie jest sprawdzany przy starcie, gdy żadne sekretne ustawienie nie przechowuje jawnego tekstu: backend uruchamia się wtedy **bez ostrzeżenia**. Gdy takie ustawienie istnieje, każdy start zapisuje w logu ostrzeżenie z kodem każdego z nich i informacją, że klucz jest niepoprawny. W obu przypadkach każdy zapis sekretnego ustawienia kończy się błędem `SETTINGS_SECRET_ENCRYPTION_KEY is misconfigured — it must decode to 32 bytes (got N)`, zgłaszanym przez moduł `credentials`. |
+| `MFA_SECRET_ENCRYPTION_KEY` | `openssl rand -base64 32` (musi dekodować się do 32 bajtów) | Moduł `mfa` udostępnia swoje ekrany, ale odrzuca każdą rejestrację drugiego składnika, więc żaden administrator nie włączy weryfikacji dwuetapowej (D4). Włączenie `mfa.admin.totp_enforced` jest odrzucane z `409 MFA_ENFORCEMENT_UNAVAILABLE`; jeśli jest już włączone, nie jest stosowane: **Ustawienia** pokazują pod nim *Nie obowiązuje: brak klucza szyfrowania*, a każdy start zapisuje o tym błąd w logu. To samo dotyczy wymagań wobec klientów: włączenie `mfa.storefront.totp_enforced` albo polityki organizacji jest odrzucane z tym samym kodem, a każde z nich, jeśli jest już włączone, nie jest stosowane. Drugi składnik nie jest w ogóle wymagany: wymóg w roli również nie jest stosowany (mówi o tym ekran ról), a konta zarejestrowane, gdy klucz był ustawiony, logują się bez kodu. | Gdy `mfa` jest zainstalowany, backend nie startuje: `MFA_SECRET_ENCRYPTION_KEY must decode to 32 bytes (got N)`. |
 | `ASSETS_LIBRARY_HMAC_KEY` | `openssl rand -hex 32` | Backend startuje. Każde żądanie, które podpisuje lub sprawdza link do prywatnego pliku, kończy się błędem `ASSETS_LIBRARY_HMAC_KEY is unset`. | Wartość zaczynająca się od `change-me` — wartość zastępcza ze starszych plików przykładowych — jest odrzucana przy pierwszym linku do prywatnego pliku, tak samo jak brak klucza: `ASSETS_LIBRARY_HMAC_KEY is still the placeholder an env example carried`. Każda inna wartość, która nie jest szesnastkowa, jest używana jako surowe bajty i akceptowana. |
 | `MEILI_MASTER_KEY` | `openssl rand -base64 32` | `deploy/compose.prod.yml` uruchamia Meilisearch z `MEILI_ENV: production`, który bez klucza głównego odmawia startu. Backend odczytuje tę samą wartość jako `MEILISEARCH_API_KEY`. | Meilisearch akceptuje każdy klucz o długości co najmniej 16 bajtów, więc wartość zastępcza daje wyszukiwarce publicznie znany klucz. |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 32` (szesnastkowo, nie base64: wartość trafia bez kodowania do `DATABASE_URL`, gdzie `/` albo `+` psuje adres) | `deploy/compose.prod.yml` przyjmuje wtedy `b2b` (`${POSTGRES_PASSWORD:-b2b}`). | Wartość zastępcza działa i jest publicznie znana. |
@@ -165,7 +165,9 @@ nich nie dawał żadnego błędu. Obie sprawy zostały od tego czasu naprawione,
   analityczne i marketingowe). Gdy nie jest ustawiony, odświeżanie po cichu nic nie robi, a endpoint
   storefrontu odpowiada 401: zmiany treści nie pojawiają się, dopóki pamięć podręczna sama nie
   wygaśnie. Zmienna jest teraz w `deploy/.env.prod.example` i trafia do **obu** kontenerów —
-  backendu i storefrontu — z tą samą wartością, bo inaczej problem się nie zamyka.
+  backendu i storefrontu — z tą samą wartością, bo inaczej problem się nie zamyka. Dwie różne
+  wartości backend zapisuje w logu jako `[storefront-revalidate] refused` ze statusem `401`,
+  najwyżej raz na minutę.
 
 **Do zrobienia (inżynier).** Wygeneruj `REVALIDATE_SECRET` (`openssl rand -hex 32`) i wpisz go do
 `deploy/.env`. Upewnij się, że `API_DOMAIN` to prawdziwa publiczna domena API.
@@ -175,6 +177,19 @@ pokazuje publiczny adres API, a nie `localhost`. Ekran konfiguracji bramki płat
 administracyjnym pokazuje adres powiadomień w tej domenie i to ten adres jest zarejestrowany w
 portalu operatora płatności. Opublikuj zmianę kategorii i sprawdź, że od razu pojawia się w
 storefroncie.
+
+**Adres panelu administracyjnego, `ADMIN_BASE_URL`.** To bezwzględny adres `http`/`https`, pod
+którym działa panel administracyjny, ze ścieżką, jeśli ją ma (`https://shop.example.com/admin`);
+z niego budowany jest link do panelu w każdym e-mailu, który platforma wysyła administratorowi.
+`compose.prod.yml` wyprowadza go z `ADMIN_DOMAIN`; `.env` instancji utworzonej przez CLI pyta o
+niego. Jest opcjonalny: bez niego te e-maile nie zawierają linku do panelu, a przekierowanie
+logowania do panelu nie zawiera bezwzględnego adresu (poza produkcją używany jest
+`http://localhost:3002`). Wartość ustawiona, która nie jest bezwzględnym adresem `http`/`https`
+z hostem albo zawiera zapytanie lub fragment (`admin.example.com`, `/admin`), **blokuje start**
+backendu w każdym środowisku, z błędem wskazującym zmienną i tę regułę
+(`packages/platform/src/kernel/admin-base-url.ts`, wywoływane na samym początku `composeApp()`). Upewnij się, że
+`ADMIN_DOMAIN` to prawdziwa domena panelu, albo ustaw `ADMIN_BASE_URL` na adres panelu, gdy panel
+działa gdzie indziej.
 
 ### B3. Skieruj `SMTP_URL` na prawdziwy serwer pocztowy
 
@@ -197,7 +212,7 @@ weryfikacyjny w prawdziwej skrzynce. Zrób to, zanim zrobi to pierwszy klient tw
 
 **Dlaczego.** Historię migracji przebudowano, a zamrożoną mapę nazw wycofano z tego samego powodu —
 braku wdrożenia produkcyjnego. Kolejność bloku sprzed `20260801T000000` celowo nie jest korygowana
-(`backend/src/db/migration-order.ts`), a cały łańcuch wykonywano dotąd tylko na bazach, które można
+(`packages/platform/src/db/migration-order.ts`), a cały łańcuch wykonywano dotąd tylko na bazach, które można
 było wyrzucić. Pierwsza baza produkcyjna to pierwsza, która musi zachować wiersze.
 
 **Do zrobienia (inżynier).** Dokładnie na tym commicie, który zostanie wdrożony, wykonaj cały
@@ -206,14 +221,22 @@ modułów — te same dwa kroki, w tej samej kolejności, które `deploy/compose
 `backend-migrate` i `backend-install`, zanim uruchomi się API:
 
 ```bash
+# W katalogu głównym instancji:
+DATABASE_URL=…/b2b_rehearsal pnpm run setup
+
+# W klonie repozytorium Endora Commerce:
 DATABASE_URL=…/b2b_rehearsal pnpm --filter backend run setup
 ```
 
-`setup` (w `backend/package.json`) to `db:fresh`, a po nim `module:install --all`. Samo `db:fresh`
-nie jest próbą wdrożenia: baza, której pierwszą czynnością po migracjach jest start aplikacji,
-nigdy nie wykonuje swoich hooków instalacyjnych. Nigdy nie uruchamiaj `db:fresh`, `setup` ani
-`db:reset` bez jawnego `DATABASE_URL`: bez tej zmiennej przebudowują własną bazę programisty, a
-`db:reset` dodatkowo wczytuje dane demonstracyjne.
+`setup` instancji to `generate` (jeśli instancja go ma), `build`, `migrate` i
+`module:install --all`; `setup` repozytorium (w `backend/package.json`) to `db:fresh`, a po nim
+`module:install --all`. Na pustej bazie oba oznaczają cały łańcuch migracji, a po nim wszystkie
+hooki instalacyjne. Same migracje (`migrate`, `db:fresh`) nie są próbą wdrożenia: baza, której
+pierwszą czynnością po migracjach jest start aplikacji, nigdy nie wykonuje swoich hooków
+instalacyjnych. Nigdy nie uruchamiaj `setup`, `db:fresh` ani `db:reset` bez jawnego
+`DATABASE_URL`: bez tej zmiennej działają na własnej bazie programisty — w klonie repozytorium
+`db:fresh`, `setup` i `db:reset` ją przebudowują, a `db:reset` dodatkowo wczytuje dane
+demonstracyjne.
 
 **Weryfikacja.** Oba kroki kończą się bez błędu kolejności i bez nieudanego hooka instalacyjnego, a
 powstały schemat odpowiada temu, co tworzą kontenery `backend-migrate` i `backend-install` na
@@ -265,7 +288,7 @@ walucie klienta.
 
 ## D. Tożsamość, role i uprawnienia
 
-### D1. Utwórz pierwszego administratora, a potem ogranicz jego użycie {#d1-utwórz-bootstrap-administratora-potem-go-zawęź}
+### D1. Utwórz pierwszego administratora, a potem ogranicz jego użycie {#d1-create-the-bootstrap-administrator-then-narrow-it}
 
 **Dlaczego.** Jedyna rola, którą platforma kiedykolwiek tworzy za ciebie, to `platform_admin`, z
 uprawnieniem wieloznacznym `*`. Wszystkie pozostałe role projektuje klient.
@@ -319,8 +342,9 @@ Te dwie i żadne inne. Kreator reguł promocji i kreator odbiorców PWA też pok
 każdy odczytuje ją przez **własny** endpoint modułu
 (`/api/v1/admin/promotions/rule-targets/customer-groups`,
 `/api/v1/admin/pwa/rule-targets/customer-groups`), chroniony własnym uprawnieniem odczytu modułu,
-więc to przyznanie ich nie dotyczy. Kreator reguł cenników był do niedawna wyjątkiem; teraz odczytuje
-listę z uprawnieniem `price_lists:read`, o czym mówi punkt D3.
+więc to przyznanie ich nie dotyczy. Tak samo jest z listą grup klientów w edytorze cenników: odczytuje
+ją `GET /api/v1/admin/price-books/targets/customer-groups` z uprawnieniem `price_lists:read`, o czym
+mówi punkt D3.
 
 To samo można zrobić przez API: `PUT /api/v1/admin/admin-roles/<code>` z pełną listą uprawnień
 roli, łącznie z nowymi kodami.
@@ -333,68 +357,96 @@ druga połowa dowodu.
 
 ### D3. Przyznaj `price_lists:read` i `price_lists:write`
 
-**Dlaczego.** Moduł `price_lists` nie deklarował kiedyś własnych uprawnień: wszystkie 25 jego tras
-administracyjnych było chronionych przez `catalog:write`. Rola z `catalog:write`, przyznanym po to,
-by ktoś mógł edytować opisy produktów, mogła też tworzyć, edytować i usuwać cenniki — czyli zmieniać,
-ile płacą klienci. Nikt nie wybrał takiej granicy; to skutek uboczny brakującej deklaracji. Moduł ma
-teraz `price_lists:read` i `price_lists:write` (`packages/modules/price_lists/src/manifest.ts`),
-przypisane według tego, co robi każda trasa, a nie hurtowo: odczyt listy, listy produktów, progów,
-nadpisań trybu wyświetlania cen i list wyboru celów reguł to `:read`; wszystko, co zapisuje dane, to
-`:write`.
+**Dlaczego.** Ceny mają własne uprawnienia, oddzielone od katalogu: rola z `catalog:write`, nadana
+po to, by ktoś edytował opisy produktów, nie może przez to zmieniać tego, ile płacą klienci. Moduł
+`price_lists` deklaruje `price_lists:read` i `price_lists:write`
+(manifest modułu `price_lists`, `src/manifest.ts`), podzielone według tego, co robi każda trasa:
+przeglądanie cenników, ich cen, cen bazowych, wyjaśnienia ceny i *Ustawień cenowych* oraz listy
+wyboru, z których korzystają, to `:read`; wszystko, co zapisuje — cenniki, wiersze, ceny bazowe,
+tryby prezentacji, ustawienie ceny katalogowej — to `:write`. API administracyjne to
+`/api/v1/admin/price-books/…`, a nadpisania trybów prezentacji są pod
+`/api/v1/admin/pricing/display-mode-overrides`.
 
-Ta sama zmiana zamknęła ostatnie działające zabezpieczenie w starym stylu:
-`GET /api/v1/admin/pricing/rule-targets/customer-groups` odpowiadał przy `catalog:write`, więc
-redaktor katalogu mógł wyświetlić grupy klientów. Teraz odpowiada przy `price_lists:read`, tak jak
-analogiczne endpointy w `promotions` i `pwa`.
+**Nic nie przyznaje tych kodów automatycznie**, a bramka zgodności, która akceptowałaby obok nich
+`catalog:write`, została zaproponowana i odrzucona, bo utrzymywałaby złe uprawnienie dłużej, niż
+było właściwe. Rola, która ma tylko `catalog:write`, nie ma więc **żadnego** dostępu do cen: znika
+pozycja **Cenniki** na pasku bocznym i akcje w `⌘K`, `/price-lists` odpowiada jak przy braku
+uprawnień, a zakładka **Pricing** w edytorze produktu nie pokazuje cen bazowych (panel odczytuje
+`GET /api/v1/admin/price-books/base-prices`, trasę `price_lists:read`). Rola z symbolem wieloznacznym
+`*` nie jest tym objęta.
 
-**Nic nie przyznaje nowych kodów automatycznie** — i tak jak w D2 zaproponowano i odrzucono
-zabezpieczenie przejściowe, które akceptowałoby obok nich `catalog:write`, bo utrzymywałoby błędne
-uprawnienie dłużej, niż było właściwe. Rola, która ma tylko `catalog:write`, nie ma więc **żadnego**
-dostępu do cen: znika pozycja na pasku bocznym, `/price-lists` zwraca 403, a zakładka **Pricing** w
-edytorze produktu pokazuje błąd zamiast powiązanych cenników (odczytuje
-`GET /api/v1/admin/products/:productId/price-lists`, które jest teraz trasą `price_lists:read`). Rola
-z uprawnieniem wieloznacznym `*` się nie zmienia.
-
-**Do zrobienia (operator).** Na `/admin-roles`, dla każdej roli innej niż `*`, jawnie zdecyduj o
-dostępie do cen:
+**Do zrobienia (operator).** Na `/admin-roles` dla każdej roli innej niż `*` zdecyduj świadomie o
+cenach:
 
 | Rola, której użytkownik… | potrzebuje |
 | --- | --- |
-| zarządza cennikami, progami, regułami albo nadpisaniami trybu wyświetlania cen (`/price-lists`, `/price-lists/:id`, `/price-lists/display-modes`) | `price_lists:read` i `price_lists:write` |
-| musi tylko zobaczyć, skąd bierze się cena — przegląda cenniki albo otwiera zakładkę **Pricing** produktu | `price_lists:read` |
-| pracuje na ekranie innego modułu, który oferuje wybór cennika lub waluty — te listy odczytują `GET /api/v1/admin/price-lists-engine` i `GET /api/v1/admin/pricing/rule-targets/currencies` | `price_lists:read`, oprócz własnych uprawnień tamtego modułu |
+| zarządza cennikami, cenami bazowymi albo trybami prezentacji (`/price-lists`, `/price-lists/new`, `/price-lists/:id`, `/price-lists/display-modes`, panel *Ceny bazowe* produktu) | `price_lists:read` + `price_lists:write` oraz `catalog:read`, by dodawać linie produktów przez przeglądarkę produktów (edytor ról pokazuje brak) |
+| potrzebuje tylko zrozumieć cenę z oferty — przegląda cenniki, otwiera wyjaśnienie ceny albo zakładkę **Pricing** produktu | `price_lists:read` |
+| wypełnia uzgodnione ceny na ekranach zapytań ofertowych w panelu, które wywołują `POST /api/v1/admin/price-books/resolve` | `price_lists:read`, oprócz własnych uprawnień tamtego modułu (`rfqs:handle` deklaruje je jako wymagane) |
 | edytuje treści katalogu i **nie może** zmieniać cen | żadnego — zostaw `catalog:write` bez zmian |
 
-Ostatni wiersz to sens całej zmiany: od teraz `catalog:write` oznacza treści katalogu i nic więcej.
-Przejrzyj każdą istniejącą rolę z tym uprawnieniem i zdecyduj, do którego z dwóch pierwszych wierszy
-— jeśli do któregokolwiek — również należy.
+Ostatni wiersz to sens podziału: `catalog:write` oznacza treści katalogu i nic więcej. Przejrzyj
+każdą istniejącą rolę, która je ma, i zdecyduj, do których z pierwszych wierszy — jeśli do
+któregokolwiek — też należy.
 
 To samo można zrobić przez API: `PUT /api/v1/admin/admin-roles/<code>` z pełną listą uprawnień
 roli, łącznie z nowymi kodami.
 
-**Weryfikacja.** Zaloguj się jako użytkownik każdej zmienionej roli i sprawdź cztery rzeczy: na pasku
-bocznym pojawia się pozycja **Price lists**; `GET /api/v1/admin/price-lists-engine` zwraca `200`
-zamiast `403`; rola tylko z `price_lists:read` dostaje `403` z `POST /api/v1/admin/price-lists-engine`,
-więc podział na odczyt i zapis naprawdę działa; rola z `catalog:write` bez żadnego kodu dotyczącego
-cen dostaje `403` z `GET /api/v1/admin/price-lists-engine` i z
-`GET /api/v1/admin/pricing/rule-targets/customer-groups` — ten negatywny przypadek to połowa dowodu,
-że granica się przesunęła, a nie tylko poszerzyła.
+**Weryfikacja.** Zaloguj się jako użytkownik każdej zmienionej roli i sprawdź cztery rzeczy: na
+pasku bocznym pojawia się pozycja **Cenniki**, a `⌘K` → „cenniki” oferuje akcję;
+`GET /api/v1/admin/price-books` zwraca `200` zamiast `403`; rola z samym `price_lists:read` dostaje
+`403` z `POST /api/v1/admin/price-books`, więc podział na odczyt i zapis jest prawdziwy; a rola z
+`catalog:write` i bez żadnego z kodów cenowych dostaje `403` z `GET /api/v1/admin/price-books` oraz z
+`GET /api/v1/admin/price-books/targets/customer-groups` — ten negatywny przypadek to połowa dowodu,
+że granica trzyma.
 
-### D4. Włącz uwierzytelnianie dwuskładnikowe w panelu administracyjnym
+### D4. Włącz weryfikację dwuetapową w panelu administracyjnym
 
 **Dlaczego.** Moduł MFA jest domyślnie aktywny, ale każda jego funkcja startuje **wyłączona**:
 `mfa.admin.totp_enabled` i `mfa.admin.totp_enforced` mają domyślnie wartość `false`
 (`packages/modules/mfa/src/manifest.ts:37-51`). Wdrożenie, w którym nic się nie zmieni, chroni dostęp
 administracyjny w publicznej domenie wyłącznie hasłem.
 
-**Do zrobienia (operator i inżynier).** Ustaw `MFA_SECRET_ENCRYPTION_KEY` (B1), potem zezwól na 2FA
-dla administratorów, zarejestruj drugi składnik dla każdego administratora i dopiero wtedy wymuś
-2FA — wymuszenie przed rejestracją zablokuje wszystkich.
+**Do zrobienia (operator i inżynier).** Ustaw `MFA_SECRET_ENCRYPTION_KEY` (B1), potem zezwól na weryfikację
+dwuetapową dla administratorów, zarejestruj drugi składnik dla każdego administratora i dopiero wtedy wymuś
+weryfikację dwuetapową — wymuszenie przed rejestracją zablokuje wszystkich.
 
 **Weryfikacja.** Drugie logowanie prosi o kod, a konto bez zarejestrowanego drugiego składnika jest
 odrzucane po włączeniu wymuszenia. Dopóki wymuszenie jest włączone, `/platform/modules` odmawia
 też wyłączenia modułu `mfa` (`409 MFA_DEACTIVATION_BLOCKED`): jeśli moduł naprawdę ma zostać
-wyłączony, najpierw wyłącz wymuszenie.
+wyłączony, najpierw wyłącz wymuszenie. Bez `MFA_SECRET_ENCRYPTION_KEY` wymuszenia nie da się
+włączyć (`409 MFA_ENFORCEMENT_UNAVAILABLE`).
+
+### D5. Zarejestruj adresy przekierowania logowania federacyjnego, jeśli oferujesz logowanie przez Google lub Microsoft
+
+**Dlaczego.** Dostawca odsyła przeglądarkę do **backendu**, pod adres, który musi już znać:
+adres przekierowania, którego nie zarejestrowano albo który różni się od `BACKEND_PUBLIC_URL`
+schematem, hostem lub portem, sprawia, że dostawca odrzuca każde logowanie. Logowanie w sklepie
+odsyła potem kupującego do sklepu tego kanału sprzedaży, na którym się zaczęło — do ustawienia
+kanału **Storefront URL** (`sales_channels.storefront_url`), a bez niego do `STOREFRONT_BASE_URL`
+— i tam się kończy, więc ten adres musi być hostem, którego kupujący danego kanału naprawdę używają.
+
+**Do zrobienia (inżynier).** Utwórz klienta OAuth u każdego oferowanego dostawcy, ustaw w
+środowisku backendu `MFA_OAUTH_GOOGLE_CLIENT_ID` / `MFA_OAUTH_GOOGLE_CLIENT_SECRET` oraz
+`MFA_OAUTH_MICROSOFT_CLIENT_ID` / `MFA_OAUTH_MICROSOFT_CLIENT_SECRET` (i
+`MFA_OAUTH_MICROSOFT_TENANT`, domyślnie `common`) i zarejestruj adresy przekierowania tych
+powierzchni, które włączasz:
+
+```text
+${BACKEND_PUBLIC_URL}/api/v1/auth/customer/oauth/google/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/customer/oauth/microsoft/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/admin/oauth/google/callback
+${BACKEND_PUBLIC_URL}/api/v1/auth/admin/oauth/microsoft/callback
+```
+
+**Do zrobienia (operator).** Włącz dostawców dla poszczególnych powierzchni
+(`mfa.storefront.google_enabled`, `mfa.storefront.microsoft_enabled` dla każdego kanału sprzedaży,
+`mfa.admin.google_enabled`, `mfa.admin.microsoft_enabled`) i ustaw **Storefront URL** na każdym
+kanale sprzedaży obsługiwanym pod własnym hostem.
+
+**Weryfikacja.** Na każdym hoście sklepu kupujący, który loguje się przez każdego z dostawców,
+trafia zalogowany na ten sam host, a koszyk napełniony przed zalogowaniem nadal tam jest; w panelu
+administracyjnym to samo dotyczy administratora. Szczegóły są na stronie modułu `mfa`.
 
 ---
 
@@ -413,10 +465,13 @@ elementy storefrontu, nawet jeśli nikt o niego nie prosił.
 z czego klient nie korzysta. Wyłączenie niczego nie niszczy i jest odwracalne: nie usuwa danych,
 konfiguracji, uprawnień ani schematu. **Nie licz na to, że okno potwierdzenia powie, co kosztuje
 wyłączenie** — dziś podaje tylko nazwę modułu
-(`admin/src/modules/platform/ModuleActivationControl.tsx:88`). Co przestaje działać po wyłączeniu
-modułu, opisuje rejestr skutków wyłączenia budowany przez
-`pnpm --filter backend run check:port-dependencies`; poproś inżyniera o odczytanie go dla każdego
-modułu, z którego klient na pewno nie będzie korzystał.
+(`packages/admin-shell/src/modules/platform/ModuleActivationControl.tsx:112`). Co przestaje działać po wyłączeniu
+modułu, opisuje
+[rejestr skutków wyłączenia](../architecture/kernel.md#rejestr-skutków-wyłączenia); poproś
+inżyniera o odczytanie go dla każdego modułu, z którego klient na pewno nie będzie korzystał.
+Instancja nie ma polecenia, które go buduje: to statyczna kontrola drzewa modułów platformy,
+uruchamiana w klonie repozytorium Endora Commerce jako
+`pnpm --filter backend run check:port-dependencies`.
 
 **Weryfikacja.** Dla każdego wyłączonego modułu: zniknęła pozycja na pasku bocznym i akcje palety
 poleceń, a API odpowiada `503 MODULE_DISABLED`. Dla każdego pozostawionego włączonego ktoś potrafi

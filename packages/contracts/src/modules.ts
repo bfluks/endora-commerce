@@ -25,6 +25,12 @@ import { capabilityKeyRe } from './capabilities.js';
 import { transactionalEmailManifestEntrySchema } from './transactional-emails.js';
 import { BlockCategorySchema, BlockDefinitionSchema, blockNameRe } from './cms.js';
 import { EnvironmentInputSchema } from './environment-inputs.js';
+import { HookableActionDeclarationSchema, hookableActionRe } from './command-hooks.js';
+import {
+  CommandMiddlewareDeclarationSchema,
+  assertCommandMiddlewareRules,
+  type CommandMiddlewarePhase,
+} from './command-middleware.js';
 
 // ---------------------------------------------------------------------------
 // Identifier / version regexes
@@ -524,10 +530,10 @@ export type OmittedModule = z.infer<typeof OmittedModuleSchema>;
  * report's, so neither belongs here
  * (`specs/107-override-report-and-ladder/contracts/deployment-declaration.md` §5).
  *
- * Every field defaults to empty, so a declaration that leaves one out means
+ * Every field defaults to empty (or is optional), so a declaration that leaves one out means
  * "none of these" rather than "unparseable" — the reading an absent file already
  * gets. A deployment that diverges by nothing still ships the file with all
- * three written out, because the mechanism is easier to find than to remember.
+ * fields written out, because the mechanism is easier to find than to remember.
  */
 export const DeploymentDivergenceDeclarationSchema = z.object({
   /** The modules this deployment does not ship. D-101, unchanged in substance. */
@@ -544,8 +550,10 @@ export const DeploymentDivergenceDeclarationSchema = z.object({
    * to disagree.
    *
    * Only a deployment's own overlay modules can appear here: a core module and
-   * an installed package may not decorate a name they do not own (D-156.4), so
-   * every ambiguity this can resolve is between two of them.
+   * an installed package may not decorate a name they do not own (D-156.4,
+   * narrowed by D-296 for the four guard seams only — `GUARD_SEAM_REGISTRATIONS`
+   * — which an overlay may decorate in 0.113.0 with a warning and not from
+   * 0.114.0), so every ambiguity this can resolve is between two of them.
    *
    * Nothing reads it yet — the supply is P4 of
    * `specs/107-override-report-and-ladder/`.
@@ -569,11 +577,51 @@ export const DeploymentDivergenceDeclarationSchema = z.object({
    * `specs/107-override-report-and-ladder/`.
    */
   reasons: z.record(z.string().min(1), z.string().min(20).max(800)).default({}),
+  /**
+   * Execution order, per hookable action, for command-hook modules that no
+   * manifest dependency orders (`specs/176-command-hooks-outbox/` FR-014, OD-1).
+   *
+   * Two hook modules on one action and phase with no dependency path between
+   * them refuse composition (`UnorderedCommandHooksError`) unless the
+   * deployment names both here, first runs first. An entry that contradicts a
+   * dependency path is refused too (`CommandHookOrderContradictionError`): the
+   * dependency graph is the order, and this only breaks ties it leaves open.
+   * It is the deployment's to own because two independent instance packages
+   * must not be made to depend on each other just to be ordered.
+   *
+   * Optional rather than defaulted, unlike the three fields above: it arrived
+   * after instances had scaffolded a typed `divergence.ts`, and a defaulted
+   * field is a required member of the inferred type — an upgrade would have
+   * turned every such file into a type error for a field it does not need.
+   * Absent means `{}`.
+   */
+  commandHookOrder: z
+    .record(z.string().regex(hookableActionRe), z.array(z.string().regex(moduleIdRe)).min(2))
+    .optional(),
+  /**
+   * Execution order for `admit` command middleware from modules that no
+   * manifest dependency orders (`specs/189-command-middleware/` FR-031,
+   * `contracts/command-middleware-api.md` §6): module ids, first runs first.
+   *
+   * Two such modules whose action filters can match a common action refuse
+   * composition (`UnorderedCommandMiddlewareError`) unless both are named here.
+   * An entry that contradicts a dependency path is refused
+   * (`CommandMiddlewareOrderContradictionError`), and so is one naming a module
+   * that contributes no `admit` (`StaleCommandMiddlewareOrderError`). One list
+   * rather than one per action: middleware is not attached to an action.
+   * `observe` middleware is never ordered.
+   *
+   * Optional rather than defaulted, for the reason `commandHookOrder` gives.
+   * Absent means `[]`.
+   */
+  commandMiddlewareOrder: z.array(z.string().regex(moduleIdRe)).min(2).optional(),
 })
-  // Three fields are the whole vocabulary, so a fourth is a typo — and a
+  // Five fields are the whole vocabulary, so a sixth is a typo — and a
   // mistyped field name under a lenient object is silently stripped, which
   // reads as "this deployment declares nothing" for a file whose author wrote
-  // a declaration. Refusing it names the key.
+  // a declaration. Refusing it names the key. A deployment that writes a field
+  // an older platform does not know is refused by that platform, which is
+  // correct: it would otherwise run without the order it declared.
   .strict();
 export type DeploymentDivergenceDeclaration = z.infer<
   typeof DeploymentDivergenceDeclarationSchema
@@ -583,10 +631,16 @@ export type DeploymentDivergenceDeclaration = z.infer<
  * One kind of divergence a deployment's tree can hold
  * (`specs/107-override-report-and-ladder/data-model.md` §2.3).
  *
- * Nine, and every one of them is one seam of `ModuleContext` — seven read off
- * the members themselves, plus `port-consumed` (which is `lazyPort` over the
- * cradle rather than a member) and `omission` (which comes from the declaration
- * and from no seam at all). `routes`, `ungatedRoutes`, `onBoot` and the manifest
+ * Twelve. Eleven are one seam of `ModuleContext` each — nine read off the
+ * members themselves (`command-middleware`, `ctx.commandMiddleware`, is the
+ * ninth: `specs/189-command-middleware/` FR-034), plus `port-consumed` (which is
+ * `lazyPort` over the cradle rather than a member) and `omission` (which comes
+ * from the declaration and from no seam at all). The twelfth, `column-extension`, is a module's
+ * `defineColumnExtension(…)` declaration on a table another module owns
+ * (`specs/190-overlay-full-modules/` FR-047) — exported schema rather than a
+ * seam call, and a divergence because the table is not the overlay's. An
+ * overlay's **own** entities and migrations are not one, for the reason below.
+ * `routes`, `ungatedRoutes`, `onBoot` and the manifest
  * declarations are deliberately absent for one uniform reason: each is a module
  * acting on its **own** surface, which is not a divergence from core. They are
  * named in {@link DivergenceBoundary.notRecorded} so a reader can tell "not a
@@ -601,7 +655,10 @@ export type DivergenceKind =
   | 'interceptor'
   | 'decoration'
   | 'root-plugin'
-  | 'worker';
+  | 'worker'
+  | 'command-hook'
+  | 'command-middleware'
+  | 'column-extension';
 
 /**
  * `<kind>:<module>:<subject>` — the three facts that identify a divergence
@@ -648,6 +705,36 @@ export type DivergenceDetail =
   | { readonly kind: 'registration' }
   | { readonly kind: 'worker' }
   | { readonly kind: 'root-plugin'; readonly declaredReason: string }
+  | {
+      readonly kind: 'command-hook';
+      /** `beforeCommit` or `afterCommit`. */
+      readonly phase: 'beforeCommit' | 'afterCommit';
+      /** The hook's id, unique within its module. */
+      readonly id: string;
+    }
+  | {
+      readonly kind: 'command-middleware';
+      /** `admit` or `observe` (`specs/189-command-middleware/` FR-034). */
+      readonly phase: CommandMiddlewarePhase;
+      /** The middleware's id, unique within its module. */
+      readonly id: string;
+      /** The action filter as the manifest wrote it. */
+      readonly actions: '*' | readonly string[];
+    }
+  | {
+      readonly kind: 'column-extension';
+      /**
+       * The data ladder's rung (`docs/docs/architecture/customisation-ladder.md`
+       * *The data ladder*). {@link DivergenceEntry.rung} is the escalation
+       * ladder's, which ranks ways of changing what core *does*; a declared
+       * column is new data on a table another module owns, so its cost is on the
+       * other ladder and is carried here rather than as a number that would read
+       * as rung 2 (`specs/190-overlay-full-modules/` FR-047).
+       */
+      readonly dataRung: 'D2';
+      /** The physical `x_<module>_*` columns the declaration adds, sorted. */
+      readonly columns: readonly string[];
+    }
   | { readonly kind: 'omission' };
 
 /** One divergence: what, who wrote it, who owns it, at what cost, and why. */
@@ -669,11 +756,13 @@ export interface DivergenceEntry {
    * (`specs/107-override-report-and-ladder/contracts/escalation-ladder.md` §2),
    * or `null` for a kind that sits on no rung.
    *
-   * `null` is three kinds and they are the three the ladder's own table marks
+   * `null` is four kinds. Three are the ones the ladder's own table marks
    * `—`: `registration` and `worker` are a module contributing its **own**
    * surface, and `omission` comes from the declaration rather than from a seam.
    * The ladder ranks ways of changing what *core* does, so a rung number on
-   * those would be a cost this repository does not claim they have. A
+   * those would be a cost this repository does not claim they have. The fourth,
+   * `column-extension`, is new data rather than changed behaviour: its rung is
+   * the data ladder's D2, carried in its detail as `dataRung`. A
    * `ModuleContext` member that the rung table classifies **not at all** is a
    * different state and is the `unclassified-seam` finding.
    */
@@ -776,6 +865,11 @@ export const errorCodeTokenRe = /^[a-z][a-z0-9_]*$/;
  * does not know the token set cannot tell `errors.CART_COUPON_REJECTED.expired`
  * from a key whose tail is not a code at all — which is a finding. Fourteen keys
  * in `invoices` and `carts` have this shape today.
+ *
+ * A code raised with a `details.code` the static read cannot spell — a
+ * variable, a details object handed down, a spread — **must** declare its
+ * `tokens` (issue #83). **`tokens: []` is a declaration**, not an absence: it
+ * states that such a raise's `details` never carries a `code`.
  */
 export const ModuleErrorCodeDeclarationSchema = z.object({
   code: z.string().regex(errorCodeRe),
@@ -803,6 +897,142 @@ export const ExclusiveCapabilitySchema = z.object({
   errorCode: z.string().regex(errorCodeRe),
 });
 export type ExclusiveCapability = z.infer<typeof ExclusiveCapabilitySchema>;
+
+/**
+ * The shape of an **organization permission** code (`specs/170-organization-roles/`,
+ * FR-020, research R-2): `<module>.<action>`, lower snake case, exactly one dot.
+ *
+ * The operator vocabulary is `<area>:<action>` (`permissions` below). Two
+ * shapes make a mix-up visible in review, and the permission inventory's
+ * `cross-vocabulary` finding makes it fail the build.
+ */
+export const ORGANIZATION_PERMISSION_CODE = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+
+/**
+ * One organization permission a module declares — a buyer action its routes
+ * or services gate (`contracts/organization-permissions-manifest.md` §1).
+ *
+ * `label` and `description` are the English fallbacks; the translations live
+ * in the declaring module's own bundle under
+ * `organizationPermissions.<code>.label` and `.description`. `memberDefault`
+ * says whether an Organization's *Member* role holds the code from the moment
+ * it is first offered (FR-021, research R-17).
+ */
+export const moduleOrganizationPermissionDeclarationSchema = z
+  .object({
+    code: z.string().regex(ORGANIZATION_PERMISSION_CODE),
+    label: z.string().min(1).max(160),
+    description: z.string().min(1).max(500),
+    memberDefault: z.boolean(),
+  })
+  .strict();
+export type ModuleOrganizationPermissionDeclaration = z.infer<
+  typeof moduleOrganizationPermissionDeclarationSchema
+>;
+
+// ---------------------------------------------------------------------------
+// Entity extensions — side tables on extensible hosts
+// (`specs/187-side-table-extensions/`, D-294; data ladder D1)
+// ---------------------------------------------------------------------------
+
+/**
+ * One side table this module owns on an extensible host
+ * (`specs/187-side-table-extensions/contracts/entity-extension-declaration.md`
+ * §1, FR-001).
+ *
+ * It carries no columns: the table, its entity and its migration are the
+ * declaring module's own. What the declaration adds is the claim the platform
+ * verifies — at `migrate` and at boot — that the table's single-column primary
+ * key is a cascading foreign key to the host's primary key, and that its
+ * tenancy follows its host's.
+ */
+export const EntityExtensionDeclarationSchema = z
+  .object({
+    /** `<ownerModuleId>.<EntityClassName>` of an extensible host, e.g. `organizations.Organization`. */
+    entity: z.string().regex(/^_?[a-z][a-z0-9_]*\.[A-Z][A-Za-z0-9]*$/),
+    /** The declaring module's own table: lower-case identifier, ≤ 63 bytes. */
+    table: z.string().regex(/^[a-z][a-z0-9_]*$/).max(63),
+  })
+  .strict();
+export type EntityExtensionDeclaration = z.infer<typeof EntityExtensionDeclarationSchema>;
+
+/** At most this many side tables per module (FR-001). */
+export const MAX_ENTITY_EXTENSIONS_PER_MODULE = 16;
+
+/**
+ * E5 (`duplicate-table`) — the one entity-extension rule one manifest can
+ * decide alone. E2 – E4 need every composed manifest (which hosts exist, who
+ * owns them, the dependency closure), so they are the platform's
+ * (`@endora-commerce/platform`, `resolveEntityExtensions`).
+ */
+function assertEntityExtensionRules(m: ModuleManifest): void {
+  const seen = new Set<string>();
+  for (const declaration of m.extends ?? []) {
+    if (seen.has(declaration.table)) {
+      throw new Error(
+        `[contracts/modules] manifest "${m.id}" declares side table "${declaration.table}" twice ` +
+          '(duplicate-table). A table extends one host; list it once.',
+      );
+    }
+    seen.add(declaration.table);
+  }
+}
+
+/**
+ * Where the platform found a composed module — its **trust tier**
+ * (`specs/189-command-middleware/contracts/module-origin.md` §1, ruling D-296.10;
+ * that contract is the single statement of this type).
+ *
+ * - `core`: a workspace module of this repository, composed through the
+ *   generated composer; or, in an instance, an installed package that is one of
+ *   this release's first-party module packages.
+ * - `deployment`: a per-deployment overlay module.
+ * - `package`: every other installed package.
+ *
+ * **Derived, never declared.** The loader that found the module stamps it on the
+ * composed entry; a manifest cannot carry it ({@link defineModuleManifest}
+ * refuses an `origin` key), and a per-point grant in a deployment's divergence
+ * declaration never changes it (§5). It is not the platform's discovery type
+ * `ModuleIdClaimOrigin` (`core` / `overlay` / `package`), which answers a
+ * different question (§6). A consumer that shows a tier uses these three words.
+ */
+export const MODULE_ORIGINS = ['core', 'deployment', 'package'] as const;
+export type ModuleOrigin = (typeof MODULE_ORIGINS)[number];
+
+/**
+ * The guard seams: the four registrations a composition root supplies through which Principles XI
+ * and XIII are enforced (`specs/189-command-middleware/contracts/guard-seam-narrowing.md` §1, owner
+ * ruling D-296.5 as amended).
+ *
+ * **A list, not a derivation**, because no ledger fact tells a guard seam from other root plumbing
+ * (`redis`, `orm`, `requireAdmin`, …). D-296 narrows D-156.4 for these four names only: an overlay
+ * module's decoration of one is deprecated in 0.113.0 and refused from 0.114.0, while every other
+ * root-supplied registration stays decoratable by an overlay. Changing the list is a ruling that
+ * amends D-296, and `modules.test.ts` pins it.
+ */
+export const GUARD_SEAM_REGISTRATIONS = ['commandBus', 'auditLogService', 'eventBus', 'emFactory'] as const;
+export type GuardSeamRegistration = (typeof GUARD_SEAM_REGISTRATIONS)[number];
+
+export const isGuardSeamRegistration = (name: string): name is GuardSeamRegistration =>
+  (GUARD_SEAM_REGISTRATIONS as readonly string[]).includes(name);
+
+const GUARD_SEAM_REPLACEMENTS: Readonly<Record<GuardSeamRegistration, string>> = {
+  commandBus:
+    'command middleware: `admit` to refuse, `observe` to measure; a command hook for one declared action',
+  auditLogService:
+    '`observe` middleware for an extra sink, or a read of `audit_log_entries` for a durable one; the audit writer itself is not replaceable',
+  eventBus: '`ctx.subscribe` for a reaction; an `afterCommit` hook for durable delivery',
+  emFactory: 'none. Tenant scoping is not overridable (Principle XI). Ask the owning module for a port',
+};
+
+/**
+ * What to use instead of decorating a guard seam (`guard-seam-narrowing.md` §2). The one statement
+ * of the replacement table: the platform's warning and the CLI's `deprecated-decoration` finding
+ * both read it from here, because the CLI reads an instance without loading the platform.
+ */
+export function guardSeamReplacementFor(name: GuardSeamRegistration): string {
+  return GUARD_SEAM_REPLACEMENTS[name];
+}
 
 export const ModuleManifestSchema = z.object({
   id: z.string().regex(moduleIdRe),
@@ -878,6 +1108,17 @@ export const ModuleManifestSchema = z.object({
    * when the module is enabled (feature 026).
    */
   permissions: z.array(modulePermissionDeclarationSchema).optional(),
+  /**
+   * The **organization** permissions this module declares — the buyer actions
+   * its routes and services gate (`specs/170-organization-roles/`, FR-020). A
+   * different vocabulary from `permissions` above, which is the operator's;
+   * the two never meet. Each code sits in this module's own namespace
+   * (`<id>.<action>`), which {@link defineModuleManifest} enforces.
+   *
+   * Absent means "this module gates no buyer action", which is true of most
+   * modules and is not a finding.
+   */
+  organizationPermissions: z.array(moduleOrganizationPermissionDeclarationSchema).optional(),
   /**
    * Per-module transactional email declarations (feature 047). Each entry is
    * reconciled into `transactional_emails` at boot; default subject/content are
@@ -994,6 +1235,55 @@ export const ModuleManifestSchema = z.object({
    * is true of most modules and is not a finding.
    */
   env: z.array(EnvironmentInputSchema).optional(),
+  /**
+   * The Command actions this module opens to command hooks, and for which
+   * phases (`specs/176-command-hooks-outbox/` FR-010,
+   * `contracts/command-hooks-api.md` §1).
+   *
+   * Each entry is derived from a typed ref the module publishes in
+   * `@endora-commerce/contracts` (`toHookableActionDeclaration(ref)`), so the
+   * manifest and every hook author name one constant. The declaration is a
+   * public contract: a composition refuses a hook on an action no composed
+   * module declares, or for a phase this list does not offer. Declare only a
+   * Command whose `run` is complete and that is not reversible.
+   *
+   * {@link defineModuleManifest} refuses one action listed twice; two modules
+   * declaring one action is the composer's refusal, because it needs both.
+   *
+   * Absent means "nothing in this module is hookable", which is true of most
+   * modules and is not a finding.
+   */
+  hookableActions: z.array(HookableActionDeclarationSchema).optional(),
+  // `specs/187-side-table-extensions/` — kept last, in its own block.
+  /**
+   * Side tables this module owns on extensible hosts (data ladder D1,
+   * `specs/187-side-table-extensions/` FR-001). Declaring creates no lifecycle
+   * edge of its own: the host's owner must already be in `dependencies`
+   * (FR-004), which is what orders the migrations.
+   *
+   * Absent means "this module extends no host", which is true of most modules
+   * and is not a finding.
+   */
+  extends: z.array(EntityExtensionDeclarationSchema).max(MAX_ENTITY_EXTENSIONS_PER_MODULE).optional(),
+  /**
+   * The command middleware this module contributes to the Command Bus
+   * (`specs/189-command-middleware/` FR-001, `contracts/command-middleware-api.md`
+   * §1): code that runs for **every** Command whose action matches the filter,
+   * children included — `admit` before the Command does anything, `observe`
+   * after its run committed or rolled back.
+   *
+   * The code is registered through `ctx.commandMiddleware` with the same id and
+   * phase; composition refuses a declaration without a registration and the
+   * reverse. Which phases a module may contribute is decided at composition
+   * from its **derived** origin, never from here: an installed third-party
+   * package may contribute `observe` only (D-296.3).
+   *
+   * {@link defineModuleManifest} refuses one id declared twice, a `timeoutMs`
+   * above its phase's maximum, and a filter list with a duplicate or a covered
+   * entry. Absent means "this module contributes no middleware", which is true
+   * of most modules and is not a finding.
+   */
+  commandMiddleware: z.array(CommandMiddlewareDeclarationSchema).optional(),
 });
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
 
@@ -1215,6 +1505,42 @@ function assertNonBindingRules(m: ModuleManifest): void {
  * condition it on, and adding one would be a self-certified exemption issued by
  * the measured party.
  */
+/**
+ * The organization-permission rules `defineModuleManifest` can decide from one
+ * manifest (`contracts/organization-permissions-manifest.md` §1; research R-2):
+ * the code's shape, its namespace, and no code twice. Whether a code is also an
+ * operator code, enforced somewhere and labelled in every language needs the
+ * whole tree, and is the permission inventory's.
+ */
+function assertOrganizationPermissionRules(m: ModuleManifest): void {
+  const seen = new Set<string>();
+  for (const declaration of m.organizationPermissions ?? []) {
+    const code = declaration.code;
+    if (!ORGANIZATION_PERMISSION_CODE.test(code)) {
+      throw new Error(
+        `[contracts/modules] manifest "${m.id}" declares organization permission ` +
+          `"${code}", which is not \`<module>.<action>\` in lower snake case ` +
+          `(${String(ORGANIZATION_PERMISSION_CODE)}) — the operator vocabulary is ` +
+          '`<area>:<action>`, and the two never meet.',
+      );
+    }
+    if (code.slice(0, code.indexOf('.')) !== m.id) {
+      throw new Error(
+        `[contracts/modules] manifest "${m.id}" declares organization permission ` +
+          `"${code}", which is outside its own namespace ("${m.id}.<action>") — a ` +
+          'code is declared by the module whose buyer action it gates.',
+      );
+    }
+    if (seen.has(code)) {
+      throw new Error(
+        `[contracts/modules] manifest "${m.id}" declares organization permission ` +
+          `"${code}" twice — one code has one label, one description and one default.`,
+      );
+    }
+    seen.add(code);
+  }
+}
+
 function assertErrorCodeRules(m: ModuleManifest): void {
   const seenCodes = new Set<string>();
   for (const declaration of m.errorCodes ?? []) {
@@ -1453,11 +1779,40 @@ function assertEnvironmentInputRules(m: ModuleManifest): void {
 }
 
 /**
+ * `specs/176-command-hooks-outbox/` FR-010 — one action is declared once per
+ * manifest. A second entry would offer the union of two phase lists nobody
+ * wrote as one, so it is refused with the module and the action named.
+ */
+function assertHookableActionRules(m: ModuleManifest): void {
+  const seen = new Set<string>();
+  for (const declaration of m.hookableActions ?? []) {
+    if (seen.has(declaration.action)) {
+      throw new Error(
+        `[contracts/modules] manifest "${m.id}" declares hookable action "${declaration.action}" ` +
+          'twice. List each action once, with every phase it offers.',
+      );
+    }
+    seen.add(declaration.action);
+  }
+}
+
+/**
  * Identity-with-validation helper for module authors. Modules export a
  * single `manifest` constant via this helper so TypeScript inference is
  * preserved and the loader can ingest the validated payload directly.
  */
 export function defineModuleManifest(m: ModuleManifest): ModuleManifest {
+  // `specs/189-command-middleware/contracts/module-origin.md` §3 — origin is
+  // where the loader found the module, never something it says about itself.
+  // The schema is not strict, so the key would be stripped silently and its
+  // author would believe it did something.
+  if (Object.prototype.hasOwnProperty.call(m, 'origin')) {
+    throw new Error(
+      `[contracts/modules] manifest "${m.id}" declares an \`origin\`. A module's origin is derived ` +
+        'from where the platform found it and cannot be declared ' +
+        '(specs/189-command-middleware/contracts/module-origin.md). Remove the key.',
+    );
+  }
   // Reject self-dependencies up front — Zod's array regex doesn't catch
   // this because the id field's regex applies independently per element.
   if (m.dependencies.includes(m.id)) {
@@ -1497,9 +1852,13 @@ export function defineModuleManifest(m: ModuleManifest): ModuleManifest {
   assertNonBindingRules(m);
   assertCapabilityRules(m);
   assertErrorCodeRules(m);
+  assertOrganizationPermissionRules(m);
   assertBlockRules(m);
   assertDemoRules(m);
   assertEnvironmentInputRules(m);
+  assertHookableActionRules(m);
+  assertEntityExtensionRules(m);
+  assertCommandMiddlewareRules(m);
   return ModuleManifestSchema.parse(m);
 }
 
@@ -2040,8 +2399,15 @@ export const ModuleListItemStateSchema = z.enum([
 
 export const ModuleListItemSchema = z.object({
   id: z.string(),
+  /** The module's name and description, in the language the response is read in (issue #1809). */
   name: z.string(),
   description: z.string().nullable(),
+  /**
+   * Why the module cannot be switched off — its manifest's `activation.reason`,
+   * in the language the response is read in — or `null` for a module that can
+   * be (issue #1809). Optional on the wire so an older server still parses.
+   */
+  nonDeactivatableReason: z.string().nullable().optional(),
   version: z.object({
     registered: z.string().nullable(),
     onDisk: z.string().nullable(),

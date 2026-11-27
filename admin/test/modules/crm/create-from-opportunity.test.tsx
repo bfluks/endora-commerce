@@ -12,6 +12,7 @@ import {
   detail,
   en,
   renderCrm,
+  returningHere,
 } from './crm-fixtures';
 
 /**
@@ -77,8 +78,8 @@ const createdLink = (overrides: Partial<Link>): Link => ({
   ...overrides,
 });
 
-/** What `GET …/opportunities/:id` answers, read by read. */
-let reads: OpportunityDetailData[];
+/** What `GET …/opportunities/:id` answers, read by read — a promise holds that read open. */
+let reads: Array<OpportunityDetailData | Promise<OpportunityDetailData>>;
 
 beforeEach(() => {
   getSpy.mockReset();
@@ -88,7 +89,7 @@ beforeEach(() => {
     if (lookup) return lookup;
     if (path === DETAIL_PATH) {
       const next = reads.length > 1 ? reads.shift() : reads[0];
-      return Promise.resolve({ data: next });
+      return Promise.resolve(next).then((data) => ({ data }));
     }
     if (path === '/api/v1/admin/crm/workflow') return Promise.resolve({ data: WORKFLOW });
     if (path === '/api/v1/admin/orders/statuses') return Promise.resolve({ data: ORDER_STATUS_GRAPH });
@@ -174,10 +175,17 @@ describe('coming back from the create-order screen', () => {
 
   it('says the new order is linked once it is — reading again until the link is there', async () => {
     // The link is written just after the order commits: the first read may be too early.
-    reads = [detail({ links: [] }), detail({ links: [] }), detail({ links: [createdLink({})] })];
+    // The read that finds the link is held open, so the transient "linking" state is
+    // asserted while it is guaranteed to be on screen rather than raced against the poll.
+    let releaseLink!: () => void;
+    const linkedRead = new Promise<OpportunityDetailData>((resolve) => {
+      releaseLink = () => resolve(detail({ links: [createdLink({})] }));
+    });
+    reads = [detail({ links: [] }), detail({ links: [] }), linkedRead];
     await openOpportunity(arrival);
     const orders = await section(en('links.title'));
-    expect(within(orders).getByText(en('origin.order.linking'))).toBeInTheDocument();
+    expect(await within(orders).findByText(en('origin.order.linking'))).toBeInTheDocument();
+    releaseLink();
 
     expect(
       await within(orders).findByText(en('origin.order.linked', { number: 'ORD-2001' }), undefined, {
@@ -186,7 +194,7 @@ describe('coming back from the create-order screen', () => {
     ).toBeInTheDocument();
     expect(within(orders).getByRole('link', { name: 'ORD-2001' })).toHaveAttribute(
       'href',
-      `/orders/${NEW_ORDER_ID}`,
+      returningHere(`/orders/${NEW_ORDER_ID}`),
     );
     expect(within(orders).queryByText(en('origin.order.linking'))).toBeNull();
   });
@@ -195,7 +203,9 @@ describe('coming back from the create-order screen', () => {
     reads = [detail({ links: [createdLink({})] })];
     await openOpportunity(arrival);
     const orders = await section(en('links.title'));
-    expect(within(orders).getByText(en('origin.order.linked', { number: 'ORD-2001' }))).toBeInTheDocument();
+    expect(
+      await within(orders).findByText(en('origin.order.linked', { number: 'ORD-2001' })),
+    ).toBeInTheDocument();
     expect(getSpy.mock.calls.filter(([path]) => path === DETAIL_PATH)).toHaveLength(1);
   });
 
@@ -207,9 +217,32 @@ describe('coming back from the create-order screen', () => {
     expect(notice).toBeInTheDocument();
     expect(within(orders).getByRole('link', { name: en('origin.order.open') })).toHaveAttribute(
       'href',
-      `/orders/${NEW_ORDER_ID}`,
+      returningHere(`/orders/${NEW_ORDER_ID}`),
     );
   }, 12_000);
+
+  // Issue #1499 (UX audit SALES-17, DEC-12 a): the outcome is said beside the
+  // "Create order" button that started it, in a polite region — never a success
+  // banner — and the region is there, empty, on an ordinary visit too.
+  it('says it beside "Create order", in a polite region, with no success banner', async () => {
+    reads = [detail({ links: [createdLink({})] })];
+    await openOpportunity(arrival);
+    const orders = await section(en('links.title'));
+    const create = within(orders).getByRole('link', { name: en('origin.order.create') });
+    const region = create.parentElement?.querySelector<HTMLElement>(':scope > [role="status"]');
+    if (!region) throw new Error('no status region beside "Create order"');
+    await waitFor(() => expect(region).toHaveTextContent(en('origin.order.linked', { number: 'ORD-2001' })));
+    expect(region.getAttribute('data-tone')).toBe('success');
+    expect(orders.querySelector('[data-slot="alert"]')).toBeNull();
+  });
+
+  it('keeps the region mounted and empty on an ordinary visit', async () => {
+    await openOpportunity();
+    const orders = await section(en('links.title'));
+    const create = await within(orders).findByRole('link', { name: en('origin.order.create') });
+    const region = create.parentElement?.querySelector<HTMLElement>(':scope > [role="status"]');
+    expect(region?.textContent).toBe('');
+  });
 
   it('says nothing on an ordinary visit', async () => {
     await openOpportunity();

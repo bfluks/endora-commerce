@@ -8,7 +8,8 @@
 // See specs/013-assets-library/contracts/ for the per-surface contracts these schemas back.
 
 import { z } from 'zod';
-import { isoDateTimeSchema, uuidSchema, multilingualStringSchema } from './common.js';
+import type { SettingWriteValidator } from './settings.js';
+import { isoDateTimeSchema, uuidSchema, multilingualStringSchema, isUuidShape } from './common.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // (1) Domain types
@@ -36,9 +37,18 @@ export const assetReferenceKindSchema = z.enum([
   'cms_body_embed',
   'megamenu_item_target',
   'blog_category_main_image',
+  'blog_post_main_image',
   'blog_post_content',
   'blog_category_description',
   'crm_opportunity_attachment',
+  // `specs/163-projects-and-tasks/` FR-027: a file attached to a Project.
+  'project_attachment',
+  // `specs/165-task-management/` FR-008: a file attached to a Task.
+  'task_attachment',
+  // `specs/171-blog-i18n-authors/` US6: an administrator's author avatar.
+  'admin_user_avatar',
+  // `specs/172-product-content-attributes/` FR-063: an asset embedded in a product's content attribute.
+  'product_content',
 ]);
 export type AssetReferenceKind = z.infer<typeof assetReferenceKindSchema>;
 
@@ -68,6 +78,16 @@ export const listFoldersResponseSchema = z.object({
   data: z.array(assetFolderSchema),
 });
 export type ListFoldersResponse = z.infer<typeof listFoldersResponseSchema>;
+
+/**
+ * `GET /api/v1/admin/assets/folders/:folderId/permalink-count` — how many live
+ * assets in the folder's subtree have a permalink, named by the folder delete
+ * confirmation (specs/156-asset-stable-url/, owner ruling S4).
+ */
+export const folderPermalinkCountResponseSchema = z.object({
+  data: z.object({ permalinkedAssets: z.number().int().nonnegative() }),
+});
+export type FolderPermalinkCountResponse = z.infer<typeof folderPermalinkCountResponseSchema>;
 
 export const createFolderRequestSchema = z.object({
   parentId: uuidSchema.nullable(),
@@ -123,13 +143,49 @@ export const assetSummarySchema = z.object({
   updatedAt: isoDateTimeSchema,
   deletedAt: isoDateTimeSchema.nullable(),
   pendingCleanup: z.boolean(),
+  /** The stable, unversioned file URL — the same across replaces (specs/156-asset-stable-url/). */
+  fileUrl: z.string(),
+  /** Operator-chosen alias served at `<base>/assets/file/<permalink>`, or null. */
+  permalink: z.string().nullable(),
+  /** Absolute permalink URL on the local public base, or null when no permalink is set. */
+  permalinkUrl: z.string().nullable(),
+  /** Identity of the bytes the asset currently holds. */
+  contentVersion: z.string(),
 });
 export type AssetSummary = z.infer<typeof assetSummarySchema>;
+
+/** The one kept previous version of an asset's file, as the detail panel shows it. */
+export const assetPreviousVersionSchema = z.object({
+  filename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(127),
+  sizeBytes: z.number().int().nonnegative(),
+  contentVersion: z.string().min(1).max(32),
+  replacedAt: isoDateTimeSchema,
+  replacedBy: z.object({ id: uuidSchema, displayName: z.string() }).nullable(),
+  /** `replacedAt` + `assets.soft_delete_retention_days` as read now. */
+  restorableUntil: isoDateTimeSchema,
+});
+export type AssetPreviousVersion = z.infer<typeof assetPreviousVersionSchema>;
 
 /** Detail extends summary with multilingual alt text + the deletion-protection list. */
 export const assetDetailSchema = assetSummarySchema.extend({
   altText: multilingualStringSchema.nullable(),
   references: z.array(assetReferenceSchema),
+  /** The one kept previous version of the file, or null (specs/156-asset-stable-url/). */
+  previousVersion: assetPreviousVersionSchema.nullable(),
+  /**
+   * `assets.soft_delete_retention_days` as the retention sweep reads it, in
+   * whole days (at least one): how long a replaced file stays restorable, named
+   * by the replace confirmation (specs/156-asset-stable-url/).
+   */
+  retentionDays: z.number().int().min(1),
+  /**
+   * Whether the file can be replaced in place (and a previous version
+   * restored): false for a legacy row and for a row with no storage key, which
+   * both answer `409 ASSET_LEGACY_CANNOT_REPLACE` (specs/156-asset-stable-url/,
+   * owner ruling S3).
+   */
+  replaceable: z.boolean(),
 });
 export type AssetDetail = z.infer<typeof assetDetailSchema>;
 
@@ -189,6 +245,68 @@ export const moveManyAssetsResponseSchema = z.object({
   data: z.object({ movedCount: z.number().int().nonnegative() }),
 });
 export type MoveManyAssetsResponse = z.infer<typeof moveManyAssetsResponseSchema>;
+
+// ────────────────────────────────────────────────────────────────────────────
+// (2) HTTP — permalinks and the previous version (specs/156-asset-stable-url/)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const ASSET_PERMALINK_MAX_LENGTH = 200;
+
+export type AssetPermalinkInvalidReason =
+  | 'empty'
+  | 'too_long'
+  | 'invalid_characters'
+  | 'invalid_segment'
+  | 'uuid_shaped';
+
+const PERMALINK_CHARACTERS = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * True for the shape the file route treats as an asset id, in either case. A
+ * permalink of this shape would be unreachable, so the validator refuses it.
+ */
+export function isAssetIdShaped(segment: string): boolean {
+  return isUuidShape(segment);
+}
+
+/**
+ * The one permalink rule for the server and the admin form. Pure; no I/O.
+ * Checks run in a fixed order so a value breaking several rules always gets
+ * the same reason.
+ */
+export function validateAssetPermalink(
+  value: string,
+): { ok: true } | { ok: false; reason: AssetPermalinkInvalidReason } {
+  if (value.length === 0) return { ok: false, reason: 'empty' };
+  if (value.length > ASSET_PERMALINK_MAX_LENGTH) return { ok: false, reason: 'too_long' };
+  if (!PERMALINK_CHARACTERS.test(value)) return { ok: false, reason: 'invalid_characters' };
+  const segments = value.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return { ok: false, reason: 'invalid_segment' };
+  }
+  if (isAssetIdShaped(value)) return { ok: false, reason: 'uuid_shaped' };
+  return { ok: true };
+}
+
+export const setAssetPermalinkRequestSchema = z.object({
+  /** Shape judged by `validateAssetPermalink`; the bound only caps the body. */
+  permalink: z.string().max(ASSET_PERMALINK_MAX_LENGTH * 2),
+  /**
+   * Acknowledges taking a permalink whose last holder was a different asset;
+   * never needed by the asset that last held it.
+   */
+  confirmReuse: z.boolean().optional(),
+});
+export type SetAssetPermalinkRequest = z.infer<typeof setAssetPermalinkRequestSchema>;
+
+/** Both required: a restore names the current file and the previous file it brings back. */
+export const restorePreviousAssetVersionRequestSchema = z.object({
+  expectedContentVersion: z.string().min(1).max(32),
+  expectedPreviousContentVersion: z.string().min(1).max(32),
+});
+export type RestorePreviousAssetVersionRequest = z.infer<
+  typeof restorePreviousAssetVersionRequestSchema
+>;
 
 // ────────────────────────────────────────────────────────────────────────────
 // (2) HTTP — storage administration
@@ -280,6 +398,31 @@ export interface AssetRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  /** Identity of the bytes the asset currently holds (specs/156-asset-stable-url/). */
+  contentVersion: string;
+  /** Operator-chosen alias, or null. */
+  permalink: string | null;
+}
+
+/**
+ * The event `assets_library` publishes on the in-process EventBus after a
+ * committed write that changes what an embedded asset renders as — its bytes
+ * (a replace, a restore of the previous version, and with them the
+ * `?v=<contentVersion>` marker), its URL (a permalink set or removed, a
+ * visibility change), its rendered details (filename, label, alt text, MIME
+ * type), or whether it is live at all (a soft delete, a restore). Issue #363.
+ *
+ * It exists for whoever caches an answer that **embeds** an asset — `cms`
+ * caches resolved pages, blocks and hooks — because such a cache cannot
+ * otherwise learn that the embedded asset moved. The owner names no consumer:
+ * a subscriber that is absent or switched off simply hears nothing.
+ */
+export const ASSET_CHANGED_EVENT = 'assets_library.asset_changed.v1';
+
+/** The payload of {@link ASSET_CHANGED_EVENT}, beside the bus's `eventId` / `occurredAt`. */
+export interface AssetChangedEvent {
+  /** The assets the write changed — at least one. */
+  readonly assetIds: readonly string[];
 }
 
 /**
@@ -333,6 +476,40 @@ export interface AssetReadPort {
   resolvePublicUrls(assetIds: readonly string[]): Promise<Map<string, string>>;
 
   /**
+   * The URL {@link AssetsLibraryPort.getAsset} carries for each of these live
+   * assets, keyed by asset id — the versioned stable URL of a `public` one, a
+   * signed, expiring link to a `private` one — and nothing for an id that names
+   * no live row.
+   *
+   * **For a consumer that renders what an editor embedded**: a storefront page,
+   * block or menu shows a private asset too, as long as the link is fresh, and
+   * caches the answer no longer than it would cache `getAsset`'s. A consumer
+   * that publishes a link someone fetches later wants
+   * {@link resolvePublicUrls}.
+   *
+   * Batched, and without the detail's `references` list, for the reason
+   * `resolvePublicUrls` gives (issue #685): a page resolving each of ~150 embeds
+   * through `getAsset` walked the content of every page, block, template, post,
+   * product and menu once per embed, on every cache miss.
+   */
+  resolveUrls(assetIds: readonly string[]): Promise<Map<string, string>>;
+
+  /**
+   * Which of these assets the **ambient caller** may see in the asset library
+   * (`specs/166-asset-reference-visibility/`): an asset no reader-restricted
+   * record uses, or one at least one of whose records the caller may see. The
+   * system actor and a holder of the platform wildcard `*` see every id that
+   * exists. An id that does not exist, or is not a uuid, is absent — the same
+   * as a hidden one.
+   *
+   * Ask it before any other refusal that would describe the asset (its
+   * visibility, its type), so a hidden asset and a missing one get one answer.
+   * The other methods of this port are unfiltered: they serve modules that
+   * decide by their own record's rules.
+   */
+  visibleToCaller(assetIds: readonly string[]): Promise<ReadonlySet<string>>;
+
+  /**
    * The **bytes** of one asset, buffered, with the MIME type they were stored
    * under — or nothing.
    *
@@ -380,10 +557,136 @@ export interface AssetReadPort {
   openAssetBytes(assetId: string): Promise<AssetBytes | null>;
 }
 
+/**
+ * Every asset id a Page Builder or document tree carries: each non-empty
+ * string under a key ending in `assetId`, in any case and at any depth
+ * (`assetId`, `iconAssetId`, `mainImageAssetId`, ...). The same rule the
+ * renderers resolve embeds by, so what is checked is what is shown.
+ */
+export function contentAssetIds(tree: unknown, acc: Set<string> = new Set()): Set<string> {
+  if (tree === null || typeof tree !== 'object') return acc;
+  if (Array.isArray(tree)) {
+    for (const item of tree) contentAssetIds(item, acc);
+    return acc;
+  }
+  for (const [key, value] of Object.entries(tree as Record<string, unknown>)) {
+    if (typeof value === 'string' && /assetId$/i.test(key)) {
+      if (value.length > 0) acc.add(value);
+    } else {
+      contentAssetIds(value, acc);
+    }
+  }
+  return acc;
+}
+
+/**
+ * Of the asset ids a write would store, the ones it may not: every id the
+ * write **newly adds** that {@link AssetReadPort.visibleToCaller} does not
+ * return — a hidden file and a missing one alike (issue #544, owner ruling of
+ * 2026-10-30, option a; `specs/166-asset-reference-visibility/` FR-006).
+ *
+ * An id in `current` — what the record already stores — is that record's own
+ * reference and is not asked about, so a body still embedding a purged file
+ * saves as before. Ids are compared trimmed and lower-cased. One question for
+ * the whole write; the answer is sorted, so the refusal names the same id
+ * whatever order the tree was walked in.
+ */
+export async function unlinkableAssetIds(
+  assets: Pick<AssetReadPort, 'visibleToCaller'>,
+  proposed: Iterable<string>,
+  current: Iterable<string> = [],
+): Promise<string[]> {
+  const normalise = (id: string) => id.trim().toLowerCase();
+  const kept = new Set([...current].map(normalise));
+  const added = [...new Set([...proposed].map(normalise))].filter((id) => id !== '' && !kept.has(id)).sort();
+  if (added.length === 0) return [];
+  const visible = await assets.visibleToCaller(added);
+  const seen = new Set([...visible].map(normalise));
+  return added.filter((id) => !seen.has(id));
+}
+
+/**
+ * A setting write validator for settings whose value is one asset id, `''`
+ * meaning unset (a shop logo, an app icon, a default sharing image): the
+ * write is refused by `refuse` when it newly sets an id the caller may not
+ * see, per {@link unlinkableAssetIds}. A value the setting already holds —
+ * platform-wide or on any channel — is accepted as it stands.
+ *
+ * The owning module registers it, as for any of its settings; `refuse`
+ * builds the module's refusal, which this package cannot construct.
+ */
+export function assetIdSettingValidator(options: {
+  contributorModuleId: string;
+  codes: readonly string[];
+  assets: Pick<AssetReadPort, 'visibleToCaller'>;
+  refuse: (assetId: string) => Error;
+}): SettingWriteValidator {
+  return {
+    contributorModuleId: options.contributorModuleId,
+    codes: options.codes,
+    async validate({ proposedValue, currentValues }) {
+      if (typeof proposedValue !== 'string' || proposedValue.trim() === '') return;
+      const stored = (currentValues ?? []).filter((value): value is string => typeof value === 'string');
+      const [refused] = await unlinkableAssetIds(options.assets, [proposedValue], stored);
+      if (refused !== undefined) throw options.refuse(refused);
+    },
+  };
+}
+
 /** One asset's stored bytes, with the MIME type they were stored under. */
 export interface AssetBytes {
   bytes: Uint8Array;
   mimeType: string;
+}
+
+/**
+ * One reference as a descriptor reports it. `assetId` is the asset the
+ * reference points at — what lets the library answer for many assets in one
+ * call (`specs/166-asset-reference-visibility/` research R-6).
+ *
+ * Required of a descriptor that declares `readerRestriction`, and set by every
+ * descriptor in this repository. A descriptor that omits it is still answered
+ * correctly: the registry asks it one asset at a time. Never sent to a client:
+ * `AssetDetail.references` carries {@link AssetReference}, and the library
+ * strips the field.
+ */
+export type AssetReferenceHit = AssetReference & { readonly assetId?: string };
+
+/**
+ * The reader-restriction half of a descriptor (feature 166, FR-002/FR-003):
+ * a reader who may see none of the records referencing an asset does not see
+ * the asset in the library.
+ *
+ * **Every method answers for the ambient caller** — the administrator the
+ * request's TenantContext names, with their Organization reach — exactly as
+ * the owner's own screens do, **including the owner's read permission** (a
+ * caller without `tasks:read` sees no Task). The caller is never a parameter:
+ * it is the `TaskContextDescriptor` precedent.
+ *
+ * The library asks only while the owner is **effectively present**, and never
+ * for the system actor or a holder of the platform wildcard, whom it answers
+ * itself. Each method is a bounded number of statements, independent of the
+ * size of its input (FR-014). Never catch `ModuleDisabledError` inside one
+ * (`check:port-catches`).
+ */
+export interface AssetReferenceReaderRestriction {
+  /** Of these record ids of this descriptor's kind, the ones the caller may see. Unknown ids are simply absent. */
+  visibleEntityIds(entityIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Every asset id that at least one record of this kind the caller may
+   * **not** see points at. The exact complement of `visibleEntityIds` over
+   * this descriptor's references — written NULL-safe (`(<visible>) is not
+   * true`), so a row the predicate cannot decide is hidden, never shown.
+   */
+  assetIdsWithHiddenReferences(): Promise<readonly string[]>;
+  /**
+   * Every asset id any record of this kind points at, whoever asks. Asked
+   * while the owner is **switched off**, when no record of it is visible to a
+   * restricted reader. Plain SQL over the owner's own tables, like
+   * `findReferences`, because it runs while the owner is off: it resolves no
+   * port.
+   */
+  allReferencedAssetIds(): Promise<readonly string[]>;
 }
 
 /**
@@ -397,10 +700,22 @@ export interface AssetReferenceDescriptor {
   ownerModuleId: string;
   /**
    * Given a list of asset ids, return every reference that points at any of
-   * them. MUST issue a single batched query, one per descriptor regardless of
-   * batch size.
+   * them, each tagged with the `assetId` it points at. MUST issue a single
+   * batched query, one per descriptor regardless of batch size.
+   *
+   * A descriptor returning plain {@link AssetReference}s still compiles and is
+   * still answered correctly — the registry asks it one asset at a time
+   * wherever it needs to attribute a batch.
    */
-  findReferences(assetIds: string[]): Promise<AssetReference[]>;
+  findReferences(assetIds: string[]): Promise<AssetReferenceHit[]>;
+  /**
+   * Present ⇔ these references are **reader-restricted**: a reader who may see
+   * none of the records referencing an asset does not see the asset (feature
+   * 166, FR-001). Absent ⇔ the references never hide an asset (catalog, cms,
+   * blog, megamenu). An optional **data property**, not an optional method
+   * (`check:port-shape`).
+   */
+  readonly readerRestriction?: AssetReferenceReaderRestriction;
 }
 
 /**
@@ -421,6 +736,12 @@ export interface AssetReferenceDescriptor {
  * `skip` is right for surface-like contributions, where a switched-off module
  * must contribute nothing a user can see. Nobody sees these; they exist to
  * refuse a delete. Publishing the shape must not change that classification.
+ *
+ * **Enumeration is not visibility** (feature 166). Which assets a library
+ * reader may see is the library's own evaluation, which reads the same
+ * descriptors and decides a switched-off owner's references as **hidden**
+ * (fail closed). The two policies answer different questions: this port's
+ * methods answer "does anything still use this file", for whoever asks.
  */
 export interface AssetReferenceRegistryPort {
   register(descriptor: AssetReferenceDescriptor): void;
@@ -486,12 +807,66 @@ export interface AssetUploadInput {
 }
 
 /**
+ * Replace an existing asset's file in place — the replace of
+ * `specs/156-asset-stable-url/`, as a module calls it (issue #694).
+ *
+ * The asset keeps its id, folder, label, alternate text, visibility, references
+ * and storage key, so every URL already handed out keeps answering; the result
+ * carries a new `contentVersion`, and the replaced file is kept as the asset's
+ * previous version. The same upload policy applies as to
+ * {@link AssetsLibraryPort.upload}.
+ */
+export interface AssetReplaceInput {
+  assetId: string;
+  /** The new file's name. The asset takes it, with the new type and size. */
+  filename: string;
+  /** MIME the source declared (may be wrong; the content is sniffed). */
+  declaredMime: string;
+  /** Streaming source — must be consumed exactly once. */
+  stream: AssetUploadStream;
+  /** Best-effort byte count; `0` when unknown. */
+  declaredSize: number;
+  /**
+   * The content version the caller last read. When given, the replace is
+   * refused with `409 ASSET_REPLACE_CONFLICT` unless the asset still has it.
+   * Absent, the version read when the call starts is assumed, so the call
+   * guards only against a replace that lands while it runs — not against a
+   * lost update. A caller that wants that protection passes the version it
+   * last read.
+   */
+  expectedContentVersion?: string;
+}
+
+/**
  * Container name: `assetsLibraryPort`. Owner: `assets_library`.
  *
  * `pim_ergonode` ingests media during an import run: it uploads the file the
  * source supplied, patches the alternate text onto it, and soft-deletes the
- * asset an item stopped pointing at. Four methods, which is the whole of the
- * demand — the module's own admin surface is much larger and stays unpublished.
+ * asset an item stopped pointing at. The module's own admin surface is much
+ * larger and stays unpublished; what is here is what a consumer asked for.
+ *
+ * `replace` is the in-place replace of `specs/156-asset-stable-url/`, published
+ * for a module that keeps an asset in step with an external source — an instance
+ * module syncing files from a PIM is the first (issue #694). Uploading a new
+ * asset and soft-deleting the old one instead changes the public URL (the old
+ * one answers 410) and loses the previous version; `replace` keeps both. It
+ * runs Command `asset.replace` and refuses as the admin route does, with the
+ * same `HttpError` codes: `404 ASSET_NOT_FOUND`, `410 ASSET_GONE` (soft-deleted),
+ * `409 ASSET_LEGACY_CANNOT_REPLACE` (no storage key this platform wrote),
+ * `415 ASSET_REPLACE_KIND_MISMATCH` (another kind of file) and
+ * `409 ASSET_REPLACE_CONFLICT` (`expectedContentVersion` stale, or a concurrent
+ * replace won).
+ *
+ * **The caller is trusted.** Like `patchAsset` and `softDelete`, `replace`
+ * checks no permission and applies **no** admin visibility check: the admin
+ * route does both before it calls the service (`requireAdmin('assets.write')`
+ * and its route-only `requireVisibleAsset` guard), so the port is not
+ * equivalent to the route — it replaces an asset no administrator could see,
+ * and a module calling it answers for its own caller. Omitting
+ * `expectedContentVersion` guards only against a replace landing during the
+ * call; see {@link AssetReplaceInput.expectedContentVersion}. **One previous version is kept**: a second replace discards the
+ * file the first one kept. Like every Command, the call needs an ambient
+ * context — inside a request, or in `enterSystemScope` for a worker or a sync.
  *
  * `cms` is the second consumer and takes `getAsset` alone, to turn an asset id a
  * page or block embeds into the detail the storefront response carries. It reached
@@ -510,6 +885,7 @@ export interface AssetsLibraryPort {
   getAsset(assetId: string): Promise<AssetDetail>;
   patchAsset(assetId: string, patch: AssetPatchInput): Promise<AssetDetail>;
   softDelete(assetId: string): Promise<{ deletedAt: Date; purgeAfterAt: Date }>;
+  replace(input: AssetReplaceInput): Promise<AssetDetail>;
 }
 
 /**

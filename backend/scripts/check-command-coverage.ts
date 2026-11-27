@@ -93,6 +93,11 @@ export const MIGRATED_MODULES: readonly string[] = [
   'crm',
   'admin_search',
   'document_templates',
+  'admin_feedback',
+  'tasks',
+  'projects',
+  // Feature 168 (plan R-7): every write of the module runs a Command.
+  'megamenu',
 ];
 
 /**

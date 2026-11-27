@@ -102,10 +102,13 @@ Kod zapisuje się w całości, razem z kropkami. Dla manifestu powyżej:
 }
 ```
 
-Rozstrzyganie odbywa się osobno dla każdego klucza: język administratora, potem angielski, potem
-tekst zadeklarowany w manifeście. Każdy klucz jest opcjonalny, więc moduł, który nie dostarcza
-żadnego z nich, wygląda dokładnie tak jak wcześniej, a ustawienia można tłumaczyć po jednym. Ze
-sposobu wyszukiwania wynikają trzy rzeczy:
+Rozstrzyganie odbywa się osobno dla każdego klucza. **Nazwa** jest szukana w języku
+administratora, potem po angielsku, potem brany jest tekst zadeklarowany w manifeście. **Opis**
+nigdy nie jest pokazywany w innym języku: po polsku jest to polski klucz albo nic, a angielskie
+zdanie z manifestu widzi tylko czytelnik angielski. Opis mieści się w jednym wierszu ekranu —
+najwyżej 120 znaków po angielsku, czego pilnuje `pnpm --filter backend run check:text-budget` —
+a pełne wyjaśnienie trafia na stronę dokumentacji modułu. Ze sposobu wyszukiwania wynikają trzy
+rzeczy:
 
 - **Czytana jest wyłącznie paczka modułu będącego właścicielem** — tego, którego manifest ustawień
   zadeklarował wiersz (`moduleCode`, który musi być równy `id` modułu, żeby jego paczka została
@@ -155,6 +158,59 @@ się na `_asset_id` albo wskazuje obraz i kończy się na `_url`, zachowuje edyt
 Usunięcie flagi niczego też nie przepisuje: zapisana wartość zachowuje podziały wierszy do chwili,
 gdy operator następnym razem zmieni ją w polu jednowierszowym, które ich nie pomieści.
 
+### Walidacja zapisów i informacja, że wartość nie obowiązuje
+
+Dwa rejestry wkładów pozwalają modułowi, który zadeklarował ustawienie,
+odpowiadać za nie z haka startowego, podczas gdy `settings` nadal odpowiada za
+przechowywanie i rozstrzyganie wartości. Oba pomijają wkład modułu, który jest
+wyłączony.
+
+- `settingWriteValidatorRegistry` (`SettingWriteValidatorRegistryPort`):
+  walidator odrzuca wartość przed jej zapisaniem, zgłaszając `HttpError`.
+- `settingNoticeRegistry` (`SettingNoticeRegistryPort`): dostawca informuje,
+  że zapisana wartość dla całej platformy nie jest tą, która obowiązuje,
+  odpowiadając `{ code, message }`, albo `null`, gdy nie ma nic do
+  powiedzenia. Każda odpowiedź API ustawień w panelu zawiera wtedy pole
+  `notice`; w przeciwnym razie tego klucza nie ma. Ekran Ustawienia pokazuje
+  komunikat pod opisem, przetłumaczony z Twojego pakietu tłumaczeń pod kluczem
+  `settingLabels.<kod ustawienia>.notice.<code>`, a w jego braku `message`.
+  Dostawca, który zgłosi błąd, jest zapisywany w logu i pomijany: ustawienie
+  jest wtedy pokazywane bez komunikatu. Moduł `mfa` korzysta z tego dla
+  `mfa.admin.totp_enforced`, gdy nie skonfigurowano klucza szyfrowania.
+
+  Dostawca może też implementować `confirmation`, czyli pytanie zadawane przed
+  zapisem: `{ whenValue, code, message, params? }` albo `null`. Odpowiedź
+  zawiera je wtedy jako `confirmation`. Gdy operator zapisuje dokładnie
+  `whenValue`, ekran Ustawienia tuż przed zapisem ponownie odczytuje ustawienie
+  i pyta na podstawie `confirmation` z tego odczytu, więc liczba w `params` jest
+  aktualna w chwili zapisu; jeśli ponowny odczyt go nie zawiera, zapis odbywa
+  się bez pytania. Pytanie to tekst z Twojego pakietu tłumaczeń pod kluczem
+  `settingLabels.<kod ustawienia>.confirmation.<code>` uzupełniony wartościami
+  z `params`, a w jego braku `message`; odmowa niczego nie zapisuje. Po
+  zaakceptowanym zapisie ekran pokazuje, zamiast wiersza z liczbą zapisanych
+  zmian, tekst `settingLabels.<kod ustawienia>.confirmed.<code>` z Twojego
+  pakietu, jeśli go dostarczasz. Dostawca, którego `confirmation` zgłosi błąd,
+  jest zapisywany w logu i pomijany, a zapis odbywa się bez pytania.
+
+  Moduł `mfa` korzysta z tego dla `mfa.admin.totp_enforced`. Samo wylogowanie
+  nie zależy od pytania: `mfa` kończy sesje administratorów bez drugiego
+  składnika po każdym zapisie, który pozostawia `mfa.admin.totp_enforced`
+  włączone, przez `settings.value_changed`. Pytanie pada tylko wtedy, gdy zapis
+  je włącza, i podaje, ilu administratorów to dotyczy.
+
+```ts
+ctx.onBoot(() => {
+  lazyPort<SettingNoticeRegistryPort>(ctx, 'settingNoticeRegistry').register({
+    contributorModuleId: 'your_module',
+    codes: ['your_module.enabled'],
+    notice: async ({ value }) =>
+      value === true && !configured()
+        ? { code: 'not_configured', message: 'Not in force: the connection is not configured.' }
+        : null,
+  });
+});
+```
+
 ## Dla administratorów platformy — edycja wartości
 
 Otwórz `Admin → Operations → Settings`. Ustawienia są pogrupowane według sekcji, do której należą.
@@ -168,7 +224,12 @@ Równoczesne zmiany są wykrywane przez `expectedVersion` (znacznik czasu ISO). 
 ustawienie, odkąd je otworzyłeś, zapis zwraca `409 VERSION_CONFLICT`, a komunikat prosi o odświeżenie
 i ponowienie próby — nic nie jest po cichu nadpisywane.
 
-Grupami ustawień zarządzasz w `Admin → Operations → Setting groups`. Grupa `general` jest chroniona
+Ekran ustawień ma trzy karty pod jedną pozycją *Ustawienia* w sekcji *Platforma* paska bocznego:
+**Ustawienia**, **Grupy** oraz **Cache i indeks wyszukiwania** (ta ostatnia tylko dla
+administratorów z uprawnieniem `settings:write`). Każdą kartę otworzysz też bezpośrednio z palety
+poleceń (⌘K / CTRL+K): *Otwórz ustawienia platformy*, *Grupy ustawień* i *Wyczyść cache*.
+
+Grupami ustawień zarządzasz na karcie **Grupy**. Grupa `general` jest chroniona
 przez system i platforma odmawia jej usunięcia. Usunięcie dowolnej innej grupy przenosi jej
 ustawienia do `general` i zachowuje wartości ustawione dla kanałów.
 
@@ -179,6 +240,25 @@ obok siebie. Jest to wartość przechowywana na poziomie, którego dotyczy zapis
 wszystkich kanałów albo własna wartość danego kanału — a nie wartość, którą kanał faktycznie
 otrzymywał: pierwszy zapis odnotowuje `stored: false`, a nie wartość domyślną z manifestu.
 Ustawienie typu `secret` jest zapisywane jako `[redacted]` po obu stronach.
+
+## Informacje o sklepie
+
+Grupa **Shop information** (`shop`) zawiera dane o sklepie, które publikuje
+storefront: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails` oraz
+dwa ustawienia dla wyszukiwarek:
+
+| Ustawienie | Typ | Co to jest |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — publiczny obraz z biblioteki zasobów, wybierany w oknie wyboru zasobu. Puste oznacza brak logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — pełne adresy `https://` profili organizacji w serwisach społecznościowych i innych witrynach, po jednym na wpis. Zapis zawierający inną wartość jest odrzucany z `422 VALIDATION_FAILED` i nic nie zostaje zapisane. |
+
+Storefront odczytuje je przez `GET /api/v1/storefront/shop-info`, które zwraca
+`logoUrl` (publiczny adres zasobu logo albo `null`, gdy ustawienie jest puste
+albo zasób zniknął lub nie jest publiczny) i `socialProfiles` (tylko wpisy
+`https:`). Publikuje oba w danych strukturalnych `Organization`, jako `logo` i
+`sameAs`, na stronie głównej i na każdej stronie CMS. Odczyt logo jest powodem,
+dla którego ten moduł zależy od `assets_library`.
 
 ## Dla modułów korzystających z ustawień — odczyt wartości
 
@@ -222,23 +302,29 @@ wartości, a nie od ostatniego odczytu, więc nawet ustawienie odczytywane przy 
 się przedawnia.
 
 To okno wyznacza górną granicę czasu, przez jaki pominięte unieważnienie może być widoczne. Dlatego
-też strona „clear cache” dla operatora jest narzędziem diagnostycznym, a nie naprawczym: czyści obie
+też akcja *Wyczyść cache* dla operatora (na karcie **Cache i indeks wyszukiwania**, obok
+*Przebuduj indeks wyszukiwarki* i *Przeładuj tłumaczenia*) jest narzędziem diagnostycznym, a nie naprawczym: czyści obie
 warstwy w procesie, który ją obsługuje, oraz wspólne wpisy dla wszystkich, a każdy inny proces
 uzgadnia się w tym samym oknie 30 s.
 
 ## Wiersz poleceń
 
-Wiersze ustawień instalują i usuwają polecenia cyklu życia modułu, a nie osobne polecenia:
+Wiersze ustawień instalują i usuwają polecenia cyklu życia modułu, a nie osobne polecenia.
+Uruchamiaj je w katalogu głównym instancji:
 
 ```bash
 # Install a module: runs its migrations and reconciles its settings manifest.
-pnpm --filter backend run module:install <module-id> [--dry-run] [--json]
+pnpm run module:install <module-id> [--dry-run] [--json]
 
 # Soft uninstall (default): unregisters the module's settings and marks the
 # module uninstalled; its tables and data stay. --hard also reverts the
 # module's migrations and must be combined with --force.
-pnpm --filter backend run module:uninstall <module-id> [--hard --force] [--json]
+pnpm run module:uninstall <module-id> [--hard --force] [--json]
 ```
+
+W klonie repozytorium Endora Commerce te same dwa polecenia mają postać
+`pnpm --filter backend run module:install` i
+`pnpm --filter backend run module:uninstall`, z tymi samymi argumentami.
 
 `module:uninstall` nadal przyjmuje `--remove-settings` i `--preserve-settings` ze względu na zgodność
 wsteczną: pierwsza flaga oznacza `--hard --force`, druga nic nie robi. Gramatyka argumentów i kody

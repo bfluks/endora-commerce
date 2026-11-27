@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import type { Command, CommandContext } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import { FeedTemplate } from '../entities/feed-template.entity.js';
@@ -155,7 +155,7 @@ export function makeCreateTemplateCommand(
       // The parent row has to exist before its fields: the field table's
       // foreign key is checked per statement, and MikroORM batches inserts by
       // entity type in an order it chooses, not in persist order.
-      await em.persistAndFlush(template);
+      await em.persist(template).flush();
       const saved = await replaceFields(em, template.id, fields);
       return {
         result: { template, fields: saved },
@@ -184,11 +184,12 @@ export function makeUpdateTemplateCommand(
       return template ? auditState(template, await loadFields(em, templateId)) : null;
     },
     run: async ({ em }) => {
+      if (!isUuidShape(templateId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       const template = await em.findOne(FeedTemplate, { id: templateId, deletedAt: null });
       if (!template) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       Object.assign(template, patch);
       template.version += 1;
-      await em.persistAndFlush(template);
+      await em.persist(template).flush();
       const saved =
         fields === undefined
           ? await loadFields(em, templateId)
@@ -217,6 +218,7 @@ export function makeDuplicateTemplateCommand(
     objectType: 'feed_template',
     objectId: sourceId,
     run: async ({ em }) => {
+      if (!isUuidShape(sourceId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       const source = await em.findOne(FeedTemplate, { id: sourceId, deletedAt: null });
       if (!source) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       const sourceFields = await loadFields(em, sourceId);
@@ -233,7 +235,7 @@ export function makeDuplicateTemplateCommand(
         isSystem: false,
         systemCode: null,
       });
-      await em.persistAndFlush(copy);
+      await em.persist(copy).flush();
       const saved = await replaceFields(
         em,
         copy.id,
@@ -310,7 +312,7 @@ export function makeImportTemplateCommand(
         }
         Object.assign(existing, values);
         existing.version += 1;
-        await em.persistAndFlush(existing);
+        await em.persist(existing).flush();
         const saved = await replaceFields(em, existing.id, fields);
         return { result: { template: existing, fields: saved }, after: auditState(existing, saved) };
       }
@@ -329,7 +331,7 @@ export function makeImportTemplateCommand(
         isSystem: false,
         systemCode: null,
       });
-      await em.persistAndFlush(template);
+      await em.persist(template).flush();
       const saved = await replaceFields(em, template.id, fields);
       return { result: { template, fields: saved }, after: auditState(template, saved) };
     },
@@ -350,12 +352,13 @@ export function makeDeleteTemplateCommand(templateId: string): Command<{ id: str
       return template ? auditState(template, await loadFields(em, templateId)) : null;
     },
     run: async ({ em }) => {
+      if (!isUuidShape(templateId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       const template = await em.findOne(FeedTemplate, { id: templateId, deletedAt: null });
       if (!template) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed template not found.');
       // Soft delete: run history references the template by id, and an audit
       // trail that points at a vanished row explains nothing.
       template.deletedAt = new Date();
-      await em.persistAndFlush(template);
+      await em.persist(template).flush();
       return { result: { id: templateId }, after: null };
     },
     event: () => ({

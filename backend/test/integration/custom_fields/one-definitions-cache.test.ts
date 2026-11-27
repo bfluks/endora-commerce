@@ -77,6 +77,9 @@ describe('custom_fields — one definitions cache [integration]', () => {
       audience: 'internal',
       sortOrder: 900,
       config: {},
+      carryTo: [],
+      customerInput: [],
+      adminAccess: 'edit',
       options: [],
     });
 

@@ -3,10 +3,13 @@ import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '../lib/utils.js';
 import { Checkbox } from './checkbox.js';
 import { normalize } from '../lib/text-normalization.js';
+import { useTranslation } from '../i18n/useTranslation.js';
 
 export interface MultiSelectOption {
   value: string;
   label: string;
+  /** Optional secondary text shown muted after the label (e.g. a code beside a name). */
+  description?: string;
 }
 
 export interface MultiSelectProps {
@@ -17,6 +20,14 @@ export interface MultiSelectProps {
   placeholder: string;
   /** aria-label for the trigger button. */
   ariaLabel?: string;
+  /**
+   * The id of a visible label that names the trigger. Given, it replaces
+   * `ariaLabel`, so the name is the label the reader sees and not a second
+   * copy of it.
+   */
+  ariaLabelledBy?: string;
+  /** The trigger's id — what an `InlineEdit` editor puts its focus on. */
+  id?: string;
   className?: string;
   disabled?: boolean;
   /** Optional leading icon for the trigger (e.g. a Columns glyph). */
@@ -41,12 +52,15 @@ export function MultiSelect({
   onChange,
   placeholder,
   ariaLabel,
+  ariaLabelledBy,
+  id,
   className,
   disabled = false,
   icon,
   searchable = false,
   searchPlaceholder,
 }: MultiSelectProps): ReactNode {
+  const t = useTranslation('core');
   const reactId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -94,8 +108,10 @@ export function MultiSelect({
   return (
     <div ref={containerRef} className={cn('relative', className)}>
       <button
+        id={id}
         type="button"
-        aria-label={ariaLabel ?? placeholder}
+        aria-label={ariaLabelledBy ? undefined : (ariaLabel ?? placeholder)}
+        aria-labelledby={ariaLabelledBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -124,8 +140,8 @@ export function MultiSelect({
               autoFocus
               value={query}
               onChange={(e): void => setQuery(e.target.value)}
-              placeholder={searchPlaceholder ?? 'Search…'}
-              aria-label={searchPlaceholder ?? 'Search options'}
+              placeholder={searchPlaceholder ?? t('common.multiSelect.search')}
+              aria-label={searchPlaceholder ?? t('common.multiSelect.searchLabel')}
               className={cn(
                 'mb-1 h-8 w-full rounded-sm border border-input bg-transparent px-2 text-sm',
                 'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
@@ -135,7 +151,7 @@ export function MultiSelect({
           <div className="overflow-auto">
           {visibleOptions.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">
-              {options.length === 0 ? '—' : 'No matches'}
+              {options.length === 0 ? '—' : t('common.multiSelect.noMatches')}
             </p>
           ) : (
             visibleOptions.map((opt) => {
@@ -152,6 +168,9 @@ export function MultiSelect({
                     onChange={(): void => toggle(opt.value)}
                   />
                   <span className="flex-1 truncate">{opt.label}</span>
+                  {opt.description ? (
+                    <span className="shrink-0 text-xs text-muted-foreground">{opt.description}</span>
+                  ) : null}
                   {checked ? <Check className="size-3.5 opacity-70" /> : null}
                 </label>
               );

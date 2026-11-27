@@ -1,7 +1,7 @@
 'use client';
 
 import { type ComponentConfig, type Field, type PuckComponent } from '@puckeditor/core';
-import { PB_RESPONSIVE_METADATA, withHideOn } from '@endora-commerce/page-builder-core';
+import { createToggleField, PB_RESPONSIVE_METADATA, withHideOn } from '@endora-commerce/page-builder-core';
 import { usePreviewBreakpointTier } from '@endora-commerce/page-builder-core/client';
 import type { CmsProductCardProps } from '../schema/component-types.js';
 import { useViewportBreakpointTier } from '../hooks/use-viewport-breakpoint-tier.js';
@@ -75,9 +75,9 @@ const productCardConfig: ComponentConfig<CmsProductCardProps> = {
   label: 'Product card',
   fields: {
     productSlug: createCatalogSlugFallbackField('Product') as Field<string>,
-    showPrice: { type: 'radio', label: 'Show price', options: [{ label: 'Yes', value: true }, { label: 'No', value: false }] },
-    showSku: { type: 'radio', label: 'Show SKU', options: [{ label: 'Yes', value: true }, { label: 'No', value: false }] },
-    showStock: { type: 'radio', label: 'Show stock', options: [{ label: 'Yes', value: true }, { label: 'No', value: false }] },
+    showPrice: createToggleField({ label: 'Show price', defaultValue: true }),
+    showSku: createToggleField({ label: 'Show SKU', defaultValue: true }),
+    showStock: createToggleField({ label: 'Show stock', defaultValue: true }),
     imageRatio: {
       type: 'select',
       label: 'Image ratio',
@@ -90,7 +90,7 @@ const productCardConfig: ComponentConfig<CmsProductCardProps> = {
     },
     imageHeightPx: {
       type: 'number',
-      label: 'Image height (px, optional)',
+      label: 'Image height (px, empty = automatic)',
       min: 0,
       max: 800,
       step: 8,
@@ -108,7 +108,7 @@ const productCardConfig: ComponentConfig<CmsProductCardProps> = {
     },
     maxWidthPx: {
       type: 'number',
-      label: 'Max width (px, 0 = full)',
+      label: 'Max width (px, empty or 0 = full width)',
       min: 0,
       max: 1200,
       step: 8,
@@ -117,14 +117,14 @@ const productCardConfig: ComponentConfig<CmsProductCardProps> = {
     cornerRadius: CORNER_RADIUS_FIELD,
     variant: {
       type: 'select',
-      label: 'Variant',
+      label: 'Card style',
       options: [
         { label: 'Default', value: 'default' },
         { label: 'Compact', value: 'compact' },
         { label: 'Horizontal', value: 'horizontal' },
       ],
     },
-    ctaLabel: { type: 'text', label: 'CTA label (optional)' },
+    ctaLabel: { type: 'text', label: 'Button label' },
     margin: BOX_MARGIN_FIELD,
     padding: BOX_PADDING_FIELD,
     border: BOX_BORDER_FIELD,

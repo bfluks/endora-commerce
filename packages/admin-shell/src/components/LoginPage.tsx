@@ -1,12 +1,24 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { LogIn, ShieldAlert } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from './ui/alert.js';
-import { Button } from './ui/button.js';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.js';
-import { Input } from './ui/input.js';
-import { Label } from './ui/label.js';
-import { useAuth } from '../lib/auth.js';
-import { ADMIN_ACCOUNT_HELP_URL, loginCopy } from '../i18n/preauth-login-copy.js';
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+} from '@endora-commerce/admin-kit/ui';
+import { useAuth } from '@endora-commerce/admin-kit/lib';
+import {
+  ADMIN_ACCOUNT_HELP_URL,
+  federatedSignInErrorLine,
+  loginCopy,
+} from '../i18n/preauth-login-copy.js';
 import { FederatedSignIn } from './FederatedSignIn.js';
 
 /**
@@ -22,33 +34,52 @@ import { FederatedSignIn } from './FederatedSignIn.js';
  * three.
  */
 export function LoginPage(): ReactNode {
-  const { login, verifyMfa, cancelMfa, lastLoginError, status, mfaChallengeId } = useAuth();
+  const {
+    login,
+    verifyMfa,
+    cancelMfa,
+    lastLoginError,
+    lastLoginReason,
+    federatedSignInError,
+    status,
+    mfaChallengeId,
+  } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const mfaErrorId = useId();
+  // The backend's sentence, or the screen's own line for a failure that came
+  // back with none (issue #1481).
+  const errorLine =
+    lastLoginError ??
+    (lastLoginReason === 'sign_in_failed'
+      ? loginCopy.signInFailedLine
+      : lastLoginReason === 'verification_failed'
+        ? loginCopy.verificationFailedLine
+        : null);
 
   // Feature 042 — second-step screen, shown when the password step returned
   // `mfaRequired`. Mirrors the login card layout (Principle IX).
   if (mfaChallengeId) {
     return (
-      <div className="grid min-h-screen place-items-center bg-muted/40 px-4 py-8" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom))' }}>
+      <div className="grid min-h-screen place-items-center bg-muted/40 px-4 pt-8 [padding-bottom:max(2rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <LogIn className="size-5 text-primary" />
-              Two-step verification
+              {loginCopy.mfaTitle}
             </CardTitle>
-            <CardDescription>
-              Enter the 6-digit code from your authenticator app, or a recovery code.
-            </CardDescription>
+            <CardDescription>{loginCopy.mfaDescription}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {lastLoginError ? (
+            {errorLine ? (
               <Alert variant="destructive">
                 <ShieldAlert className="size-4" />
                 <AlertTitle>{loginCopy.failed}</AlertTitle>
-                <AlertDescription>{lastLoginError}</AlertDescription>
+                {/* The code field is described by this line, so a refused code
+                    is read out with the field it belongs to. */}
+                <AlertDescription id={mfaErrorId}>{errorLine}</AlertDescription>
               </Alert>
             ) : null}
             <form
@@ -63,19 +94,25 @@ export function LoginPage(): ReactNode {
               }}
             >
               <div className="space-y-2">
-                <Label htmlFor="mfa-code">Authentication code</Label>
+                <Label htmlFor="mfa-code">{loginCopy.mfaCodeLabel}</Label>
+                {/* No numeric keyboard: the field also takes a recovery code,
+                    which is hexadecimal. */}
                 <Input
                   id="mfa-code"
                   autoComplete="one-time-code"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   autoFocus
                   required
+                  {...(errorLine ? { 'aria-invalid': true, 'aria-describedby': mfaErrorId } : {})}
                   value={code}
                   onChange={(e): void => setCode(e.target.value)}
                   placeholder="123456"
                 />
               </div>
               <Button type="submit" className="w-full min-h-11" disabled={submitting}>
-                {submitting ? loginCopy.submitting : 'Verify'}
+                {submitting ? loginCopy.submitting : loginCopy.mfaSubmit}
               </Button>
               <Button
                 type="button"
@@ -83,7 +120,7 @@ export function LoginPage(): ReactNode {
                 className="w-full"
                 onClick={(): void => cancelMfa()}
               >
-                Back to sign in
+                {loginCopy.mfaBack}
               </Button>
             </form>
           </CardContent>
@@ -93,7 +130,7 @@ export function LoginPage(): ReactNode {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-muted/40 px-4 py-8" style={{ paddingBottom: 'max(2rem, env(safe-area-inset-bottom))' }}>
+    <div className="grid min-h-screen place-items-center bg-muted/40 px-4 pt-8 [padding-bottom:max(2rem,env(safe-area-inset-bottom))]">
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
@@ -105,13 +142,25 @@ export function LoginPage(): ReactNode {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {lastLoginError ? (
+          {/* Issue #813 — a federated refusal arrives as a code and is worded
+              from the screen's own copy; the `?error=` value is never printed.
+              `lastLoginError` is the backend's answer to a password attempt,
+              or the session-expired notice (`lastLoginReason`). */}
+          {federatedSignInError ? (
             <Alert variant="destructive">
               <ShieldAlert className="size-4" />
               <AlertTitle>
-                {/expired/i.test(lastLoginError) ? loginCopy.sessionExpired : loginCopy.failed}
+                {federatedSignInError === 'sign_in_expired' ? loginCopy.sessionExpired : loginCopy.failed}
               </AlertTitle>
-              <AlertDescription>{lastLoginError}</AlertDescription>
+              <AlertDescription>{federatedSignInErrorLine(federatedSignInError)}</AlertDescription>
+            </Alert>
+          ) : errorLine ? (
+            <Alert variant="destructive">
+              <ShieldAlert className="size-4" />
+              <AlertTitle>
+                {lastLoginReason === 'session_expired' ? loginCopy.sessionExpired : loginCopy.failed}
+              </AlertTitle>
+              <AlertDescription>{errorLine}</AlertDescription>
             </Alert>
           ) : null}
           <form

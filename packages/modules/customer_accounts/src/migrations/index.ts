@@ -32,6 +32,9 @@ import { Migration20260819T142837CustomerAccountsFoldEmailCase } from './2026081
 import { Migration20260825T124759CustomerAccountsDropLegacyTwoFactorSecret } from './20260825T124759_customer_accounts_drop_legacy_two_factor_secret.js';
 import { Migration20260825T141659CustomerAccountsOrganizationRequired } from './20260825T141659_customer_accounts_organization_required.js';
 import { Migration20260912T094701CustomerAccountsSalesChannelCustomerAccounts } from './20260912T094701_customer_accounts_sales_channel_customer_accounts.js';
+import { Migration20261103T190132CustomerAccountsOrganizationRoleAssignment } from './20261103T190132_customer_accounts_organization_role_assignment.js';
+import { Migration20261104T094540CustomerAccountsDropLegacyRoleColumn } from './20261104T094540_customer_accounts_drop_legacy_role_column.js';
+import { Migration20261115T145934CustomerAccountsPreferredLanguage } from './20261115T145934_customer_accounts_preferred_language.js';
 
 export const migrations = [
   Migration20260425T055041CustomerAccountsPasswordResetTokens,
@@ -44,6 +47,9 @@ export const migrations = [
   Migration20260825T124759CustomerAccountsDropLegacyTwoFactorSecret,
   Migration20260825T141659CustomerAccountsOrganizationRequired,
   Migration20260912T094701CustomerAccountsSalesChannelCustomerAccounts,
+  Migration20261103T190132CustomerAccountsOrganizationRoleAssignment,
+  Migration20261104T094540CustomerAccountsDropLegacyRoleColumn,
+  Migration20261115T145934CustomerAccountsPreferredLanguage,
 ];
 
 export {
@@ -57,4 +63,7 @@ export {
   Migration20260825T124759CustomerAccountsDropLegacyTwoFactorSecret,
   Migration20260825T141659CustomerAccountsOrganizationRequired,
   Migration20260912T094701CustomerAccountsSalesChannelCustomerAccounts,
+  Migration20261103T190132CustomerAccountsOrganizationRoleAssignment,
+  Migration20261104T094540CustomerAccountsDropLegacyRoleColumn,
+  Migration20261115T145934CustomerAccountsPreferredLanguage,
 };

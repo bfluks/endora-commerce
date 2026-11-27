@@ -8,8 +8,11 @@ import {
   type AdminAuthenticationOrigin,
   type AdminAuthenticationThrottlePort,
   type AdminRolePort,
+  type AdminRoleRecord,
   type AuthSessionPort,
+  type MfaAdminEnforcementPort,
   type MfaLoginPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { hashPassword, verifyPassword } from '@endora-commerce/platform/kernel';
@@ -90,11 +93,17 @@ export interface CreateAdminUserInput {
   adminRoleId?: string | null;
 }
 
-export interface UpdateAdminUserInput {
+export interface UpdateAdminUserInput extends AuthorProfileInput {
   firstName?: string;
   lastName?: string;
   adminRoleId?: string | null;
   status?: 'active' | 'inactive';
+}
+
+/** Feature 171 (US6) — the public author profile; `null` clears a field. */
+export interface AuthorProfileInput {
+  avatarAssetId?: string | null | undefined;
+  bio?: Record<string, string> | null | undefined;
 }
 
 /**
@@ -104,7 +113,7 @@ export interface UpdateAdminUserInput {
  * refusal in {@link AdminUserService.updateSelf} instead of compiling its way
  * past it.
  */
-export interface UpdateOwnAdminUserInput {
+export interface UpdateOwnAdminUserInput extends AuthorProfileInput {
   firstName?: string;
   lastName?: string;
   password?: string;
@@ -238,7 +247,97 @@ export class AdminUserService {
      * withdrawn with the password they were issued under.
      */
     private readonly getMfaLoginPort?: () => MfaLoginPort | undefined,
+    /**
+     * Feature 171 (US6) — whether a live library asset has this id. Absent in a
+     * composition without the library, where an avatar cannot be set.
+     */
+    private readonly assetExists?: (assetId: string) => Promise<boolean>,
+    /**
+     * Issue #349 — `mfa`'s answer to a role's two-factor requirement starting
+     * to bind somebody, resolved lazily and absent while `mfa` is. Absent, no
+     * session is ended: sign-in asks for no second factor then (D-96), and the
+     * requirement cannot be turned on.
+     */
+    private readonly getMfaAdminEnforcementPort?: () => MfaAdminEnforcementPort | undefined,
   ) {}
+
+  /**
+   * The ids of the live administrators holding a role — the people a role's
+   * two-factor requirement binds. A deleted account holds no session.
+   */
+  async listLiveIdsByRoleId(adminRoleId: string): Promise<string[]> {
+    const admins = await this.emFactory().find(AdminUser, { adminRoleId, deletedAt: null });
+    return admins.map((admin) => admin.id);
+  }
+
+  /**
+   * Issue #349 — end the sessions a role's holders opened without a second
+   * factor, once the role has started requiring one. Called **after** the role
+   * write is persisted, so a refused or rolled-back write signs nobody out.
+   * Spares the session the change was made from when it is the acting
+   * administrator's own. Answers how many administrators were signed out.
+   */
+  async endUnprotectedSessionsOfRole(
+    role: Pick<AdminRoleRecord, 'id' | 'code'>,
+    context: { actingAdminUserId: string; sessionCookieValue?: string | undefined },
+  ): Promise<number> {
+    const enforcement = this.getMfaAdminEnforcementPort?.();
+    if (!enforcement) return 0;
+    const holders = await this.listLiveIdsByRoleId(role.id);
+    if (holders.length === 0) return 0;
+    const exceptSessionId = await this.#ownSessionId(context.actingAdminUserId, context.sessionCookieValue);
+    return enforcement.endUnprotectedAdminSessions(holders, {
+      trigger: 'role_requirement_enabled',
+      roleCode: role.code,
+      ...(exceptSessionId === undefined ? {} : { exceptSessionId }),
+    });
+  }
+
+  /**
+   * How many of a role's holders have no enrolled second factor — the number
+   * {@link endUnprotectedSessionsOfRole} would sign out — or `null` while `mfa`
+   * is absent, when nothing would be.
+   */
+  async countUnprotectedHoldersOfRole(adminRoleId: string | null): Promise<number | null> {
+    const enforcement = this.getMfaAdminEnforcementPort?.();
+    if (!enforcement) return null;
+    // A role that does not exist yet has no holders.
+    if (adminRoleId === null) return 0;
+    return enforcement.countUnprotected(await this.listLiveIdsByRoleId(adminRoleId));
+  }
+
+  /** Whether a role may start requiring a second factor here: `null` when it may, else why not. */
+  async roleTwoFactorUnavailableReason(): Promise<'mfa_off' | 'encryption_key_missing' | null> {
+    const enforcement = this.getMfaAdminEnforcementPort?.();
+    if (!enforcement) return 'mfa_off';
+    return (await enforcement.canEnforceAdminSecondFactor()) ? null : 'encryption_key_missing';
+  }
+
+  /**
+   * Feature 171 (US6) — the author profile fields of a write, onto the row. An avatar
+   * must name a live library asset; with no library present one cannot be set.
+   */
+  async #applyAuthorProfile(user: AdminUser, input: AuthorProfileInput): Promise<boolean> {
+    let changed = false;
+    if (input.avatarAssetId !== undefined) {
+      if (input.avatarAssetId !== null && !(await this.assetExists?.(input.avatarAssetId))) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.ADMIN_USER_AVATAR_NOT_FOUND,
+          'The avatar is not an asset in the library.',
+          [{ path: 'avatarAssetId', issue: 'no such asset' }],
+        );
+      }
+      user.avatarAssetId = input.avatarAssetId;
+      changed = true;
+    }
+    if (input.bio !== undefined) {
+      const bio = input.bio === null ? null : Object.fromEntries(Object.entries(input.bio).filter(([, text]) => text.trim() !== ''));
+      user.bio = bio !== null && Object.keys(bio).length > 0 ? bio : null;
+      changed = true;
+    }
+    return changed;
+  }
 
   /**
    * Withdraw what the account's credential had already been exchanged for:
@@ -298,35 +397,29 @@ export class AdminUserService {
       const [items, total] = await em.findAndCount(
         AdminUser,
         { deletedAt: null },
-        { orderBy: { email: 'asc' }, offset: page * pageSize, limit: pageSize },
+        { orderBy: { email: 'asc', id: 'asc' }, offset: page * pageSize, limit: pageSize },
       );
       return { items, page, pageSize, total };
     }
 
-    const knex = em.getKnex();
     const needle = trimmedQ.toLowerCase();
     const prefix = `${needle}%`;
     const contains = `%${needle}%`;
+    // `em.execute`, so both reads run on the EntityManager's transaction
+    // context when it has one; every value is a `?` placeholder the ORM escapes.
+    const where = `where "deleted_at" is null
+         and (LOWER("first_name") LIKE ? or LOWER("last_name") LIKE ? or LOWER("email") LIKE ?)`;
+    const whereParams = [contains, contains, contains];
 
-    const baseQuery = knex('admin_users')
-      .whereNull('deleted_at')
-      .andWhere((qb) => {
-        qb.whereRaw('LOWER("first_name") LIKE ?', [contains])
-          .orWhereRaw('LOWER("last_name") LIKE ?', [contains])
-          .orWhereRaw('LOWER("email") LIKE ?', [contains]);
-      });
+    const totalRows = await em.execute<Array<{ count: string | number }>>(
+      `select count(*) as "count" from "admin_users" ${where}`,
+      whereParams,
+    );
+    const total = Number(totalRows[0]?.count ?? 0);
 
-    const totalRow = (await baseQuery
-      .clone()
-      .count<{ count: string | number }>('* as count')
-      .first()) as { count: string | number } | undefined;
-    const total = Number(totalRow?.count ?? 0);
-
-    const idRows = (await baseQuery
-      .clone()
-      .select('id')
-      .orderByRaw(
-        `CASE
+    const idRows = await em.execute<Array<{ id: string }>>(
+      `select "id" from "admin_users" ${where}
+        order by CASE
            WHEN LOWER("first_name") LIKE ? THEN 1
            WHEN LOWER("first_name") LIKE ? THEN 2
            WHEN LOWER("last_name")  LIKE ? THEN 3
@@ -334,11 +427,10 @@ export class AdminUserService {
            WHEN LOWER("email")      LIKE ? THEN 5
            WHEN LOWER("email")      LIKE ? THEN 6
            ELSE 7
-         END ASC, "email" ASC`,
-        [prefix, contains, prefix, contains, prefix, contains],
-      )
-      .offset(page * pageSize)
-      .limit(pageSize)) as Array<{ id: string }>;
+         END ASC, "email" ASC, "id" ASC
+        limit ? offset ?`,
+      [...whereParams, prefix, contains, prefix, contains, prefix, contains, pageSize, page * pageSize],
+    );
 
     const ids = idRows.map((r) => r.id);
     if (ids.length === 0) return { items: [], page, pageSize, total };
@@ -351,6 +443,7 @@ export class AdminUserService {
 
   async getById(id: string): Promise<AdminUser> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     const row = await em.findOne(AdminUser, { id, deletedAt: null });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     return row;
@@ -383,7 +476,7 @@ export class AdminUserService {
     });
     this.#audit(em, 'admin_user.create', user.id, null, { email: user.email });
     try {
-      await em.persistAndFlush(user);
+      await em.persist(user).flush();
     } catch (err) {
       if (err instanceof UniqueConstraintViolationException) {
         throw new HttpError(
@@ -401,25 +494,51 @@ export class AdminUserService {
     id: string,
     input: UpdateAdminUserInput,
     actor: AdminActorAuthority,
+    context: { sessionCookieValue?: string | undefined; actingAdminUserId?: string } = {},
   ): Promise<AdminUser> {
     const em = this.emFactory();
     const user = await this.#getByIdOn(em, id);
     await this.#assertWithinReach(user, actor);
+    let assignedRole: AdminRoleRecord | null = null;
     if (input.adminRoleId !== undefined) {
       // `null` used to clear the role. An account always holds one now, so the
       // only role change is one role for another.
       if (input.adminRoleId === null) throw adminUserRoleRequiredRefusal();
-      await this.#assertRoleAssignable(input.adminRoleId, actor);
+      const role = await this.#assertRoleAssignable(input.adminRoleId, actor);
+      if (role.id !== user.adminRoleId) assignedRole = role;
       user.adminRoleId = input.adminRoleId;
     }
     if (input.firstName !== undefined) user.firstName = input.firstName;
     if (input.lastName !== undefined) user.lastName = input.lastName;
     if (input.status !== undefined) user.status = input.status;
-    this.#audit(em, 'admin_user.update', user.id, null, { email: user.email, status: user.status });
+    await this.#applyAuthorProfile(user, input);
+    this.#audit(em, 'admin_user.update', user.id, null, {
+      email: user.email,
+      status: user.status,
+      avatarAssetId: user.avatarAssetId ?? null,
+      bio: user.bio ?? null,
+    });
     await em.flush();
     // A deactivated account must not keep answering on the sessions it already
     // holds, nor finish a login it had begun.
     if (input.status === 'inactive') await this.#withdrawCredentials(user.id);
+    // Issue #349 — given a role that requires a second factor, an account with
+    // none keeps no session it opened without one. After the flush, for the
+    // reason `#withdrawCredentials` gives.
+    else if (assignedRole?.requiresTwoFactor) {
+      const enforcement = this.getMfaAdminEnforcementPort?.();
+      if (enforcement) {
+        const exceptSessionId =
+          context.actingAdminUserId === user.id
+            ? await this.#ownSessionId(user.id, context.sessionCookieValue)
+            : undefined;
+        await enforcement.endUnprotectedAdminSessions([user.id], {
+          trigger: 'role_assigned',
+          roleCode: assignedRole.code,
+          ...(exceptSessionId === undefined ? {} : { exceptSessionId }),
+        });
+      }
+    }
     return user;
   }
 
@@ -494,7 +613,8 @@ export class AdminUserService {
       if (input.password === currentPassword) throw newPasswordUnchangedRefusal();
       passwordHash = await hashPassword(input.password);
     }
-    const editsProfile = input.firstName !== undefined || input.lastName !== undefined;
+    const editsAuthorProfile = await this.#applyAuthorProfile(user, input);
+    const editsProfile = input.firstName !== undefined || input.lastName !== undefined || editsAuthorProfile;
     const keep =
       passwordHash === undefined
         ? undefined
@@ -509,7 +629,12 @@ export class AdminUserService {
       });
     }
     if (editsProfile || passwordHash === undefined) {
-      this.#audit(em, 'admin_user.update', user.id, null, { email: user.email, status: user.status });
+      this.#audit(em, 'admin_user.update', user.id, null, {
+        email: user.email,
+        status: user.status,
+        avatarAssetId: user.avatarAssetId ?? null,
+        bio: user.bio ?? null,
+      });
     }
     await em.flush();
     if (passwordHash !== undefined) await this.#withdrawCredentials(user.id, keep);
@@ -589,6 +714,7 @@ export class AdminUserService {
     input: { password: string; firstName: string; lastName: string; adminRoleId: string },
   ): Promise<AdminUser> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     const user = await em.findOne(AdminUser, { id });
     if (!user) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     user.passwordHash = await hashPassword(input.password);
@@ -644,6 +770,7 @@ export class AdminUserService {
   }
 
   async #getByIdOn(em: EntityManager, id: string): Promise<AdminUser> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     const row = await em.findOne(AdminUser, { id, deletedAt: null });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
     return row;
@@ -656,10 +783,11 @@ export class AdminUserService {
    * raise itself, so no `catch` is wanted and none is written: an absent
    * `admin_roles` must refuse the assignment, not let it through unvalidated.
    */
-  async #assertRoleAssignable(id: string, actor: AdminActorAuthority): Promise<void> {
+  async #assertRoleAssignable(id: string, actor: AdminActorAuthority): Promise<AdminRoleRecord> {
     const role = await this.adminRoles.getById(id);
     const missing = permissionsNotHeld(role.permissions, actor.permissions);
     if (missing.length > 0) throw roleGrantExceededRefusal(missing);
+    return role;
   }
 
   /**

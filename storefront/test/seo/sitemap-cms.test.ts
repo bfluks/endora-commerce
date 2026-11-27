@@ -25,7 +25,8 @@ const getCmsPageIndex = vi.fn();
 const getHomepageConfig = vi.fn();
 
 vi.mock('../../lib/server-context', () => ({
-  getServerContext: async () => ({ ctx: { locale: 'en-US' } }),
+  // Feature 167 — no URL languages known: paths are listed as they are.
+  getServerContext: async () => ({ ctx: { locale: 'en-US' }, urlState: { languages: [], aliases: [], current: 'en-US' } }),
 }));
 vi.mock('../../lib/api/catalog', () => ({
   listProducts: (...args: unknown[]) => listProducts(...args),
@@ -98,6 +99,45 @@ describe('the sitemap tells crawlers the CMS pages exist', () => {
     expect(urls).toContain(`${ORIGIN}/`);
     expect(urls).not.toContain(`${ORIGIN}/dostawa`);
     expect(urls).toContain(`${ORIGIN}/pomoc/zwroty`);
+  });
+
+  it('advertises a nested page at its public path, never at its flat slug (163 R19D)', async () => {
+    getCmsPageIndex.mockResolvedValue({
+      pages: [
+        { slug: 'uslugi', path: 'uslugi', updatedAt: '2026-09-01T10:00:00.000Z' },
+        { slug: 'doradztwo', path: 'uslugi/doradztwo', updatedAt: '2026-09-02T10:00:00.000Z' },
+      ],
+    });
+
+    const urls = await sitemapUrls();
+
+    // The flat slug of a nested page answers a permanent redirect to its path,
+    // and a sitemap never advertises a URL that redirects.
+    expect(urls).toContain(`${ORIGIN}/uslugi/doradztwo`);
+    expect(urls).not.toContain(`${ORIGIN}/doradztwo`);
+  });
+
+  it('advertises every language URL of a page, each with the others as alternates (163 R24)', async () => {
+    getCmsPageIndex.mockResolvedValue({
+      pages: [
+        {
+          slug: 'about-us',
+          path: 'about-us',
+          url: '/about-us',
+          alternates: [
+            { language: 'en-US', url: '/about-us' },
+            { language: 'pl-PL', url: '/o-nas?lang=pl-PL' },
+          ],
+          updatedAt: '2026-09-01T10:00:00.000Z',
+        },
+      ],
+    });
+    const { default: sitemap } = await import('../../app/sitemap');
+    const entries = (await sitemap()).filter((entry) => /about-us|o-nas/.test(entry.url));
+
+    expect(entries.map((entry) => entry.url)).toEqual([`${ORIGIN}/about-us`, `${ORIGIN}/o-nas?lang=pl-PL`]);
+    const languages = { 'en-US': `${ORIGIN}/about-us`, 'pl-PL': `${ORIGIN}/o-nas?lang=pl-PL` };
+    for (const entry of entries) expect(entry.alternates).toEqual({ languages });
   });
 
   it('is short rather than a 500 when the backend cannot answer (US3.3)', async () => {

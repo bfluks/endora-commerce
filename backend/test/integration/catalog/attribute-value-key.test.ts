@@ -44,12 +44,12 @@ describe('catalog — renaming a value key onto an occupied destination [integra
       slug: `${TAG}-${suffix}`,
       type: 'simple',
       status: 'active',
-      name: { en: 'Value key fixture' },
-      description: { en: 'fixture' },
+      name: 'Value key fixture',
+      description: 'fixture',
       visibility: 'public',
       attributeValues,
     });
-    await em.persistAndFlush(product);
+    await em.persist(product).flush();
     em.clear();
     return product.id;
   }

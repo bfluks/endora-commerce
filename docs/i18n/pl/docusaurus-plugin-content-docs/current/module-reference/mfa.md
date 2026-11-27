@@ -11,7 +11,7 @@ description: "Wszystko, co manifest modułu `mfa` deklaruje: uprawnienia, akcje 
 
 # `mfa` — referencja modułu
 
-Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jeszcze nie napisał strony o tym, co ten moduł *robi*; [mapa modułów](../modules/module-map.generated.md) wymienia wszystkie moduły, z których składa się platforma.
+Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł *robi*, opisuje [jego własna strona](../modules/mfa.md).
 
 | | |
 | --- | --- |
@@ -29,6 +29,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `admin_roles` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `customer_accounts` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
@@ -39,12 +40,14 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
-| `mfa:manage` | Manage 2FA policies and organization enforcement | — |
-| `mfa:reset` | Reset a user's 2FA | — |
+| `mfa:manage` | Manage two-step verification policies and organization enforcement | — |
+| `mfa:reset` | Reset a user's two-step verification | — |
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-security` | `/profile/security` | — |
 
 ## Ustawienia
 
@@ -52,13 +55,13 @@ _Brak._
 | --- | --- | --- |
 | `mfa.admin.google_enabled` | Admin UI — Google sign-in | `boolean` |
 | `mfa.admin.microsoft_enabled` | Admin UI — Microsoft sign-in | `boolean` |
-| `mfa.admin.totp_enabled` | Admin UI — allow 2FA | `boolean` |
-| `mfa.admin.totp_enforced` | Admin UI — enforce 2FA | `boolean` |
+| `mfa.admin.totp_enabled` | Admin UI — allow two-step verification | `boolean` |
+| `mfa.admin.totp_enforced` | Admin UI — enforce two-step verification | `boolean` |
 | `mfa.enabled` | MFA enabled | `boolean` |
 | `mfa.storefront.google_enabled` | Storefront — Google sign-in | `boolean` |
 | `mfa.storefront.microsoft_enabled` | Storefront — Microsoft sign-in | `boolean` |
-| `mfa.storefront.totp_enabled` | Storefront — allow 2FA | `boolean` |
-| `mfa.storefront.totp_enforced` | Storefront — enforce 2FA | `boolean` |
+| `mfa.storefront.totp_enabled` | Storefront — allow two-step verification | `boolean` |
+| `mfa.storefront.totp_enforced` | Storefront — enforce two-step verification | `boolean` |
 
 ## Tłumaczenia
 

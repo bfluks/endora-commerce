@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type {
   DocumentRenderPort,
+  OrganizationPermissionPort,
   TransactionalEmailSendInput,
   TransactionalEmailSender,
   TransactionalSendOutcome,
@@ -17,6 +18,7 @@ import {
 // so a hand-built service in a test takes the same implementation the container
 // registers under `orderReadPort`.
 import { OrderReadService } from '../../../../packages/modules/orders/dist/backend/services/order-read-port.js';
+import { OrderStatusGraphService } from '../../../../packages/modules/orders/dist/backend/services/order-status-graph-service.js';
 
 /**
  * **The `invoices` services below are imported from the package's `dist`, not from
@@ -93,7 +95,7 @@ audit);
     await h.settings.adminService.setValueForAllChannels('invoices.storefront_base_url', 'https://shop.example.com', null, audit);
 
     sender = new CapturingSender();
-    const orderReadPort = new OrderReadService(h.em);
+    const orderReadPort = new OrderReadService(h.em, h.container.resolve<OrganizationPermissionPort>('organizationPermissionPort'), () => new OrderStatusGraphService(h.em));
     const invoiceService = new InvoiceService(
       h.em,
       orderReadPort,
@@ -147,7 +149,8 @@ audit);
     const last = sender.sent.at(-1)!;
     expect(last.attachments).toBeUndefined();
     const vars = last.variables as { invoice: { downloadUrl: string } };
-    expect(vars.invoice.downloadUrl).toContain('https://shop.example.com/orders/');
+    // Feature 167 (OR-14) — the storefront order page, not an unserved PDF path.
+    expect(vars.invoice.downloadUrl).toMatch(/^https:\/\/shop\.example\.com\/(?:[a-z]{2,3}\/)?orders\/[0-9a-f-]+$/);
   });
 
   it('uses an idempotent messageId per invoice by default', async () => {
@@ -161,10 +164,10 @@ audit);
     const id = await issue();
     const logged: Array<{ message: string; context: Record<string, unknown> }> = [];
     const throwingDispatcher = new InvoiceEmailDispatcher({
-      orderReadPort: new OrderReadService(h.em),
+      orderReadPort: new OrderReadService(h.em, h.container.resolve<OrganizationPermissionPort>('organizationPermissionPort'), () => new OrderStatusGraphService(h.em)),
       invoiceService: new InvoiceService(
         h.em,
-        new OrderReadService(h.em),
+        new OrderReadService(h.em, h.container.resolve<OrganizationPermissionPort>('organizationPermissionPort'), () => new OrderStatusGraphService(h.em)),
         new InvoiceNumberGenerator(createSettingsPatternResolver(h.settings.settingsService)),
         new SellerSettingsResolver(h.settings.settingsService),
       ),

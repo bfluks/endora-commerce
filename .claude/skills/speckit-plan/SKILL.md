@@ -143,7 +143,9 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Run `.specify/scripts/bash/update-agent-context.sh claude`
    - These scripts detect which AI agent is in use
    - Update the appropriate agent-specific context file
-   - Add only new technology from current plan
+   - Add only new technology from current plan — in this repository, an Active Technologies item
+     only when the plan's Primary Dependencies declares a new runtime, dev or workspace dependency
+     (Storage is never copied), and the feature slug to Recent Changes (newest 3)
    - Preserve manual additions between markers
 
 **Output**: data-model.md, /contracts/*, quickstart.md, agent-specific file

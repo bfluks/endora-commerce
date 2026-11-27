@@ -123,7 +123,8 @@ const { App } = await import('../../../packages/admin-shell/src/App');
 const bundle = {
   ...passthroughBundle('core', [
     'appShell.brand.text',
-    'appShell.section.system',
+    'appShell.section.access',
+    'appShell.section.platform',
     'app.moduleScreenLoading',
     'app.notFound',
     // Both screens still resolve their own copy in the `core` scope — this
@@ -141,7 +142,7 @@ function renderAt(path: string): RenderResult {
   return renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={[path]}>
-        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} />
+        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} translations={{}} />
       </MemoryRouter>,
       { session: adminSession({ permissions: [...permissions] }) },
     ),
@@ -330,15 +331,21 @@ describe('the shell no longer names api_keys or webhooks by hand', () => {
     // there is no `api_keys:`- or `webhooks:`-prefixed code to take instead.
     const keys = await import('@endora-commerce/mod-api-keys/admin');
     const hooks = await import('@endora-commerce/mod-webhooks/admin');
-    expect(keys.contributions.routes?.map((route) => route.path)).toEqual(['/api-keys']);
-    expect(hooks.contributions.routes?.map((route) => route.path)).toEqual(['/webhooks']);
+    // Each list has its create form on a route of its own since issue #1501
+    // (UX audit SHELL-14), gated on the same code.
+    expect(keys.contributions.routes?.map((route) => route.path)).toEqual(['/api-keys', '/api-keys/new']);
+    expect(hooks.contributions.routes?.map((route) => route.path)).toEqual(['/webhooks', '/webhooks/new']);
+    // Issue #1519 split *System*: API keys are *Access*, webhooks *Platform*.
+    expect(keys.contributions.nav?.[0]?.section).toBe('access');
+    expect(hooks.contributions.nav?.[0]?.section).toBe('platform');
     for (const contributions of [keys.contributions, hooks.contributions]) {
-      expect(contributions.routes?.[0]?.requiredPermission).toBe('integrations:manage');
+      for (const route of contributions.routes ?? []) {
+        expect(route.requiredPermission).toBe('integrations:manage');
+        // FR-013: the only function-valued field is a dynamic-import factory, so
+        // Vite has a split point whether or not anybody asks for one.
+        expect(typeof route.component).toBe('function');
+      }
       expect(contributions.nav?.[0]?.requiredPermission).toBe('integrations:manage');
-      expect(contributions.nav?.[0]?.section).toBe('system');
-      // FR-013: the only function-valued field is a dynamic-import factory, so
-      // Vite has a split point whether or not anybody asks for one.
-      expect(typeof contributions.routes?.[0]?.component).toBe('function');
     }
   });
 

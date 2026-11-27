@@ -8,6 +8,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { KanbanBoardProps } from '@endora-commerce/admin-kit/components';
 import {
+  core,
   crmLookupResponse,
   detail,
   en,
@@ -188,8 +189,14 @@ function movedTo(source: OpportunitySummary, status: OpportunityStatusRef, propa
 }
 
 async function openMoveMenu(title: string): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole('button', { name: en('board.moveTo.label', { title }) }));
-  return screen.getByRole('group', { name: en('board.moveTo.label', { title }) });
+  await userEvent.click(screen.getByRole('button', { name: core('kanban.moveTo.label', { title }) }));
+  return screen.getByRole('group', { name: core('kanban.moveTo.label', { title }) });
+}
+
+/** Opens the toolbar's *More filters* panel unless it is open (issue #1505: these filters are folded away). */
+async function openMoreFilters(): Promise<void> {
+  const toggle = screen.queryByRole('button', { name: /^(More filters|Więcej filtrów)/ });
+  if (toggle && toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
 }
 
 describe('OpportunityBoardPage — columns and cards', () => {
@@ -301,14 +308,14 @@ describe('OpportunityBoardPage — the "Move to…" menu', () => {
     await renderBoard();
     expect(screen.getByRole('link', { name: 'Closed deal' })).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: en('board.moveTo.label', { title: 'Closed deal' }) }),
+      screen.queryByRole('button', { name: core('kanban.moveTo.label', { title: 'Closed deal' }) }),
     ).toBeNull();
   });
 
   it('offers neither the menu nor a drag handle to an operator who may only read', async () => {
     await renderBoard(['crm:read', 'orders:read']);
     expect(
-      screen.queryByRole('button', { name: en('board.moveTo.label', { title: 'Fleet renewal' }) }),
+      screen.queryByRole('button', { name: core('kanban.moveTo.label', { title: 'Fleet renewal' }) }),
     ).toBeNull();
     expect(
       screen.queryByRole('button', { name: en('board.drag.handle', { title: 'Fleet renewal' }) }),
@@ -466,6 +473,7 @@ describe('OpportunityBoardPage — filters', () => {
     await userEvent.type(screen.getByLabelText(en('opportunity.list.filter.search')), 'fleet');
     await waitFor(() => expect(boardCalls().at(-1)).toBe(`${BOARD_PATH}?q=fleet`));
 
+    await openMoreFilters();
     await userEvent.type(screen.getByLabelText(en('opportunity.list.filter.createdFrom')), '2026-10-01');
     await waitFor(() =>
       expect(boardCalls().at(-1)).toBe(`${BOARD_PATH}?q=fleet&createdFrom=2026-10-01`),
@@ -474,7 +482,7 @@ describe('OpportunityBoardPage — filters', () => {
       expect(path).not.toMatch(/tagId|assignedAdminUserId|statusCode|state=/);
     }
 
-    await userEvent.click(screen.getByRole('button', { name: en('opportunity.list.filter.clear') }));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear all filters' }));
     await waitFor(() => expect(boardCalls().at(-1)).toBe(BOARD_PATH));
     expect(screen.getByLabelText(en('opportunity.list.filter.search'))).toHaveValue('');
   });
@@ -537,8 +545,11 @@ describe('OpportunityBoardPage — loading, failure and more cards', () => {
   });
 
   it('says the workflow could not be loaded when there are no lanes to draw', async () => {
-    getSpy.mockImplementation(() =>
-      Promise.reject(new ApiError(500, { error: { code: 'INTERNAL', message: 'Boom.' } })),
+    // Everything but the saved views fails; their own failure is a separate notice.
+    getSpy.mockImplementation((path: string) =>
+      path === '/api/v1/admin/crm/opportunities/list-views'
+        ? Promise.resolve({ data: [] })
+        : Promise.reject(new ApiError(500, { error: { code: 'INTERNAL', message: 'Boom.' } })),
     );
     renderCrm(<OpportunityBoardPage />, { path: '/crm/board', pattern: '/crm/board' });
     expect(await screen.findByText('Boom.')).toBeInTheDocument();

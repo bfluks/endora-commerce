@@ -109,7 +109,8 @@ const { App } = await import('../../../packages/admin-shell/src/App');
 const bundle = {
   ...passthroughBundle('core', [
     'appShell.brand.text',
-    'appShell.section.system',
+    'appShell.section.access',
+    'appShell.section.platform',
     'app.moduleScreenLoading',
     'app.notFound',
   ]),
@@ -121,7 +122,7 @@ function renderAt(path: string): RenderResult {
   return renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={[path]}>
-        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} />
+        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} translations={{}} />
       </MemoryRouter>,
       { session: adminSession({ permissions: [...permissions] }) },
     ),
@@ -254,7 +255,7 @@ describe('the shell no longer names pwa by hand', () => {
     expect(contributions.zones).toBeUndefined();
     expect(contributions.nav?.map((entry) => entry.to)).toEqual(['/settings/pwa']);
     expect(contributions.nav?.[0]?.requiredPermission).toBe('pwa:read');
-    expect(contributions.nav?.[0]?.section).toBe('system');
+    expect(contributions.nav?.[0]?.section).toBe('platform');
     expect(contributions.nav?.[0]?.labelKey).toBe('nav.pwa.label');
   });
 

@@ -10,6 +10,9 @@ import {
   listQuerySchema,
   productSelectionPreviewRequestSchema,
   updateProductFeedRequestSchema,
+  isUuidShape,
+  type FeedRunIssue as FeedRunIssueView,
+  type FeedRunIssueListResponse,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
@@ -48,6 +51,7 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
  *   GET    /api/v1/admin/product-feeds/:id/runs/:runId/issues/export
  *   GET    /api/v1/admin/product-feeds/:id/runs/:runId/artefact
  *   GET    /api/v1/admin/product-feeds/:id/artefact
+ *   GET    /api/v1/admin/product-feeds/:id/price-book-options
  *   POST   /api/v1/admin/feed-previews/selection
  *
  * The feed-template surface lives in `routes.templates.ts`.
@@ -75,8 +79,13 @@ export interface ProductFeedsAdminRoutesDeps {
 /** The contract caps the sample at ten; the criteria panel shows exactly that. */
 const PREVIEW_SAMPLE_SIZE = 10;
 
-const idParamsSchema = z.object({ id: z.string().uuid() });
-const runParamsSchema = z.object({ id: z.string().uuid(), runId: z.string().uuid() });
+/**
+ * Ids are not checked for shape here: a malformed id names no record, so the
+ * service answers it exactly as it answers an unknown one — a `404`, before any
+ * read (issue #781) — where a params schema would answer `400`.
+ */
+const idParamsSchema = z.object({ id: z.string() });
+const runParamsSchema = z.object({ id: z.string(), runId: z.string() });
 
 /**
  * The issue filters (FR-054). Both are the contract's own enums, so an unknown
@@ -99,12 +108,12 @@ const duplicateFeedBodySchema = duplicateProductFeedRequestSchema.extend({
 
 /**
  * A product name for the preview sample. The sample exists so an operator can
- * recognise what a rule selected, so any localized value beats an empty string;
- * the SKU is the last resort because it always identifies the row.
+ * recognise what a rule selected; an admin preview has no buyer scope, so it is
+ * the Global name (feature 174, FR-031), and the SKU the last resort because it
+ * always identifies the row.
  */
-function pickProductName(name: Record<string, string>, sku: string): string {
-  const values = Object.values(name).filter((value) => value.trim() !== '');
-  return name['en-US']?.trim() || values[0] || sku;
+function sampleProductLabel(name: string, sku: string): string {
+  return name.trim() || sku;
 }
 
 // Re-exported for `routes.public.ts`, which has imported it from here since
@@ -180,7 +189,7 @@ export async function registerProductFeedsAdminRoutes(
             sample: sample.map((item) => ({
               id: item.id,
               sku: item.sku,
-              name: pickProductName(item.name, item.sku),
+              name: sampleProductLabel(item.name, item.sku),
             })),
           },
         });
@@ -236,6 +245,18 @@ export async function registerProductFeedsAdminRoutes(
     const row = await deps.feeds.row(id);
     return reply.send({ data: toFeedDto(row, deps.feeds) });
   });
+
+  // Issue #414 — the books the settings tab offers to pin the feed to. They
+  // name `price_lists`' books, so the caller must be allowed to read those too,
+  // as the selection preview asks for `catalog:read`.
+  app.get(
+    '/api/v1/admin/product-feeds/:id/price-book-options',
+    { preHandler: [deps.requireAdmin(PRODUCT_FEEDS_READ_PERMISSION), deps.requireAdmin('price_lists:read')] },
+    async (request, reply) => {
+      const { id } = parse(idParamsSchema, request.params);
+      return reply.send({ data: await deps.feeds.priceBookOptions(id) });
+    },
+  );
 
   app.patch('/api/v1/admin/product-feeds/:id', write, async (request, reply) => {
     const { id } = parse(idParamsSchema, request.params);
@@ -327,6 +348,7 @@ export async function registerProductFeedsAdminRoutes(
   app.get('/api/v1/admin/product-feeds/:id/runs/:runId', read, async (request, reply) => {
     const { id, runId } = parse(runParamsSchema, request.params);
     const em = deps.emFactory();
+    if (!isUuidShape(runId) || !isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed run not found.');
     const run = await em.findOne(FeedRun, { id: runId, productFeedId: id });
     if (!run) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed run not found.');
     const artefact = run.artefactId
@@ -347,7 +369,7 @@ export async function registerProductFeedsAdminRoutes(
   // disclosure as the artefact by another route.
   // ---------------------------------------------------------------------------
 
-  app.get('/api/v1/admin/product-feeds/:id/runs/:runId/issues', read, async (request, reply) => {
+  app.get<{ Reply: FeedRunIssueListResponse }>('/api/v1/admin/product-feeds/:id/runs/:runId/issues', read, async (request, reply) => {
     const { id, runId } = parse(runParamsSchema, request.params);
     const query = parse(issueQuerySchema, request.query ?? {});
     const em = deps.emFactory();
@@ -446,12 +468,14 @@ export async function registerProductFeedsAdminRoutes(
 
 /** 404s a run id that is not this feed's, rather than leaking its existence. */
 async function requireRun(em: EntityManager, feedId: string, runId: string): Promise<FeedRun> {
+  if (!isUuidShape(runId) || !isUuidShape(feedId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed run not found.');
   const run = await em.findOne(FeedRun, { id: runId, productFeedId: feedId });
   if (!run) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Feed run not found.');
   return run;
 }
 
-function toIssueDto(issue: FeedRunIssue): Record<string, unknown> {
+/** The published `feedRunIssueSchema` (issue #599). */
+function toIssueDto(issue: FeedRunIssue): FeedRunIssueView {
   return {
     id: issue.id,
     severity: issue.severity,

@@ -7,7 +7,8 @@
  * copy already lives, so the screen looks there first, by convention:
  *
  *   settingLabels.<setting code>.name
- *   settingLabels.<setting code>.description
+ *   settingLabels.<setting code>.description   (never from another language, #1522)
+ *   settingLabels.<setting code>.options.<option value>
  *   settingGroups.<group code>.name
  *
  * The code is embedded whole, dots included, so `seo.default_robots` is read
@@ -39,6 +40,26 @@ export function settingNameKey(settingCode: string): string {
 /** `settingLabels.<setting code>.description` */
 export function settingDescriptionKey(settingCode: string): string {
   return `settingLabels.${settingCode}.description`;
+}
+
+/** `settingLabels.<setting code>.options.<option value>` — issue #1479 (UX audit SHELL-02). */
+export function settingOptionKey(settingCode: string, optionValue: string): string {
+  return `settingLabels.${settingCode}.options.${optionValue}`;
+}
+
+/** `settingLabels.<setting code>.notice.<notice code>` — issue #930. */
+export function settingNoticeKey(settingCode: string, noticeCode: string): string {
+  return `settingLabels.${settingCode}.notice.${noticeCode}`;
+}
+
+/** `settingLabels.<setting code>.confirmation.<confirmation code>` — issue #349, E-349-1. */
+export function settingConfirmationKey(settingCode: string, confirmationCode: string): string {
+  return `settingLabels.${settingCode}.confirmation.${confirmationCode}`;
+}
+
+/** `settingLabels.<setting code>.confirmed.<confirmation code>` — said after an accepted save. */
+export function settingConfirmedKey(settingCode: string, confirmationCode: string): string {
+  return `settingLabels.${settingCode}.confirmed.${confirmationCode}`;
 }
 
 /** `settingGroups.<group code>.name` */
@@ -73,6 +94,7 @@ function fromOwnerBundle(
   ownerModule: string,
   key: string,
   source: SettingLabelSource,
+  params?: Record<string, string | number>,
 ): string | null {
   const result = resolve({
     scope: ownerModule,
@@ -80,6 +102,7 @@ function fromOwnerBundle(
     language: source.language,
     bundle: source.bundle,
     ...(source.fallbackBundle !== undefined ? { fallbackBundle: source.fallbackBundle } : {}),
+    ...(params !== undefined ? { params } : {}),
   });
   return result.outcome === 'placeholder' ? null : result.value;
 }
@@ -88,15 +111,105 @@ export function resolveSettingName(setting: LabelledSetting, source: SettingLabe
   return fromOwnerBundle(setting.ownerModule, settingNameKey(setting.code), source) ?? setting.name;
 }
 
-/** `null` when the owner's bundles carry no description and the manifest declared none. */
+/**
+ * The description in the administrator's language, or `null`.
+ *
+ * Issue #1522 (UX audit SHELL-23) — unlike the name, a description never falls
+ * back to another language. A name is needed to find and operate the row, so a
+ * missing Polish name still shows the English one; a description is a hint,
+ * and an English paragraph under a Polish label is noise. So for a language
+ * other than English only the owner's bundle in that language counts. In
+ * English the owner's bundle comes first, then the manifest's declared
+ * sentence, which is English by construction. `check:bundle-pairing` is what
+ * reports a Polish key the owner forgot.
+ */
 export function resolveSettingDescription(
   setting: LabelledSetting,
   source: SettingLabelSource,
 ): string | null {
+  const result = resolve({
+    scope: setting.ownerModule,
+    key: settingDescriptionKey(setting.code),
+    language: source.language,
+    bundle: source.bundle,
+  });
+  if (result.outcome !== 'placeholder') return result.value;
+  return source.language === DESCRIPTION_SOURCE_LANGUAGE ? (setting.description ?? null) : null;
+}
+
+/** The language a manifest declares its settings' strings in. */
+const DESCRIPTION_SOURCE_LANGUAGE: SupportedAdminLanguage = 'en';
+
+/**
+ * Issue #1479 (UX audit SHELL-02) — an enum setting's option in the
+ * administrator's language. An option the owner's bundles do not name is shown
+ * as its value — the rule `defineEnumLabels` (issue #1434) fixes for every
+ * enum in the admin: an ugly code is true, a missing-key placeholder is
+ * neither. A static map does not fit here, because the options arrive from
+ * whichever manifest declared the setting, so the owner's bundle is the map.
+ */
+export function resolveSettingOption(
+  setting: LabelledSetting,
+  optionValue: string,
+  source: SettingLabelSource,
+): string {
+  return fromOwnerBundle(setting.ownerModule, settingOptionKey(setting.code, optionValue), source) ?? optionValue;
+}
+
+/**
+ * Issue #930 — the owning module's notice that the stored value is not in
+ * force, in the administrator's language, else the API's English sentence.
+ * `null` when the read carried no notice.
+ */
+export function resolveSettingNotice(
+  setting: LabelledSetting & { readonly notice?: { code: string; message: string } | undefined },
+  source: SettingLabelSource,
+): string | null {
+  if (!setting.notice) return null;
   return (
-    fromOwnerBundle(setting.ownerModule, settingDescriptionKey(setting.code), source) ??
-    setting.description ??
-    null
+    fromOwnerBundle(setting.ownerModule, settingNoticeKey(setting.code, setting.notice.code), source) ??
+    setting.notice.message
+  );
+}
+
+/**
+ * Issue #349, E-349-1 — the owning module's question before a write, in the
+ * administrator's language with the read's `params`, else the API's English
+ * sentence. `null` when the read carried no confirmation.
+ */
+export function resolveSettingConfirmation(
+  setting: LabelledSetting & {
+    readonly confirmation?:
+      | { code: string; message: string; params?: Record<string, string | number> | undefined }
+      | undefined;
+  },
+  source: SettingLabelSource,
+): string | null {
+  if (!setting.confirmation) return null;
+  return (
+    fromOwnerBundle(
+      setting.ownerModule,
+      settingConfirmationKey(setting.code, setting.confirmation.code),
+      source,
+      setting.confirmation.params,
+    ) ?? setting.confirmation.message
+  );
+}
+
+/**
+ * After a save whose confirmation was accepted: what is now happening, in the
+ * owner's words and without a count. `null` when the owner's bundles say
+ * nothing — there is no API fallback, so a module opts in by shipping the key.
+ */
+export function resolveSettingConfirmed(
+  setting: LabelledSetting & { readonly confirmation?: { code: string } | undefined },
+  source: SettingLabelSource,
+): string | null {
+  if (!setting.confirmation) return null;
+  return fromOwnerBundle(
+    setting.ownerModule,
+    settingConfirmedKey(setting.code, setting.confirmation.code),
+    source,
   );
 }
 
@@ -110,10 +223,24 @@ export function resolveSettingGroupName(
 export interface SettingLabels {
   settingName(setting: LabelledSetting): string;
   settingDescription(setting: LabelledSetting): string | null;
+  settingOption(setting: LabelledSetting, optionValue: string): string;
+  settingNotice(
+    setting: LabelledSetting & { readonly notice?: { code: string; message: string } | undefined },
+  ): string | null;
+  settingConfirmation(
+    setting: LabelledSetting & {
+      readonly confirmation?:
+        | { code: string; message: string; params?: Record<string, string | number> | undefined }
+        | undefined;
+    },
+  ): string | null;
+  settingConfirmed(
+    setting: LabelledSetting & { readonly confirmation?: { code: string } | undefined },
+  ): string | null;
   groupName(group: LabelledSettingGroup): string;
 }
 
-/** The three resolvers bound to the current administrator's language and bundles. */
+/** The resolvers bound to the current administrator's language and bundles. */
 export function useSettingLabels(): SettingLabels {
   const { language, bundle, fallbackBundle } = useTranslationContext();
   return useMemo<SettingLabels>(() => {
@@ -121,6 +248,10 @@ export function useSettingLabels(): SettingLabels {
     return {
       settingName: (setting) => resolveSettingName(setting, source),
       settingDescription: (setting) => resolveSettingDescription(setting, source),
+      settingOption: (setting, optionValue) => resolveSettingOption(setting, optionValue, source),
+      settingNotice: (setting) => resolveSettingNotice(setting, source),
+      settingConfirmation: (setting) => resolveSettingConfirmation(setting, source),
+      settingConfirmed: (setting) => resolveSettingConfirmed(setting, source),
       groupName: (group) => resolveSettingGroupName(group, source),
     };
   }, [language, bundle, fallbackBundle]);

@@ -94,10 +94,19 @@ import {
 export const RUNG_COSTS: Readonly<Record<number, string>> = {
   0: 'rung 0 — configuration. Costs nothing and survives every upgrade, because it is data.',
   1: 'rung 1 — subscribe to what the owner already emits. Costs nothing at the seam; you observe, you do not change what the owner did.',
-  2: 'rung 2 — run before or after what the owner already serves. Costs a coupling to an endpoint identity, which is versioned public API.',
+  2: 'rung 2 — run before or after what the owner already serves, or inside a write it declared hookable. Costs a coupling to an endpoint identity or a hookable action, both versioned public API.',
   3: 'rung 3 — a strategy port the owner published. Costs a dependency edge in your manifest; the owner keeps the seam and keeps fixing it behind you.',
   4: 'rung 4 — change what the container hands out. Costs a contract-version coupling to a shape nothing checks for you: `ctx.di.decorate<T>` asserts `T` at the call site and compares it to nothing.',
   5: 'rung 5 — fork. Costs everything, permanently.',
+};
+
+/**
+ * The data ladder's cost sentence for the one rung a report records
+ * (`specs/190-overlay-full-modules/` FR-047) — the same page's *The data
+ * ladder* table, D2's row, in one line.
+ */
+export const DATA_RUNG_COSTS: Readonly<Record<'D2', string>> = {
+  D2: 'data ladder D2 — declared extension columns on a table another module owns. Costs a dependency on the host’s module; the platform generates the DDL, records it in a ledger and verifies it, and the host keeps its table and every column it did not let you declare.',
 };
 
 /** The heading each kind gets in the human rendering. */
@@ -108,9 +117,12 @@ const KIND_HEADINGS: Readonly<Record<DivergenceKind, string>> = {
   'port-consumed': 'Ports this deployment consumes',
   subscription: 'Events this deployment subscribes to',
   interceptor: 'Endpoints this deployment intercepts',
+  'command-hook': 'Writes this deployment takes part in',
+  'command-middleware': 'Command middleware this deployment runs on the Command Bus',
   decoration: 'Registrations this deployment wraps',
   'root-plugin': 'Plugins this deployment mounts at the server root',
   worker: 'Queues this deployment consumes',
+  'column-extension': "Columns this deployment adds to another module's table",
 };
 
 /** Stable order for the human rendering — most invasive last is not the point;
@@ -119,12 +131,16 @@ const KIND_ORDER: readonly DivergenceKind[] = [
   'omission',
   'subscription',
   'interceptor',
+  'command-hook',
+  'command-middleware',
   'port-provided',
   'port-consumed',
   'decoration',
   'root-plugin',
   'registration',
   'worker',
+  // The data ladder after the behaviour ladder: new data, not changed behaviour.
+  'column-extension',
 ];
 
 /**
@@ -181,12 +197,25 @@ function escapeCell(text: string): string {
 
 function ownerCell(entry: DivergenceEntry): string {
   if (entry.kind === 'omission') return '—';
+  // 189 — the subject of a middleware is the bus, which no module owns.
+  if (entry.kind === 'command-middleware') return 'the Command Bus (no module owns it)';
   return entry.owner === null ? 'a composition root (no module owns it)' : `\`${entry.owner}\``;
 }
 
 function subjectCell(entry: DivergenceEntry): string {
   if (entry.kind === 'interceptor' && entry.detail.kind === 'interceptor') {
     return `\`${entry.subject}\` (${entry.detail.phase})`;
+  }
+  if (entry.kind === 'command-hook' && entry.detail.kind === 'command-hook') {
+    return `\`${entry.subject}\` (${entry.detail.phase}, \`${entry.detail.id}\`)`;
+  }
+  if (entry.kind === 'command-middleware' && entry.detail.kind === 'command-middleware') {
+    const filter =
+      entry.detail.actions === '*' ? 'every Command' : entry.detail.actions.map((action) => `\`${action}\``).join(', ');
+    return `\`${entry.subject}\` (${entry.detail.phase}, ${filter})`;
+  }
+  if (entry.kind === 'column-extension' && entry.detail.kind === 'column-extension') {
+    return `\`${entry.subject}\` (${entry.detail.columns.map((column) => `\`${column}\``).join(', ')})`;
   }
   return `\`${entry.subject}\``;
 }
@@ -248,7 +277,8 @@ export function renderDivergenceMarkdown(
   if (report.entries.length === 0) {
     lines.push(
       'Nothing. This deployment changes no registration, intercepts no endpoint, subscribes to no',
-      'event, publishes and consumes no port, mounts no root plugin and omits no module.',
+      'event, publishes and consumes no port, mounts no root plugin, declares no column on another',
+      'module’s table and omits no module.',
       '',
       'That is a statement rather than an absence: the derivation ran over this deployment’s own',
       'tree and found no divergence of any recorded kind.',
@@ -267,6 +297,7 @@ export function renderDivergenceMarkdown(
         const cost = RUNG_COSTS[rung];
         if (cost !== undefined) lines.push(`${cost}`, '');
       }
+      if (kind === 'column-extension') lines.push(DATA_RUNG_COSTS.D2, '');
       lines.push('| What | Changed by | Owned by | Why |');
       lines.push('| --- | --- | --- | --- |');
       for (const entry of entries) {
@@ -488,6 +519,7 @@ export function overlayTreeSpellsASeamCall(sources: readonly OverlaySource[]): b
     'di.decorate(',
     '.subscribe(',
     '.interceptors(',
+    '.commandHooks(',
     '.rootPlugin(',
     '.worker(',
     'lazyPort(',
@@ -541,6 +573,15 @@ export const INSTANCE_BOUNDARY_NOTES: ReadonlyArray<{
       'artefact, which is the module version this instance installed. That is the composition ' +
       'this deployment actually runs; it is not the module’s source tree, and a name reachable ' +
       'only from a layer the package does not publish is in no owner map',
+  },
+  {
+    seam: 'the module that declares a hooked action hookable',
+    why:
+      'a `command-hook` entry names the action it hooks, and this repository attributes it to ' +
+      'the module whose manifest declares the action. An instance reads no module manifest — ' +
+      'that would execute an installed package’s code at generate time — so the owner is shown ' +
+      'as a composition root’s; the composition itself refuses a hook on an action no installed ' +
+      'module declares, at boot',
   },
 ];
 
@@ -805,11 +846,13 @@ export function unreadableCompositionReason(scan: InstanceCompositionScan): stri
 // The declaration, read as source text
 // ---------------------------------------------------------------------------
 
-/** The three fields a deployment declares (`deployment-declaration.md` §2). */
+/** The three fields a deployment declares (`deployment-declaration.md` §2), and the `admit` tie-break (189). */
 export interface DeclarationLiterals {
   readonly omittedModules: ReadonlyArray<{ readonly moduleId: string; readonly reason: string }>;
   readonly decorationOrder: Readonly<Record<string, readonly string[]>>;
   readonly reasons: Readonly<Record<string, string>>;
+  /** `specs/189-command-middleware/` FR-031 — absent when the file does not write it. */
+  readonly commandMiddlewareOrder?: readonly string[];
 }
 
 /** The empty declaration — what a deployment that has declared nothing says. */
@@ -1006,5 +1049,26 @@ export function readDivergenceDeclaration(source: string, file: string): Declara
     }
   }
 
-  return { declaration: { omittedModules, decorationOrder, reasons }, unresolved };
+  let commandMiddlewareOrder: string[] | undefined;
+  const middlewareOrder = fields.get('commandMiddlewareOrder');
+  if (middlewareOrder !== undefined) {
+    const ids = ts.isArrayLiteralExpression(middlewareOrder)
+      ? middlewareOrder.elements.map((element) => stringLiteralOf(element))
+      : null;
+    if (ids === null || ids.some((id) => id === null)) {
+      unresolved.push('commandMiddlewareOrder (not a literal array of ids)');
+    } else {
+      commandMiddlewareOrder = ids as string[];
+    }
+  }
+
+  return {
+    declaration: {
+      omittedModules,
+      decorationOrder,
+      reasons,
+      ...(commandMiddlewareOrder === undefined ? {} : { commandMiddlewareOrder }),
+    },
+    unresolved,
+  };
 }

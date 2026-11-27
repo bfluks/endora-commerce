@@ -66,7 +66,7 @@ describe('SearchEventSubscriber — incremental index updates', () => {
     teardown = () => offs.forEach((off) => off());
 
     client = new Meilisearch({ host: meilisearchHost, apiKey: meilisearchKey });
-    const channel = await h.em().findOneOrFail(SalesChannel, { isPublic: true });
+    const channel = await h.em().findOneOrFail(SalesChannel, { code: 'pl_retail' });
     publicChannel = channel;
     // Reindex once so the wipe + add settle the index for this test run.
     await indexer.reindexChannel(h.em(), channel);
@@ -85,11 +85,11 @@ describe('SearchEventSubscriber — incremental index updates', () => {
       type: 'simple',
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': 'Event-created widget' },
-      description: { 'en-US': 'Widget produced by the integration test.' },
-      attributeValues: { defaultPrice: 42.5 },
+      name: 'Event-created widget',
+      description: 'Widget produced by the integration test.',
+      attributeValues: {},
     });
-    await em.persistAndFlush(newProduct);
+    await em.persist(newProduct).flush();
     await em.getConnection().execute(
       `insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`,
       [publicChannel.id, newProduct.id],

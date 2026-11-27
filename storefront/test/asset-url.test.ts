@@ -37,4 +37,21 @@ describe('toAbsoluteAssetUrl', () => {
   it('leaves non-slash relative URLs untouched', () => {
     expect(toAbsoluteAssetUrl('assets/file/abc')).toBe('assets/file/abc');
   });
+
+  // specs/156-asset-stable-url/ T067 — the platform's embed URLs carry the
+  // content version (`?v=`) and must reach the browser intact.
+  it('keeps the version marker and the download flag on an absolute URL', () => {
+    expect(toAbsoluteAssetUrl('https://api.example.com/assets/file/abc?v=a1b2c3d4e5f6')).toBe(
+      'https://api.example.com/assets/file/abc?v=a1b2c3d4e5f6',
+    );
+    expect(toAbsoluteAssetUrl('https://api.example.com/assets/file/abc?v=a1b2c3d4e5f6&download=1')).toBe(
+      'https://api.example.com/assets/file/abc?v=a1b2c3d4e5f6&download=1',
+    );
+  });
+
+  it('keeps the query when rebasing a host-relative URL', () => {
+    expect(toAbsoluteAssetUrl('/assets/file/abc?v=a1b2c3d4e5f6&download=1')).toBe(
+      `${BASE}/assets/file/abc?v=a1b2c3d4e5f6&download=1`,
+    );
+  });
 });

@@ -59,7 +59,7 @@ describe('duplicateProduct — the two cross-module copies [real DB]', () => {
     const em = h.em();
     const code = `w185d-${randomUUID().slice(0, 8)}`;
     const warehouse = em.create(Warehouse, { name: code, code, active: true });
-    await em.persistAndFlush(warehouse);
+    await em.persist(warehouse).flush();
     return warehouse.id;
   };
 
@@ -74,13 +74,13 @@ describe('duplicateProduct — the two cross-module copies [real DB]', () => {
       slug: `w185d-${suffix.toLowerCase()}`,
       type: 'simple',
       status: 'active',
-      name: { en: `W185D ${suffix}` },
-      description: { en: 'fixture' },
+      name: `W185D ${suffix}`,
+      description: 'fixture',
       visibility: 'public',
       attributeValues: {},
       allowedOrganizationIds: [],
     });
-    await em.persistAndFlush(product);
+    await em.persist(product).flush();
 
     await h.salesChannels.membershipService.addToChannel(
       defaultChannelId,

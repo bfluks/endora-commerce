@@ -62,7 +62,6 @@ const tree = (marker: string): Record<string, unknown> => ({
 
 const PASSTHROUGH = passthroughBundle('catalog', [
   'categoryContent.page.description',
-  'categoryContent.action.back',
   'categoryContent.action.save',
   'categoryContent.action.saving',
   'categoryContent.success.save',
@@ -73,6 +72,10 @@ const PASSTHROUGH = passthroughBundle('catalog', [
   'categoryContent.noEditor.title',
   'categoryContent.noEditor.description',
   'categoryContent.readOnly',
+  'contentLanguages.failed',
+  'contentLanguages.noChannels',
+  'contentLanguages.outside.list',
+  'contentLanguages.outside.notice',
 ]);
 // The one key with a parameter, spelled as a template so the interpolation is
 // what the assertion reads.
@@ -179,6 +182,18 @@ describe('CategoryContentPage', () => {
     expect(screen.getByText('Content of Hand tools')).toBeTruthy();
   });
 
+  it('names the editor as the panel of the language tabs (issue #1445)', async () => {
+    stubApi({ languages: { 'pl-PL': tree('stored-pl') } });
+    renderPage({});
+    const tab = await screen.findByRole('tab', { name: 'en-US' });
+    const panel = screen.getByRole('tabpanel');
+    expect(tab.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
+    expect(panel).toContainElement(screen.getByTestId('editor-language'));
+    // One tab in the tab order: the selected one.
+    expect(screen.getAllByRole('tab').filter((t) => t.tabIndex === 0)).toEqual([tab]);
+  });
+
   it('offers the languages the category is named in and switches the document with the tab', async () => {
     stubApi({ languages: { 'pl-PL': tree('stored-pl') } });
     renderPage({});
@@ -268,6 +283,71 @@ describe('CategoryContentPage', () => {
     renderPage({});
     await waitFor(() => expect(screen.getByText('categoryContent.error.load')).toBeTruthy());
     expect(screen.queryByTestId('editor-stub')).toBeNull();
+  });
+
+  // Issue #1499 (UX audit SALES-17, DEC-12 a): "Saved" is said beside Save, in a
+  // region mounted empty before the save, not as a success banner above the
+  // canvas; the next edit in the canvas clears it, and a refused save is the banner.
+  it('says "saved" beside Save, with no success banner, and clears it on the next edit (#1499)', async () => {
+    stubApi({ languages: { 'en-US': tree('stored-en'), 'pl-PL': tree('stored-pl') } });
+    renderPage({});
+    await waitFor(() => expect(screen.getByText('stub-edit')).toBeTruthy());
+    const save = screen.getByRole('button', { name: 'categoryContent.action.save' });
+    const region = save.parentElement?.querySelector<HTMLElement>(':scope > [role="status"]');
+    if (!region) throw new Error('no status region beside Save');
+    expect(region.textContent).toBe('');
+
+    fireEvent.click(screen.getByText('stub-edit'));
+    fireEvent.click(save);
+    await waitFor(() => expect(region).toHaveTextContent('categoryContent.success.save'));
+    expect(document.querySelector('[data-slot="alert"][data-variant="success"]')).toBeNull();
+
+    fireEvent.click(screen.getByText('stub-edit'));
+    expect(region.textContent).toBe('');
+
+    putSpy.mockRejectedValueOnce(new Error('down'));
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.getByText('categoryContent.error.save')).toBeTruthy());
+    expect(region.textContent).toBe('');
+  });
+
+  // #1507 (UX audit CAT-05, ruling Q3) — the strip offers the sales channels' languages
+  // together; a stored language no channel offers stays, flagged and not editable.
+  function stubChannels(languages: string[]): void {
+    const base = getSpy.getMockImplementation();
+    getSpy.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/v1/admin/sales-channels?')) return { items: [{ code: 'b2b', defaultLanguage: 'pl-PL' }] };
+      if (path === '/api/v1/admin/sales-channels/b2b') return { code: 'b2b', languages };
+      return base?.(path);
+    });
+  }
+
+  it('offers the sales channels’ languages, then a stored one no channel offers, flagged', async () => {
+    stubApi({ languages: { 'pl-PL': tree('stored-pl'), 'fr-FR': tree('stored-fr') } });
+    stubChannels(['pl-PL', 'de-DE']);
+    renderPage({});
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'fr-FR' })).toBeTruthy());
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['de-DE', 'pl-PL', 'en-US', 'fr-FR']);
+    expect(screen.getByText('contentLanguages.outside.list')).toBeTruthy();
+  });
+
+  it('shows no canvas for a flagged language and saves its stored document back unchanged', async () => {
+    stubApi({ languages: { 'pl-PL': tree('stored-pl'), 'fr-FR': tree('stored-fr') } });
+    stubChannels(['pl-PL']);
+    renderPage({});
+
+    await waitFor(() => expect(screen.getByTestId('editor-language').textContent).toBe('pl-PL'));
+    fireEvent.click(screen.getByText('stub-edit'));
+    fireEvent.click(screen.getByRole('tab', { name: 'fr-FR' }));
+    await waitFor(() => expect(screen.getByText('contentLanguages.outside.notice')).toBeTruthy());
+    expect(screen.queryByTestId('editor-stub')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'categoryContent.action.save' }));
+    await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
+    expect(putSpy.mock.calls[0]?.[1]).toEqual({
+      content: { languages: { 'pl-PL': tree('edited-pl-PL'), 'fr-FR': tree('stored-fr') } },
+    });
   });
 
   it('names no Page Builder owner in its own source', async () => {

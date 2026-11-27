@@ -1,6 +1,7 @@
 import {
   defineModuleManifest,
   defineModuleRecentActivity,
+  type CustomFieldWriteDeclaration,
   type ModuleDemoManifest,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
@@ -34,6 +35,42 @@ const demo: ModuleDemoManifest<ModuleContext> = {
   seed: async (context) => (await import('./backend/demo/seed.js')).seedDemo(context),
   reset: async (context) => (await import('./backend/demo/reset.js')).resetDemo(context),
 };
+
+/**
+ * Feature 175 (`specs/175-buyer-input-custom-fields/` research R-11) — the
+ * admin writes of this module's two custom-field hosts, for
+ * `check:custom-field-writes`: the category create and update, and the
+ * `product` exemption — a product's values are catalog attribute values, which
+ * the catalog's attribute surfaces write, not a custom-field bag on the product
+ * create or update. Read as a literal by the check: keep every entry a literal
+ * object.
+ */
+export const customFieldWrites = [
+  {
+    entityType: 'category',
+    kind: 'create',
+    method: 'POST',
+    path: '/api/v1/admin/catalog/categories',
+    body: 'createCategoryRequestSchema',
+  },
+  {
+    entityType: 'category',
+    kind: 'update',
+    method: 'PATCH',
+    path: '/api/v1/admin/catalog/categories/:id',
+    body: 'updateCategoryRequestSchema',
+  },
+  {
+    entityType: 'product',
+    kind: 'create',
+    exempt: 'host-managed: values are catalog attribute values written by the catalog\'s attribute surfaces',
+  },
+  {
+    entityType: 'product',
+    kind: 'update',
+    exempt: 'host-managed: values are catalog attribute values written by the catalog\'s attribute surfaces',
+  },
+] satisfies CustomFieldWriteDeclaration[];
 
 /**
  * Catalog module — feature 002 (and predecessors).
@@ -130,11 +167,24 @@ export const manifest = defineModuleManifest({
     // (`specs/150-admin-global-search/`).
     '_i18n',
     'audit_logs',
+    // `admin_roles` owns `permissionService`, which a queued bulk operation asks at
+    // worker start whether its requester may still write the catalogue (feature 163,
+    // checkpoint F, S-3). `admin_roles` depends on nothing, so the edge closes no cycle,
+    // and it declares `activation.nonDeactivatable`, so the edge costs no operator an
+    // activation control and has no absent state to degrade through — the shape
+    // `prompt_actions` and `admin_actions` use for the same port. Were the port ever
+    // unresolvable, `lazyPort` throws at worker start and the operation fails closed.
+    'admin_roles',
     'admin_users',
     'assets_library',
     'custom_fields',
     'email',
     'sales_channels',
+    // Issue #852 — the public listing and product page answer each product's
+    // VAT rate for the buyer through `taxService`, as the cart does. `taxes` is
+    // `nonDeactivatable` and depends on neither this module nor anything that
+    // reaches it, so the edge closes no cycle.
+    'taxes',
   ],
   // Feature 075 — `organizations` is resolved, not imported, since the cut
   // replaced `em.findOne(Organization, …)` in the external namespace's price
@@ -165,6 +215,17 @@ export const manifest = defineModuleManifest({
         'do it. Over the port now — but `organizations` declares this module, so declaring it ' +
         'back closes a cycle. Acknowledged rather than declared, and the module is ' +
         'non-deactivatable, so nothing an operator can flip depends on the difference.',
+    },
+    {
+      moduleId: 'organizations',
+      port: 'organizationTaxProfilePort',
+      reason:
+        'Issue #852. The public listing and product page answer each product’s VAT rate for the ' +
+        'buyer, which depends on their organisation’s VAT status and registered country — the ' +
+        'rule the cart applies, through the same port. `organizations` declares this module, so ' +
+        'declaring it back closes a cycle. With `organizations` absent the seam fails closed: a ' +
+        'caller naming an organisation is refused rather than quoted a rate nobody resolved, and ' +
+        'an anonymous caller asks the port nothing.',
     },
     {
       moduleId: 'price_lists',
@@ -256,6 +317,21 @@ export const manifest = defineModuleManifest({
         'product- and warehouse-level chain, as on a deployment without the module.',
     },
     {
+      // Issue #1624 — the admin products list's *Low stock* / *Out of stock* filter.
+      moduleId: 'inventory',
+      name: 'inventoryStockReadPort',
+      kind: 'refuses-without',
+      whenAbsent:
+        'the products list offers no stock filter, and a list or select-all that names one is refused',
+      reason:
+        'Issue #1624. The stock filter is `inventory`’s SQL predicate over this module’s own ' +
+        'stock settings, embedded in the list statement, and a bulk edit or delete started from "select all matching" acts ' +
+        'on exactly what the filter resolves — so a filter silently dropped while `inventory` is ' +
+        'off would select the whole catalogue. The list probes presence only to say whether the ' +
+        'filter is offered; the predicate call is not probed, and its gate refuses. Not ' +
+        '`dependencies`: `inventory` declares this module, and this module is non-deactivatable.',
+    },
+    {
       moduleId: 'search',
       // The full reindex an attribute's `searchable` flip runs, resolved by
       // this module since `specs/117-instance-bring-up/` Phase 6 — it was
@@ -290,6 +366,39 @@ export const manifest = defineModuleManifest({
         'take the storefront down for a capability it never required. Declared rather than ' +
         'caught: presence is decided in front of the query, and an unreachable index is an arm ' +
         'of the port\'s return type.',
+    },
+    {
+      // Feature 163 (`specs/163-product-data-scopes/` research R12, R13). The
+      // product page's metadata per sales channel × language, and — through the
+      // same presence probe — whether old URL keys are served as redirects.
+      moduleId: 'seo',
+      name: 'seoProductMetaPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'product pages show metadata derived from the name and description, and old URL keys answer not-found',
+      reason:
+        'Feature 163. The redirect rows and the URL-key invariant are this module’s (a takeover ' +
+        'deletes another product’s redirect in the transaction that saves the key), so key writes ' +
+        'never depend on `seo`; what `seo` owns is whether metadata overrides and redirects are ' +
+        'served. Both reads probe `effectiveState.isPresent(\'seo\')` in front of the call, so an ' +
+        'operator switching `seo` off gets derived metadata and not-found for old keys, and every ' +
+        'row comes back when it is switched on. Not `dependencies`: `seo` declares this module, so ' +
+        'the edge back would close a cycle, and this module is non-deactivatable.',
+    },
+    {
+      // Feature 174 (T123, FR-091, SC-007; `contracts/scoped-values-api.md` §3 steps 4 and 8).
+      moduleId: 'seo',
+      name: 'seoProductMetaWritePort',
+      kind: 'refuses-without',
+      whenAbsent:
+        'a product save that changes SEO fields is refused while SEO is off; saves without SEO changes, and duplicates, are unaffected',
+      reason:
+        'Feature 174. The editor saves the product and its SEO fields as one Command: the SEO rows ' +
+        'are written on that Command\'s EntityManager, so an SEO refusal rolls the catalog rows back ' +
+        'and no audit entry is written. The port is resolved only when a save names an SEO cell, ' +
+        'and a duplicate probes `effectiveState.isPresent(\'seo\')` first and copies no metadata ' +
+        'while `seo` is off. Not `dependencies`: `seo` declares this module, and this module is ' +
+        'non-deactivatable.',
     },
     {
       moduleId: 'admin_search',
@@ -359,6 +468,29 @@ export const manifest = defineModuleManifest({
   // reason. Products, variants and categories are what a commerce platform is
   // for: their absence does not reduce it, it makes it something else.
   demo,
+  /**
+   * Feature 163 (FR-060, data-model §9, research R18) — the completeness gate's mode,
+   * one value for the whole platform (read with no channel). `warn` saves a status
+   * change that turns the product on where a name, URL key or required
+   * language-scoped attribute is missing and shows what is missing; `refuse` does not
+   * save it. Imports and connectors are never gated (A-6).
+   */
+  settings: {
+    moduleCode: 'catalog',
+    groups: [{ code: 'catalog', name: 'Catalog' }],
+    settings: [
+      {
+        code: 'catalog.scope_completeness_gate',
+        name: 'Completeness check when switching a product on',
+        description:
+          'Applies when a product is switched on with a missing name, URL key or required attribute in that language.',
+        groupCode: 'catalog',
+        valueType: 'string',
+        enumOptions: ['warn', 'refuse'],
+        defaultValue: 'warn',
+      },
+    ],
+  },
   activation: {
     nonDeactivatable: true,
     reason:
@@ -366,10 +498,11 @@ export const manifest = defineModuleManifest({
       'different product, not a reduced one.',
   },
   /**
-   * The error codes this module owns — forty-seven from feature 090 Phase 3
+   * The error codes this module owns, fifty-six in all — forty-seven from
+   * feature 090 Phase 3
    * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
-   * §1.1) and six more from D-129's remaining sweep, MR 4, described at the end
-   * of this block. This is where the sentence for each is looked up from:
+   * §1.1), six more from D-129's remaining sweep, MR 4, and three minted by
+   * feature 155, both described at the end of this block. This is where the sentence for each is looked up from:
    * `errors.<CODE>` in this module's own `i18n/{en,pl}.json`. Every code with
    * no sentence there is an entry in `check-error-translations.ts`'s
    * `UNTRANSLATED_ERROR_CODES` ledger and stays one — declaring a code writes no
@@ -451,6 +584,23 @@ export const manifest = defineModuleManifest({
    * that pass a `details` object pass `{ maxBatchSize, recommendedSplitInto }`
    * and `{ total, maxSelectionSize }` — neither holds a `code`, which is the
    * only key `refusalToken` reads.
+   *
+   * **Three were minted by feature 155** (`specs/155-catalog-order-constraints/`
+   * `contracts/error-codes.md`): `PRODUCT_BELOW_MINIMUM_QUANTITY`,
+   * `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
+   * D-121 T1 again: the minimums are columns on this module's products and
+   * packaging units, so the sentence lives here whichever module refuses the
+   * line — `carts`, `orders` and `quote_requests` raise them, and none of them
+   * owns the noun. Each arrives with its sentence in both bundles. No token:
+   * their `details` carry the line's product, minimum and `lines[]`, no `code`.
+   *
+   * **Five were minted by feature 163** (`specs/163-product-data-scopes/`
+   * `contracts/error-codes.md`): `SCOPE_INVALID`, `SCOPE_INCOMPLETE`,
+   * `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` and
+   * `URL_REDIRECT_NOT_FOUND`. D-121 T1: the nouns are product scopes, URL keys
+   * and URL redirects, all rows of this module, and every raise site is one of
+   * its admin writes. Each arrives with a token-free sentence in both bundles —
+   * their `details` carry channel ids, keys and product names, never a `code`.
    */
   errorCodes: [
     { code: 'ASSET_KIND_NOT_SUPPORTED' },
@@ -458,33 +608,71 @@ export const manifest = defineModuleManifest({
     { code: 'ATTACHMENT_TYPE_CODE_TAKEN' },
     { code: 'ATTACHMENT_TYPE_IN_USE' },
     { code: 'ATTACHMENT_TYPE_NOT_FOUND' },
+    // Issue #624 (#86) — the attribute and option refusals the stored state
+    // makes, which were `VALIDATION_FAILED`. The in-use refusals name what
+    // still uses the attribute or option through their tokens.
+    { code: 'ATTRIBUTE_DEFAULT_OPTION_TAKEN' },
+    { code: 'ATTRIBUTE_IN_USE', tokens: ['attribute_sets', 'products'] },
+    { code: 'ATTRIBUTE_KEY_TAKEN' },
     { code: 'ATTRIBUTE_NOT_FOUND' },
     { code: 'ATTRIBUTE_NOT_MASS_EDITABLE' },
+    { code: 'ATTRIBUTE_OPTION_IN_USE', tokens: ['products'] },
+    { code: 'ATTRIBUTE_OPTION_VALUE_TAKEN' },
+    { code: 'ATTRIBUTE_OPTIONS_NOT_SUPPORTED' },
     { code: 'ATTRIBUTE_SET_CODE_TAKEN' },
     { code: 'ATTRIBUTE_SET_IN_USE' },
     { code: 'ATTRIBUTE_SET_NOT_FOUND' },
-    { code: 'ATTRIBUTE_VALUE_REJECTED' },
+    // Issue #624 (#86).
+    { code: 'ATTRIBUTE_SLIDER_NOT_SUPPORTED' },
+    // Issue #1223 — `page_builder_content`: a content attribute's key in
+    // `attributeValues`; `not_content_attribute`: a content `PUT` for a key that
+    // is not a content attribute of the product's set.
+    { code: 'ATTRIBUTE_VALUE_REJECTED', tokens: ['page_builder_content', 'not_content_attribute'] },
+    // Issue #1218 (#86) — `page_builder`: a type change to or from Page Builder content.
+    { code: 'ATTRIBUTE_VALUE_TYPE_LOCKED', tokens: ['page_builder'] },
+    { code: 'ATTRIBUTE_VALUES_REQUIRED' },
+    // Issue #501 — the three reasons an undo of a bulk operation is refused.
+    { code: 'BULK_OPERATION_ALREADY_REVERTED' },
+    { code: 'BULK_OPERATION_NOT_REVERSIBLE' },
+    { code: 'BULK_OPERATION_RUNNING' },
     { code: 'BULK_TOO_LARGE' },
     { code: 'BUNDLE_SLOT_NOT_FOUND' },
     { code: 'BUNDLE_SLOT_OPTION_NOT_FOUND' },
+    // Issue #624 (#86) — the category refusals, which were `VALIDATION_FAILED`.
+    { code: 'CATEGORY_HAS_CHILDREN' },
+    { code: 'CATEGORY_MOVE_CYCLE' },
+    { code: 'CATEGORY_SLUG_TAKEN' },
+    // Issue #1218 (#86) — a capability a stored content attribute holds off.
+    { code: 'CONTENT_ATTRIBUTE_CAPABILITY_LOCKED' },
     { code: 'FIELD_IMMUTABLE' },
+    { code: 'FIELD_NOT_AT_SCOPE' },
     { code: 'FILTER_NOT_ALLOWED' },
     { code: 'GALLERY_ITEM_NOT_FOUND' },
     { code: 'GALLERY_LABEL_ALREADY_TAKEN' },
     { code: 'GALLERY_LABEL_LIMIT_EXCEEDED' },
+    { code: 'GLOBAL_ONLY_FIELD' },
+    // Issue #624 (#86).
+    { code: 'GROUPED_ITEM_ALREADY_EXISTS' },
     { code: 'GROUPED_ITEM_NOT_FOUND' },
     { code: 'INVALID_QUANTITY_RANGE' },
     { code: 'LINK_ALREADY_EXISTS' },
     { code: 'MAX_EXCEEDED' },
     { code: 'MIN_NOT_MET' },
+    // Issue #624 (#86) — a minimum on a product type that takes none.
+    { code: 'MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE' },
     { code: 'NESTED_COMPOSITE_NOT_ALLOWED' },
     { code: 'OPTION_ALREADY_EXISTS' },
+    { code: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY' },
+    { code: 'PACKAGING_UNIT_MISMATCH' },
     { code: 'PACKAGING_UNIT_NAME_CONFLICT' },
     { code: 'PACKAGING_UNIT_NOT_FOUND' },
     { code: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE' },
     { code: 'PRICE_ORDERING_UNAVAILABLE' },
     { code: 'PRICE_RANGE_INVALID' },
+    // Feature 160 (FR-043): a product or variant write naming an old price field.
+    { code: 'PRICE_SET_IN_PRICE_BOOKS' },
     { code: 'PRODUCT_ARCHIVED' },
+    { code: 'PRODUCT_BELOW_MINIMUM_QUANTITY' },
     { code: 'PRODUCT_DELETE_BLOCKED' },
     { code: 'PRODUCT_FEED_CONFIRMATION_REQUIRED' },
     { code: 'PRODUCT_FEED_DISABLED' },
@@ -496,15 +684,26 @@ export const manifest = defineModuleManifest({
     { code: 'PRODUCT_NOT_FOUND' },
     { code: 'PRODUCT_NOT_IN_COMPARISON' },
     { code: 'PRODUCT_SAVED_VIEW_NAME_TAKEN' },
-    { code: 'PRODUCT_TYPE_MISMATCH' },
+    // Issue #624 (#86) — a variant for a product that is not configurable is
+    // refused under this code, its token choosing the sentence.
+    { code: 'PRODUCT_TYPE_MISMATCH', tokens: ['variants_need_configurable'] },
     { code: 'PRODUCT_UNMANAGED_STOCK' },
+    { code: 'SCOPE_INCOMPLETE' },
+    { code: 'SCOPE_INVALID' },
+    { code: 'SCOPED_VALUE_INVALID' },
     { code: 'SELECTION_TOO_LARGE' },
-    { code: 'SELF_LINK_NOT_ALLOWED' },
-    { code: 'SKU_ALREADY_EXISTS' },
+    // Issue #624 (#86) — a grouped product naming itself as a child, and a
+    // SKU rename onto a SKU a product or a variant holds (was `400
+    // VALIDATION_FAILED` `sku_in_use`), take these codes with a token.
+    { code: 'SELF_LINK_NOT_ALLOWED', tokens: ['grouped'] },
+    { code: 'SKU_ALREADY_EXISTS', tokens: ['held_by_product', 'held_by_variant'] },
     { code: 'SKU_NOT_IN_ASSORTMENT' },
     { code: 'SYSTEM_ATTRIBUTE_SET_IMMUTABLE' },
     { code: 'TARGET_PRODUCT_NOT_FOUND' },
     { code: 'UNKNOWN_OPTION' },
+    { code: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED' },
+    { code: 'URL_KEY_TAKEN' },
+    { code: 'URL_REDIRECT_NOT_FOUND' },
     { code: 'VARIANT_AXIS_MISSING' },
     { code: 'VARIANT_COMBINATION_EXISTS' },
   ],
@@ -564,7 +763,8 @@ export const manifest = defineModuleManifest({
       icon: 'Plus',
       targetRoute: '/catalog/products/new',
       requiredPermission: 'catalog:write',
-      keywords: ['product', 'new', 'add', 'create', 'produkt', 'nowy', 'dodaj'],
+      keywords: ['product', 'new', 'add', 'create'],
+      keywordsKey: 'actions.newProduct.keywords',
       weight: 100,
     },
     // The three below arrive with feature 091's Phase 4 batch 15, by the route
@@ -583,8 +783,45 @@ export const manifest = defineModuleManifest({
       icon: 'Package',
       targetRoute: '/catalog/products',
       requiredPermission: 'catalog:read',
-      keywords: ['products', 'catalog', 'items', 'produkty', 'katalog'],
+      // Feature 163 (R23, FR-042) — the scope controls and overview are part of the
+      // product editor, which a palette route cannot open by id; these find it.
+      keywords: [
+        'products',
+        'catalog',
+        // An action carries at most ten keywords (`adminActionSchema`) and the
+        // palette matches a substring of the joined keywords, so the English
+        // phrases share entries: "scope", "visibility" and "channel" all find
+        // the first.
+        'scope visibility per channel',
+        'publication window',
+        // The Archive / Restore actions live on the product list and editor:
+        // "archive" and "restore" find them, and the Polish words are under
+        // `keywordsKey` (issue #573). "archived" is deliberately not here: it
+        // names the archived list, which `open-archived-products` opens, and
+        // this row's lower weight would rank it first (issue #501).
+        'archive restore',
+        // Feature 174 (FR-108) — the one scope switcher sets the editor's channel and language:
+        // "language" and "translation" find it; the Polish words are under `keywordsKey`.
+        'language translation',
+      ],
+      keywordsKey: 'actions.openProducts.keywords',
       weight: 200,
+    },
+    // Feature 163, owner decision PAL-1 = B (2026-10-26) — the product list's
+    // Archived tab as a palette row of its own. A `targetRoute` takes no query
+    // string, so it opens a dedicated route the admin layer declares before the
+    // editor's `/catalog/products/:id`. Polish keywords are in the bundle, under
+    // `keywordsKey` (issue #573).
+    {
+      id: 'open-archived-products',
+      labelKey: 'actions.openArchivedProducts.label',
+      descriptionKey: 'actions.openArchivedProducts.description',
+      icon: 'Archive',
+      targetRoute: '/catalog/products/archived',
+      requiredPermission: 'catalog:read',
+      keywords: ['archived', 'archive', 'restore', 'archived products'],
+      keywordsKey: 'actions.openArchivedProducts.keywords',
+      weight: 210,
     },
     {
       id: 'open-categories',
@@ -593,7 +830,8 @@ export const manifest = defineModuleManifest({
       icon: 'Boxes',
       targetRoute: '/catalog/categories',
       requiredPermission: 'catalog:read',
-      keywords: ['category', 'categories', 'tree', 'kategorie'],
+      keywords: ['category', 'categories', 'tree'],
+      keywordsKey: 'actions.openCategories.keywords',
       weight: 300,
     },
     {
@@ -603,8 +841,45 @@ export const manifest = defineModuleManifest({
       icon: 'Tag',
       targetRoute: '/catalog/attributes',
       requiredPermission: 'catalog:read',
-      keywords: ['attribute', 'attributes', 'atrybuty'],
+      keywords: ['attribute', 'attributes'],
+      keywordsKey: 'actions.openAttributes.keywords',
       weight: 400,
+    },
+    // Issue #516 (Principle XVI): the three remaining sidebar screens were
+    // reachable from the sidebar alone. Each opens on `catalog:read`, the code
+    // its route and its list `GET` enforce; writes stay gated on the screen.
+    {
+      id: 'open-attribute-sets',
+      labelKey: 'actions.openAttributeSets.label',
+      descriptionKey: 'actions.openAttributeSets.description',
+      icon: 'Tag',
+      targetRoute: '/catalog/attribute-sets',
+      requiredPermission: 'catalog:read',
+      keywords: ['attribute set', 'attribute sets', 'attributes'],
+      keywordsKey: 'actions.openAttributeSets.keywords',
+      weight: 410,
+    },
+    {
+      id: 'open-attachment-types',
+      labelKey: 'actions.openAttachmentTypes.label',
+      descriptionKey: 'actions.openAttachmentTypes.description',
+      icon: 'FileText',
+      targetRoute: '/catalog/attachment-types',
+      requiredPermission: 'catalog:read',
+      keywords: ['attachment', 'attachments', 'attachment type', 'certificate'],
+      keywordsKey: 'actions.openAttachmentTypes.keywords',
+      weight: 420,
+    },
+    {
+      id: 'open-bulk-operations',
+      labelKey: 'actions.openBulkOperations.label',
+      descriptionKey: 'actions.openBulkOperations.description',
+      icon: 'ListChecks',
+      targetRoute: '/catalog/bulk-operations',
+      requiredPermission: 'catalog:read',
+      keywords: ['bulk', 'bulk edit', 'bulk actions', 'operations'],
+      keywordsKey: 'actions.openBulkOperations.keywords',
+      weight: 430,
     },
   ],
   /**
@@ -645,24 +920,54 @@ export const manifest = defineModuleManifest({
     },
     {
       name: 'catalog.ProductGrid',
-      translatable: [],
+      // Feature 163 (T071, contracts/blocks.md): the header, the card link and the footer button.
+      translatable: [
+        { path: 'header.heading', format: 'tiptap' },
+        { path: 'header.lead' },
+        { path: 'header.button.label' },
+        { path: 'ctaLabel' },
+        { path: 'footerButton.label' },
+      ],
       labelKey: 'blocks.productGrid.label',
       descriptionKey: 'blocks.productGrid.description',
       category: 'catalog',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['columns', 'gap', 'view', 'margin', 'padding', 'border'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'columns', 'gap', 'view', 'margin', 'padding', 'border', 'equalItemHeight', 'gapPx', 'headingWeight', 'leadSize', 'leadSizePx', 'headingLineHeight'],
       weight: 20,
     },
     {
       name: 'catalog.ProductSlider',
-      translatable: [],
+      // Feature 163 (T071, contracts/blocks.md): the header, the card link and the footer button.
+      translatable: [
+        { path: 'header.heading', format: 'tiptap' },
+        { path: 'header.lead' },
+        { path: 'header.button.label' },
+        { path: 'ctaLabel' },
+        { path: 'footerButton.label' },
+      ],
       labelKey: 'blocks.productSlider.label',
       descriptionKey: 'blocks.productSlider.description',
       category: 'catalog',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'slidesPerView',
+        'gap',
+        'gapPx',
+        'controlsPlacement',
+        'controlsAlign',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight', 'leadSize', 'leadSizePx',
+        // R22I.
+        'headingLineHeight',
+      ],
       weight: 30,
     },
     {
@@ -684,7 +989,7 @@ export const manifest = defineModuleManifest({
       category: 'catalog',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border', 'equalItemHeight', 'gapPx'],
       weight: 50,
     },
     {
@@ -745,7 +1050,7 @@ export const recentActivity = defineModuleRecentActivity({
     { action: 'product.create', icon: 'Plus', labelKey: 'activity.verb.product.create' },
     { action: 'product.update', icon: 'Edit', labelKey: 'activity.verb.product.update' },
     { action: 'product.archive', icon: 'Archive', labelKey: 'activity.verb.product.archive' },
-    { action: 'product.unarchive', icon: 'Box', labelKey: 'activity.verb.product.unarchive' },
+    { action: 'product.restore', icon: 'Box', labelKey: 'activity.verb.product.restore' },
     {
       action: 'product.bulk_update',
       icon: 'Edit',

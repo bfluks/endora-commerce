@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { AdminNavSectionNameSchema } from '@endora-commerce/contracts';
+
 import { ESTATE } from '../src/check/index.js';
 import { isDirectEntry, main } from '../src/bin/endora.js';
 import { runNewModule } from '../src/new-module/index.js';
@@ -49,6 +51,18 @@ describe('the program', () => {
     expect(result.stdout).toContain('endora new module <id>');
   });
 
+  it('names every sidebar section --admin accepts, and nothing else (issue #444)', async () => {
+    // The list was once written by hand and went stale twice — it omitted the
+    // `crm` and `work` sections. It is read from the schema the refusal uses,
+    // so the help and the validation cannot disagree.
+    const { stdout } = await run(['--help']);
+    const match = /in the named section \(([^)]*)\)/.exec(stdout.replace(/\s+/g, ' '));
+
+    expect(match).not.toBeNull();
+    const listed = match![1]!.split(',').map((name) => name.trim());
+    expect(listed).toEqual([...AdminNavSectionNameSchema.options]);
+  });
+
   it('exits 1 with the usage when given nothing to do', async () => {
     expect((await run([])).code).toBe(1);
   });
@@ -80,7 +94,7 @@ describe('the program', () => {
       'module',
       'scaffold_fixtures',
       '--name',
-      'Scaffold Fixtures',
+      'Scaffold fixtures',
       '--description',
       'A worked example.',
       '--permission',
@@ -164,7 +178,7 @@ describe('a refusal writes nothing', () => {
         'module',
         'scaffold_fixtures',
         '--name',
-        'Scaffold Fixtures',
+        'Scaffold fixtures',
         '--description',
         'x',
         '--dir',
@@ -187,7 +201,7 @@ describe('a refusal writes nothing', () => {
       await expect(
         runNewModule({
           id: 'scaffold_fixtures',
-          name: 'Scaffold Fixtures',
+          name: 'Scaffold fixtures',
           description: 'x',
           dir: scratch,
           cwd: REPO_ROOT,
@@ -216,7 +230,7 @@ describe('a refusal writes nothing', () => {
     await expect(
       runNewModule({
         id: 'scaffold_fixtures',
-        name: 'Scaffold Fixtures',
+        name: 'Scaffold fixtures',
         description: 'x',
         scope: '@someone-else',
         cwd: REPO_ROOT,
@@ -232,7 +246,7 @@ describe('--dry-run', () => {
     try {
       const result = await runNewModule({
         id: 'scaffold_fixtures',
-        name: 'Scaffold Fixtures',
+        name: 'Scaffold fixtures',
         description: 'A worked example.',
         dir: target,
         dryRun: true,

@@ -1,4 +1,4 @@
-import { defineModuleManifest } from '@endora-commerce/contracts';
+import { ANALYTICS_REPORTING_TIME_ZONE_SETTING, defineModuleManifest } from '@endora-commerce/contracts';
 
 /**
  * Analytics module — manifest backfill (Module Lifecycle, feature 018).
@@ -17,7 +17,12 @@ export const manifest = defineModuleManifest({
   // Feature 072 (wave 1) — the admin summary route is gated by `requireAdmin`,
   // which `auth` owns. With `auth` absent the route cannot be guarded at all,
   // so this is a hard edge rather than a degraded mode.
-  dependencies: ['auth'],
+  //
+  // `settings` owns `settingWriteValidatorRegistry`, into which the reporting
+  // time zone's validator is pushed at boot (owner decisions 2026-10-27,
+  // #465). It cannot be switched off, so the edge binds nothing an operator
+  // could flip.
+  dependencies: ['auth', 'settings'],
   permissions: [{ code: 'analytics:read', label: 'View analytics dashboards' }],
   // Feature 091, Phase 4 — the module owns its admin surface, so it owns the
   // strings that surface is labelled with. `nav.analytics.label` replaces the
@@ -41,7 +46,8 @@ export const manifest = defineModuleManifest({
       icon: 'LineChart',
       targetRoute: '/analytics',
       requiredPermission: 'analytics:read',
-      keywords: ['analytics', 'analityka', 'dashboard', 'events', 'zdarzenia', 'raport'],
+      keywords: ['analytics', 'dashboard', 'events'],
+      keywordsKey: 'actions.openAnalytics.keywords',
       weight: 230,
     },
   ],
@@ -59,6 +65,19 @@ export const manifest = defineModuleManifest({
         groupCode: 'analytics',
         valueType: 'boolean',
         defaultValue: true,
+      },
+      {
+        // Owner decisions 2026-10-27 (#465): the calendar reports count days
+        // in, owned here so no single reporting module owns it. Projects and
+        // CRM analytics read it through `reportingTimeZonePort` (#474).
+        // Validated as an IANA zone (`services/reporting-time-zone.ts`).
+        code: ANALYTICS_REPORTING_TIME_ZONE_SETTING,
+        name: 'Reporting time zone',
+        description:
+          'The IANA time zone (e.g. Europe/Warsaw) in which reports count days and months. Default UTC.',
+        groupCode: 'analytics',
+        valueType: 'string',
+        defaultValue: 'UTC',
       },
     ],
   },

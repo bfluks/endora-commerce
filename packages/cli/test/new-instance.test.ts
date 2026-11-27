@@ -784,6 +784,50 @@ describe('the tree (§1, §2)', () => {
     );
   });
 
+  /**
+   * Issue #1036 — `module:schema-extensions` is the sixth operator command.
+   *
+   * `specs/178-extensible-columns/` shipped `list`, `drop` (the only sanctioned
+   * removal of orphaned `x_<module>_*` columns, OD-29) and `audit-packages`
+   * (the pre-upgrade run of the foreign-schema guard) with an entry point in
+   * this repository's `backend/` alone, so an instance — which is where the
+   * declared columns live — could run none of them. The instance form has the
+   * same three hops as the five `module:*` commands: a root script delegating
+   * to the member, a member script running the compiled entry, and a rendered
+   * entry that is one call into `<scope>platform/lifecycle`.
+   */
+  it('issue #1036 — wires `module:schema-extensions` like the five `module:*` commands', () => {
+    const plan = planInstance(planInput({ name: 'acme-shop' }));
+    const scriptsOf = (path: string): Record<string, string> =>
+      (
+        JSON.parse(plan.files.find((file) => file.path === path)!.content) as {
+          scripts: Record<string, string>;
+        }
+      ).scripts;
+    expect(scriptsOf('package.json')['module:schema-extensions']).toBe(
+      'pnpm -C backend run module:schema-extensions',
+    );
+    expect(scriptsOf('backend/package.json')['module:schema-extensions']).toBe(
+      'node --env-file-if-exists=../.env dist/module-commands/schema-extensions.js',
+    );
+    const entry = plan.files.find(
+      (file) => file.path === 'backend/src/module-commands/schema-extensions.ts',
+    );
+    expect(entry?.kind).toBe('wiring');
+    expect(entry?.member).toBe('backend');
+    // The platform runs the grammar, the refusals and the audited drop; the
+    // instance supplies its own ORM configuration and nothing else.
+    expect(entry!.content).toContain(
+      `import { runInstanceSchemaExtensionsCommand } from '${SCOPE}platform/lifecycle';`,
+    );
+    expect(entry!.content).toContain("import config from '../mikro-orm.config.js';");
+    expect(entry!.content).toContain(
+      'await runInstanceSchemaExtensionsCommand({ ormConfig: config });',
+    );
+    const readme = plan.files.find((file) => file.path === 'README.md')!.content;
+    expect(readme).toContain('pnpm run module:schema-extensions list');
+  });
+
   it('R1.4 — the wiring is under the bound, measured on the plan', () => {
     expect(wiringLineCount(planInstance(planInput()))).toBeLessThan(250);
   });
@@ -796,12 +840,13 @@ describe('the tree (§1, §2)', () => {
     expect(readme).not.toContain('Adding a module later is `pnpm add`,');
   });
 
-  it('the README says what is true of an instance today: every refusal of overlay schema, and a storefront that may already be there', () => {
+  it('the README says what is true of an instance today: an overlay module may own a table, and a storefront may already be there', () => {
     const readme = planInstance(planInput()).files.find((file) => file.path === 'README.md')!.content;
-    // `generate` was named as the one refusal; `migrate`, `module:*` and the
-    // boot refuse too.
-    expect(readme).toContain('is refused by `generate`, by `migrate`, by every');
-    expect(readme).not.toContain('`pnpm run generate`\nrefuses a `migrations/`');
+    // `specs/190-overlay-full-modules/` FR-037 — the schema refusals are gone, so the
+    // paragraph that listed them would now be false (FR-101).
+    expect(readme).not.toContain('owns no database table');
+    expect(readme).toContain('An overlay module may own a database table');
+    expect(readme).toContain('the foreign-schema guard');
     // `endora install` writes the storefront beside the instance, so "next,
     // write a storefront" was false for everyone who came that way.
     expect(readme).not.toContain('## Next');
@@ -811,21 +856,43 @@ describe('the tree (§1, §2)', () => {
     expect(readme).not.toContain("the operator's switch");
   });
 
-  it('every entry point turns a refusal about the overlay into a sentence, `migrate` included', () => {
-    // An overlay module ships no schema. The API and the worker meet that
-    // refusal while composing, and print it instead of an uncaught exception;
-    // `migrate` composes nothing and never met it at all, so it asks directly.
+  it('every entry point turns a refusal about the overlay into a sentence, and the ORM reads the overlay', () => {
+    // The API and the worker meet an overlay refusal while composing, and print
+    // it instead of an uncaught exception. `migrate` no longer asks a refusal of
+    // its own (FR-037): its configuration carries the deployment root, so the
+    // overlay modules' migrations are what it applies (FR-035).
     const plan = planInstance(planInput());
     const content = (path: string): string => plan.files.find((file) => file.path === path)!.content;
     for (const path of ['backend/src/index.ts', 'backend/src/worker.ts']) {
-      expect(content(path), path).toContain('await composeApp({ deploymentRoot }).catch(exitOnRefusal);');
+      expect(content(path), path).toContain(
+        'await composeApp({ deploymentRoot, deploymentSourceRoot }).catch(exitOnRefusal);',
+      );
       expect(content(path), path).toMatch(/import \{[^}]*\bexitOnRefusal\b[^}]*\} from '@endora-commerce\/platform\/composition';/);
     }
     const migrate = content('backend/src/migrate.ts');
-    expect(migrate).toContain("import { refuseOverlaySchema } from '@endora-commerce/platform/composition';");
-    // Before the ORM is opened: nothing is migrated over a tree that is refused.
-    expect(migrate.indexOf('refuseOverlaySchema(fileURLToPath(')).toBeGreaterThan(-1);
-    expect(migrate.indexOf('refuseOverlaySchema(fileURLToPath(')).toBeLessThan(migrate.indexOf('MikroORM.init'));
+    expect(migrate).not.toContain('refuseOverlaySchema');
+    // A refusal raised while the configuration reads the overlay is a sentence too.
+    expect(migrate).toContain("import { exitOnRefusal } from '@endora-commerce/platform/composition';");
+    expect(migrate).toContain('await MikroORM.init(await config().catch(exitOnRefusal))');
+    const config = content('backend/src/mikro-orm.config.ts');
+    // `backend/dist` compiled, `backend/src` under a source run — the same value
+    // `index.ts` hands `composeApp`, from the same directory.
+    expect(config).toContain("const deploymentRoot = fileURLToPath(new URL('.', import.meta.url));");
+    expect(config).toContain('configuredEntitiesFrom({ coreEntities: [], deploymentRoot })');
+    expect(config).toContain(
+      'discoverConfiguredMigrations({ coreEntries: [], manifests: [] }, process.env, deploymentRoot)',
+    );
+  });
+
+  // `specs/178-extensible-columns/` FR-025, D-291 R-A4/R-A5 — `pnpm run setup`
+  // migrates before `module:install` runs, so the instance's migrate entry is
+  // where the verified run (one transaction, the verifier, history pruning and
+  // orphan marking) has to happen; a bare `migrator.up()` skips all of it.
+  it('migrates through migrateUpVerified, never a bare migrator.up()', () => {
+    const migrate = planInstance(planInput()).files.find((file) => file.path === 'backend/src/migrate.ts')!.content;
+    expect(migrate).toContain("import { migrateUpVerified } from '@endora-commerce/platform/db';");
+    expect(migrate).toContain('await migrateUpVerified(orm);');
+    expect(migrate).not.toMatch(/getMigrator\(\)\.up\(/);
   });
 
   /**
@@ -965,6 +1032,24 @@ describe('the tree (§1, §2)', () => {
       expect(root['admin:create']).toBe('pnpm -C backend run admin:create');
     });
 
+    /**
+     * Issue #133 — the separate worker tier is started from the root, like the
+     * API. The backend member has declared `worker` all along, and
+     * `docs/docs/operations/queue-consumers.md` tells an operator to split the
+     * consumers into their own process with it; the root forwarded `start` and
+     * not `worker`, so the one documented command for that tier had no form an
+     * operator could run from where every other command runs.
+     */
+    it('#133 — the root forwards `worker` beside `start`, with `-C`', () => {
+      const root = (
+        JSON.parse(
+          planInstance(planInput()).files.find((file) => file.path === 'package.json')!.content,
+        ) as { scripts: Record<string, string> }
+      ).scripts;
+      expect(root['start']).toBe('pnpm -C backend run start');
+      expect(root['worker']).toBe('pnpm -C backend run worker');
+    });
+
     it('T2-E — the next steps name the administrator, after the module install', () => {
       const steps = nextSteps('/tmp/acme', 'default', DEFAULT_TOPOLOGY, ['settings', 'admin_users']);
       const text = steps.join('\n');
@@ -1027,6 +1112,71 @@ describe('the tree (§1, §2)', () => {
     expect(written).toContain('@mikro-orm/migrations');
     expect(written).not.toContain('typescript');
     expect(written).not.toContain('zod');
+  });
+
+  /**
+   * Issue #1865 — the ORM's own CLI is not an entry point an instance gets.
+   *
+   * Migrations run through the platform's commands (`migrate`, `setup`, the
+   * `module:*` entries); `mikro-orm migration:*` writes into one configured path
+   * and knows nothing of module ownership or the computed order. So no manifest
+   * this command writes may declare `@mikro-orm/cli`, carry a `mikro-orm`
+   * configuration block for it, or name it in a script — not even when a range
+   * for it is there to be read.
+   */
+  it('#1865 — no planned manifest declares the MikroORM CLI or its configuration block', () => {
+    const plan = planInstance(
+      planInput({
+        declaredRanges: new Map([
+          ['@mikro-orm/core', '^6'],
+          ['@mikro-orm/postgresql', '^6'],
+          ['@mikro-orm/cli', '^6'],
+          ['typescript', '^5'],
+        ]),
+      }),
+    );
+    const manifests = plan.files.filter(
+      (file) => file.path === 'package.json' || file.path.endsWith('/package.json'),
+    );
+    expect(manifests.length).toBeGreaterThan(1);
+    for (const file of manifests) {
+      const manifest = JSON.parse(file.content) as Record<string, unknown>;
+      expect(manifest, `${file.path} carries a \`mikro-orm\` block`).not.toHaveProperty(
+        'mikro-orm',
+      );
+      for (const field of ['dependencies', 'devDependencies', 'peerDependencies']) {
+        const declared = (manifest[field] ?? {}) as Record<string, string>;
+        expect(Object.keys(declared), `${file.path} ${field}`).not.toContain('@mikro-orm/cli');
+      }
+      const scripts = (manifest['scripts'] ?? {}) as Record<string, string>;
+      for (const [name, command] of Object.entries(scripts)) {
+        expect(command, `${file.path} script \`${name}\``).not.toMatch(/(^|[\s;&|])mikro-orm\s/);
+      }
+    }
+  });
+
+  /**
+   * Issue #1866 — `@mikro-orm/decorators/legacy` imports `reflect-metadata` at
+   * module load, through its `ReflectMetadataProvider` re-export, while its own
+   * manifest marks that peer optional. An instance that declares the decorators
+   * and not `reflect-metadata` fails the first import of the platform's kernel
+   * (`Cannot find package 'reflect-metadata'`), so the instance root declares it,
+   * at the range the platform's peer names.
+   */
+  it('#1866 — the instance root declares reflect-metadata at the platform\'s range', () => {
+    const written = new Map(
+      devDependenciesFor(
+        planInput({
+          declaredRanges: new Map([
+            ['@mikro-orm/core', '^7.2.11'],
+            ['@mikro-orm/decorators', '^7.2.11'],
+            ['reflect-metadata', '^0.2.2'],
+          ]),
+        }),
+      ),
+    );
+    expect(written.get('@mikro-orm/decorators')).toBe('^7.2.11');
+    expect(written.get('reflect-metadata')).toBe('^0.2.2');
   });
 
   it('R2.5a — the four peer ranges are the platform\'s own, not this command\'s', () => {

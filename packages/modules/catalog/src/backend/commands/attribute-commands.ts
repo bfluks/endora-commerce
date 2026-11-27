@@ -20,8 +20,14 @@ import {
 import {
   isValidOptionValue,
   validateOptionList,
+  type ValidationError as OptionListError,
 } from '../services/attribute-option-validator.js';
 import type { CatalogAttributeOptionView } from '../services/catalog-attribute-read.service.js';
+import {
+  assertContentAttributeShape,
+  assertTypeChangeAllowed,
+} from '../services/content-attribute-rules.js';
+import { readAttributeUsage } from '../services/attribute-usage.js';
 
 /**
  * Catalog attribute + option Commands (feature 061, Principle XIII).
@@ -34,9 +40,10 @@ import type { CatalogAttributeOptionView } from '../services/catalog-attribute-r
  * writes exactly one audit row per operator action; the caller
  * (CatalogAdminService) publishes the CF cache invalidation post-commit.
  *
- * `attribute.updated.v1` keeps its legacy emission points: attribute create +
- * every attribute update — never option CRUD (reindex trigger contract,
- * research §R10).
+ * `attribute.updated.v1` is emitted on attribute create, every attribute
+ * update and — since feature 172 (research R-21) — attribute delete, with both
+ * flags `false` there, so `search` and `price_lists` drop the key from what they
+ * compute. Never on option CRUD (reindex trigger contract, research §R10).
  */
 
 /**
@@ -95,20 +102,29 @@ export interface AttributeMutationResult {
  * published guard over the published code union, so the narrowing is structural
  * and the class stops crossing the boundary.
  */
-function toCatalogHttpError(err: unknown, keyForMessage?: string): never {
+function toCatalogHttpError(err: unknown, attributeKey: string, option?: { value: string }): never {
   if (isCustomFieldDefinitionFailure(err)) {
     switch (err.code) {
+      // Issue #624 (#86) — the three refusals the stored state makes have codes
+      // of their own; the published failure carries no values, so the attribute
+      // (and the option) the Command already holds fill `details`.
       case 'duplicate_key':
-        throw new HttpError(
-          409,
-          ERROR_CODES.VALIDATION_FAILED,
-          `Attribute key "${keyForMessage ?? ''}" already exists.`,
-        );
+        throw new HttpError(409, ERROR_CODES.ATTRIBUTE_KEY_TAKEN, `Attribute key "${attributeKey}" already exists.`, {
+          attributeKey,
+        });
       case 'not_found':
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, err.message);
       case 'value_type_locked':
+        throw new HttpError(409, ERROR_CODES.ATTRIBUTE_VALUE_TYPE_LOCKED, err.message, { attributeKey });
       case 'option_in_use':
-        throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, err.message);
+        // The custom-fields probe, behind catalog's own count: no count to name.
+        throw new HttpError(409, ERROR_CODES.ATTRIBUTE_OPTION_IN_USE, err.message, {
+          attributeKey,
+          ...(option ? { value: option.value } : {}),
+        });
+      // Feature 172 — a value type the host does not offer: a malformed request.
+      case 'value_type_unsupported':
+        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, err.message);
       default:
         throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, err.message);
     }
@@ -187,6 +203,27 @@ export function createAttributeCommand(
           `displayAsSlider is only valid for valueType="number" or "price"; got "${resolved.valueType}".`,
         );
       }
+      // Feature 172 (research R-6) — a Page Builder content attribute holds
+      // every capability off (FR-003); feature 174 — `scopable` among them,
+      // its languages being the content envelope's (FR-004, FR-040).
+      if (resolved.valueType === 'page_builder') {
+        assertContentAttributeShape({
+          isSearchable: req.isSearchable,
+          isFilterable: req.isFilterable,
+          isVariantAxis: req.isVariantAxis,
+          // The type resolver drops the flag for a non-numeric type; the
+          // request is judged on what it asked for.
+          displayAsSlider: req.displayAsSlider ?? resolved.displayAsSlider,
+          isComparable: req.isComparable,
+          quickSearchable: req.quickSearchable,
+          isPromoRule: req.isPromoRule,
+          isPriceRule: req.isPriceRule,
+          massEditable: req.massEditable,
+          isRequired: req.isRequired,
+          isVisibleOnProductPage: req.isVisibleOnProductPage,
+          scopable: req.scopable,
+        });
+      }
       const labelDefault =
         req.labelDefault ??
         req.label['en-US'] ??
@@ -226,6 +263,9 @@ export function createAttributeCommand(
           sortOrder: input.sortOrder,
           config: {},
           options,
+          // Feature 175 (FR-036) — the admin panel's affordance; the apply
+          // seam refuses a required attribute that is not `edit` (SD-2).
+          ...(req.adminAccess !== undefined ? { adminAccess: req.adminAccess } : {}),
         });
         definitionId = def.id;
         // The extension references the definition by plain uuid (no ORM
@@ -250,8 +290,7 @@ export function createAttributeCommand(
         isPriceRule: req.isPriceRule ?? false,
         filterPosition: req.filterPosition ?? 0,
         isVisibleOnProductPage: req.isVisibleOnProductPage ?? false,
-        channelScoped: req.channelScoped ?? false,
-        languageScoped: req.languageScoped ?? false,
+        scopable: req.scopable ?? false,
         massEditable: req.massEditable ?? false,
         quickSearchable: req.quickSearchable ?? false,
       });
@@ -320,8 +359,7 @@ export function updateAttributeCommand(
       if (req.isVisibleOnProductPage !== undefined) {
         ext.isVisibleOnProductPage = req.isVisibleOnProductPage;
       }
-      if (req.channelScoped !== undefined) ext.channelScoped = req.channelScoped;
-      if (req.languageScoped !== undefined) ext.languageScoped = req.languageScoped;
+      if (req.scopable !== undefined) ext.scopable = req.scopable;
       if (req.massEditable !== undefined) ext.massEditable = req.massEditable;
       if (req.quickSearchable !== undefined) ext.quickSearchable = req.quickSearchable;
 
@@ -339,18 +377,48 @@ export function updateAttributeCommand(
         ext.displayAsSlider = resolved.displayAsSlider;
       } else if (req.displayAsSlider !== undefined) {
         // Same valueType-vs-displayAsSlider rule as create.
+        // A content attribute's refusal names the flag (feature 172, below).
         if (
           req.displayAsSlider &&
           currentLegacyType !== 'number' &&
-          currentLegacyType !== 'price'
+          currentLegacyType !== 'price' &&
+          currentLegacyType !== 'page_builder'
         ) {
+          // Issue #624 (#86) — the stored type refuses it, so a code of its own;
+          // on create the same rule judges the request alone and stays
+          // `VALIDATION_FAILED`.
           throw new HttpError(
             400,
-            ERROR_CODES.VALIDATION_FAILED,
+            ERROR_CODES.ATTRIBUTE_SLIDER_NOT_SUPPORTED,
             `displayAsSlider is only valid for valueType="number" or "price"; got "${currentLegacyType}".`,
+            { attributeKey: def.key, valueType: currentLegacyType },
           );
         }
         ext.displayAsSlider = req.displayAsSlider;
+      }
+      // Feature 172 (research R-6) — the type never moves to or from
+      // `page_builder` (FR-005), and a content attribute is judged on its
+      // **effective** flags: the stored ones with this patch applied.
+      assertTypeChangeAllowed(currentLegacyType, newLegacyType, def.key);
+      if (newLegacyType === 'page_builder') {
+        assertContentAttributeShape(
+          {
+            isSearchable: ext.isSearchable,
+            isFilterable: ext.isFilterable,
+            isVariantAxis: ext.isVariantAxis,
+            displayAsSlider: req.displayAsSlider ?? ext.displayAsSlider,
+            isComparable: ext.isComparable,
+            quickSearchable: ext.quickSearchable,
+            isPromoRule: ext.isPromoRule,
+            isPriceRule: ext.isPriceRule,
+            massEditable: ext.massEditable,
+            isRequired: req.isRequired ?? def.required,
+            isVisibleOnProductPage: ext.isVisibleOnProductPage,
+            scopable: ext.scopable,
+          },
+          // Issue #1218 (#86) — the stored type refuses the flag: a code of its own.
+          { attributeKey: def.key },
+        );
       }
       const triple = legacyToCfType(newLegacyType);
       ext.selectDisplay = triple.selectDisplay;
@@ -361,6 +429,7 @@ export function updateAttributeCommand(
       if (req.label !== undefined) patch['label'] = req.label;
       if (req.labelDefault !== undefined) patch['labelDefault'] = req.labelDefault;
       if (req.isRequired !== undefined) patch['required'] = req.isRequired;
+      if (req.adminAccess !== undefined) patch['adminAccess'] = req.adminAccess;
       if (triple.cfValueType !== def.valueType) patch['valueType'] = triple.cfValueType;
       if (Object.keys(patch).length > 0) {
         try {
@@ -411,35 +480,37 @@ export function deleteAttributeCommand(
       if (!ext) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Attribute "${target.idOrKey}" not found.`);
       }
-      // `em.execute`, not `em.getConnection().execute`: a Command's `run` is
-      // inside `CommandBus.run`'s transaction, and a connection-level execute
-      // takes its own connection — so these reference guards read the state
-      // outside the very transaction whose write they are guarding (issue #200).
-      const setRefs = (await em
-        .execute<Array<{ attribute_set_id: string }>>(
-          `select attribute_set_id from attribute_set_attributes where custom_field_definition_id = ?`,
-          [target.definitionId],
-        )) as Array<{ attribute_set_id: string }>;
-      if (setRefs.length > 0) {
+      // Feature 172 (research R-21) — the guard reads the same usage the admin
+      // dialog shows (`GET …/attributes/:idOrKey/usage`), on this Command's
+      // EntityManager so it sees the state of the transaction it guards
+      // (issue #200).
+      const usage = await readAttributeUsage(em, target);
+      if (usage.attributeSetCount > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
-          `Attribute is still referenced by ${setRefs.length} attribute set(s); remove from sets first.`,
+          ERROR_CODES.ATTRIBUTE_IN_USE,
+          `Attribute is still referenced by ${usage.attributeSetCount} attribute set(s); remove from sets first.`,
+          { code: 'attribute_sets', attributeKey: target.key, attributeSetCount: usage.attributeSetCount },
         );
       }
-      const productRefs = (await em
-        .execute<Array<{ count: string }>>(
-          `select count(*)::text as count from products where attribute_values \\? ?`,
-          [target.key],
-        )) as Array<{ count: string }>;
-      const productCount = Number(productRefs[0]?.count ?? '0');
-      if (productCount > 0) {
+      // A baseline value, a per-channel override or a variant value on a
+      // product that is not soft-deleted. Operator data is never erased by side
+      // effect (feature 012 FR-006); a soft-deleted product no longer blocks.
+      if (usage.productValueCount > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
-          `Attribute is still referenced by ${productCount} product(s); clear values first.`,
+          ERROR_CODES.ATTRIBUTE_IN_USE,
+          `Attribute is still referenced by ${usage.productValueCount} product(s); clear values first.`,
+          { code: 'products', attributeKey: target.key, productCount: usage.productValueCount },
         );
       }
+      // Page Builder content goes with its attribute (FR-007) — every row,
+      // a soft-deleted product's too; the FK cascade is the backstop. The audit
+      // row records how many, never a document.
+      const removedContent = (await em.execute(
+        `delete from product_content_values where product_attribute_id = ? returning id`,
+        [target.extensionId],
+      )) as Array<{ id: string }>;
       // Remove the extension FIRST (FK RESTRICT extension → definition), then
       // the definition (+ options) through the apply seam.
       em.remove(ext);
@@ -452,10 +523,24 @@ export function deleteAttributeCommand(
       await em.flush();
       return {
         result: undefined,
-        before: { key: target.key, valueType: target.legacyValueType },
+        before: {
+          key: target.key,
+          valueType: target.legacyValueType,
+          productContentCount: removedContent.length,
+        },
         after: null,
       };
     },
+    // Research R-21 — the key is now neither searchable nor filterable: `search`
+    // rebuilds its attribute settings and `price_lists` recomputes its surface.
+    event: () =>
+      attributeEvent({
+        extensionId: target.extensionId,
+        definitionId: target.definitionId,
+        key: target.key,
+        isSearchable: false,
+        isFilterable: false,
+      }),
   };
 }
 
@@ -511,6 +596,38 @@ function optionResult(
   };
 }
 
+/**
+ * An option write the attribute's **stored** options or type refuse (issue
+ * #624, #86): a value the attribute already has, a second default where one
+ * default is allowed, options on a type that takes none. A malformed value in
+ * the request stays `VALIDATION_FAILED`. `value` is the option being written.
+ */
+function optionListRefusal(
+  error: OptionListError,
+  attr: AttributeOptionCommandTarget,
+  value: string,
+): HttpError {
+  switch (error.code) {
+    case 'duplicate_value':
+      return new HttpError(409, ERROR_CODES.ATTRIBUTE_OPTION_VALUE_TAKEN, error.message, {
+        attributeKey: attr.key,
+        value: error.value ?? value,
+      });
+    case 'default_option_ambiguous':
+      return new HttpError(409, ERROR_CODES.ATTRIBUTE_DEFAULT_OPTION_TAKEN, error.message, {
+        attributeKey: attr.key,
+        value,
+      });
+    case 'attribute_type_unsupported':
+      return new HttpError(400, ERROR_CODES.ATTRIBUTE_OPTIONS_NOT_SUPPORTED, error.message, {
+        attributeKey: attr.key,
+        valueType: attr.valueType,
+      });
+    case 'invalid_option_value':
+      return new HttpError(400, ERROR_CODES.VALIDATION_FAILED, error.message);
+  }
+}
+
 export function createAttributeOptionCommand(
   deps: AttributeCommandDeps,
   attr: AttributeOptionCommandTarget,
@@ -551,12 +668,7 @@ export function createAttributeOptionCommand(
         attr.valueType,
       );
       if (!result.ok) {
-        const first = result.errors[0]!;
-        throw new HttpError(
-          first.code === 'attribute_type_unsupported' ? 400 : 409,
-          ERROR_CODES.VALIDATION_FAILED,
-          first.message,
-        );
+        throw optionListRefusal(result.errors[0]!, attr, input.value);
       }
       const sortOrder =
         input.sortOrder ??
@@ -618,7 +730,7 @@ export function updateAttributeOptionCommand(
         }));
         const result = validateOptionList(reslist, attr.valueType);
         if (!result.ok) {
-          throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, result.errors[0]!.message);
+          throw optionListRefusal(result.errors[0]!, attr, existing.value);
         }
       }
       try {
@@ -697,15 +809,16 @@ export function deleteAttributeOptionCommand(
       if (productCount > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
-          `option_in_use: ${productCount} product(s) still carry value '${existing.value}'.`,
+          ERROR_CODES.ATTRIBUTE_OPTION_IN_USE,
+          `${productCount} product(s) still carry the value '${existing.value}'.`,
+          { code: 'products', attributeKey: attr.key, value: existing.value, productCount },
         );
       }
       try {
         await deps.apply.applyDeleteOption(em, attr.definitionId, optionId);
         await em.flush();
       } catch (err) {
-        toCatalogHttpError(err, attr.key);
+        toCatalogHttpError(err, attr.key, { value: existing.value });
       }
       return {
         result: undefined,

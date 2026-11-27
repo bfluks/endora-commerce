@@ -108,6 +108,8 @@ interface Subject {
   readonly section: string;
   /** Every route the module contributes, in declaration order. */
   readonly routes: readonly string[];
+  /** A route gated on another of the module's codes than `permission` — the one its own API call enforces. */
+  readonly routePermissions?: Readonly<Record<string, string>>;
   /** The `_i18n` key the shell must no longer name. */
   readonly retiredSharedKey: string;
 }
@@ -133,8 +135,12 @@ const SUBJECTS: readonly Subject[] = [
     nearMiss: 'custom_fields:write',
     labelKey: 'nav.customFields.label',
     specifier: '@endora-commerce/mod-custom-fields/admin',
-    section: 'system',
-    routes: ['/custom-fields'],
+    section: 'platform',
+    // Issue #1804 — the definition editor's own routes. Creating is a write and
+    // nothing else, so `/new` is gated on the code the create call enforces;
+    // `/:id` opens for a reader, who sees the field without being offered it.
+    routes: ['/custom-fields', '/custom-fields/new', '/custom-fields/:id'],
+    routePermissions: { '/custom-fields/new': 'custom_fields:write' },
     retiredSharedKey: 'appShell.nav.customFields',
   },
 ];
@@ -222,7 +228,8 @@ const bundle = {
   ...passthroughBundle('core', [
     'appShell.brand.text',
     'appShell.section.catalog',
-    'appShell.section.system',
+    'appShell.section.access',
+    'appShell.section.platform',
     'app.moduleScreenLoading',
     'app.notFound',
   ]),
@@ -238,7 +245,7 @@ function renderAt(path: string): RenderResult {
   return renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={[path]}>
-        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} />
+        <App contributions={MODULE_ADMIN_CONTRIBUTIONS} modulePresence={modulePresence({ present: [...presentModules] })} translations={{}} />
       </MemoryRouter>,
       { session: adminSession({ permissions: [...permissions] }) },
     ),
@@ -403,7 +410,7 @@ describe.each(SUBJECTS)('the shell no longer names $module by hand', (subject) =
       /* @vite-ignore */ subject.specifier
     )) as typeof import('@endora-commerce/mod-assets-library/admin');
     for (const route of contributions.routes ?? []) {
-      expect(route.requiredPermission).toBe(subject.permission);
+      expect(route.requiredPermission, route.path).toBe(subject.routePermissions?.[route.path] ?? subject.permission);
     }
     expect(contributions.nav?.[0]?.requiredPermission).toBe(subject.permission);
     expect(contributions.nav?.[0]?.section).toBe(subject.section);
@@ -446,21 +453,34 @@ describe('the surfaces neither module contributes, derived from the contribution
     expect(contributions.zones ?? []).toEqual([]);
   });
 
-  it('assets_library advertises no palette action, and custom_fields advertises one', async () => {
+  it('assets_library advertises one palette action, and custom_fields advertises two', async () => {
     // The other half of Ruling 1, read off the **manifests**. It is asserted
     // here as a fact about the declaration and driven for real in
     // `backend/test/integration/_admin_surfaces/batch-nine-palette-off-state.test.ts`,
     // which is where the server's effective enabled-set can be seen at all.
-    // `assets_library` declaring none is not an omission this batch repairs:
-    // choosing a landing action for a screen is a product decision, not a file
-    // move.
+    // `assets_library`' "Assets library" landing action is the product decision
+    // `specs/156-asset-stable-url/` research R-16 records (round 3 Q2), named
+    // like its sidebar entry by the owner's later ruling.
     const assets = (await import('@endora-commerce/mod-assets-library')).manifest;
     const customFields = (await import('@endora-commerce/mod-custom-fields')).manifest;
-    expect(assets.actions ?? []).toEqual([]);
+    expect((assets.actions ?? []).map((action) => action.id)).toEqual(['open-assets-library']);
+    const [open] = assets.actions ?? [];
+    expect(open?.labelKey).toBe('actions.openLibrary.label');
+    expect(open?.targetRoute).toBe('/assets-library');
+    expect(open?.requiredPermission).toBe('assets.read');
+    const bundle = JSON.parse(
+      readFileSync(resolve(process.cwd(), '../packages/modules/assets_library/i18n/en.json'), 'utf8'),
+    ) as Record<string, string>;
+    expect(bundle['actions.openLibrary.label']).toBe('Assets library');
+    // Issue #1804 adds *New custom field*, aimed at the create page's static route.
     expect((customFields.actions ?? []).map((action) => action.id)).toEqual([
       'open-custom-fields',
+      'new-custom-field',
     ]);
-    expect((customFields.actions ?? [])[0]?.targetRoute).toBe('/custom-fields');
+    expect((customFields.actions ?? []).map((action) => action.targetRoute)).toEqual([
+      '/custom-fields',
+      '/custom-fields/new',
+    ]);
   });
 });
 
@@ -476,6 +496,8 @@ describe('the moved screens take no reach the package cannot resolve', () => {
       'assets_library/src/admin/components/FolderTree.tsx',
       'assets_library/src/admin/api/assets-library-client.ts',
       'custom_fields/src/admin/pages/CustomFieldsPage.tsx',
+      'custom_fields/src/admin/pages/CustomFieldEditorPage.tsx',
+      'custom_fields/src/admin/components/DefinitionEditor.tsx',
       'custom_fields/src/admin/api/custom-fields-client.ts',
     ];
     for (const file of files) {

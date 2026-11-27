@@ -11,12 +11,15 @@ including formatted text written in its rich-text block.
 
 ## For operators
 
-Open **Catalog → Categories** and choose **Content** on the category's row. The
+Open **Catalog → Categories** and choose **Content** in the category row's actions menu. The
 content screen has:
 
 - a **language** switch — content is kept per language, like the category's
   name. Each language has its own document, and a language you leave empty
-  shows the content of another one rather than nothing;
+  shows the content of another one rather than nothing. The switch offers the
+  languages of your active sales channels, then any other language the name or
+  the content is stored in; such a language is listed under the switch as
+  read-only, and its document is kept and saved unchanged but not edited;
 - the **Page Builder** canvas for the selected language;
 - **Save content** — one save stores every language you edited.
 
@@ -29,15 +32,21 @@ The **Content** action appears only while a module that provides a Page Builder
 (the CMS module) is enabled and you have access to it. Content that is already
 stored is kept while that module is off.
 
+Unlike [product content](./product-content.md), which is hidden while the CMS
+module is off, category content keeps rendering on the storefront.
+
 ## On the storefront
 
 The category page renders the content between the category heading and the
 listing toolbar, on the **first page** of the listing only — a visitor paging
 through products is not shown the introduction again above every page.
 
-The document is resolved to one language in this order: the visitor's language,
-the sales channel's default language, English, then any language that has
-content. A language whose document holds no block is skipped.
+The document is resolved to one language in this order: the visitor's language
+as the sales channel offers it, else the channel's default language; then the
+channel's default language, English, and any language that has content. The
+visitor's language is the first `Accept-Language` entry, by weight, that the
+channel offers (`pl` matches the channel's `pl-PL`); a language the channel does
+not offer is never used, even where a document is stored in it. A language whose document holds no block is skipped.
 
 The content follows the category's visibility: an inactive category, or one
 under an inactive parent, has no page and its content is not served.

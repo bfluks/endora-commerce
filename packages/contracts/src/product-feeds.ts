@@ -16,7 +16,8 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 import { collectionEnvelope, dataEnvelope } from './envelopes.js';
-import { listQuerySchema } from './pagination.js';
+import { listQuerySchema, paginationSchema } from './pagination.js';
+import { pinnedPriceBookUnpublishableReasonSchema } from './price-lists.js';
 
 // ---------------------------------------------------------------------------
 // (1) Enumerations
@@ -98,6 +99,16 @@ export const feedFieldSourceKindSchema = z.enum([
   'category_path',
   'provider_category',
   'grouping_id',
+  /**
+   * Issue #430 — a sub-cent unit price is published as the price of a pack of
+   * N units (`feed-pack.ts`). These three say what the pack is: N itself
+   * (Google's `multipack`), and the pack as a count measure and its base
+   * (`unit_pricing_measure` / `unit_pricing_base_measure`, `100ct`). Each is
+   * empty — so the field is omitted — for an item whose price needs no pack.
+   */
+  'pack_quantity',
+  'pack_unit_pricing_measure',
+  'pack_unit_pricing_base_measure',
   'constant',
 ]);
 export type FeedFieldSourceKind = z.infer<typeof feedFieldSourceKindSchema>;
@@ -122,6 +133,15 @@ export const feedRunStatusSchema = z.enum([
   'empty',
   'failed',
   'skipped',
+  /**
+   * Feature 160 (FR-029), owner ruling 2026-10-23 — the feed's pinned price
+   * book did not apply at generation time, so the run withdrew the published
+   * file instead of producing one: the public URL answers as for a feed that
+   * has never been generated until a later run publishes. Not a failure —
+   * FR-035/FR-038's "the previous file keeps serving" does not apply to it.
+   * The run's `withdrawalReason` names why the book does not apply.
+   */
+  'withdrawn',
 ]);
 export type FeedRunStatus = z.infer<typeof feedRunStatusSchema>;
 
@@ -134,12 +154,25 @@ export const feedRunIssueReasonSchema = z.enum([
   'missing_image',
   'private_image_asset',
   'missing_required_field',
+  /**
+   * Feature 174 — no longer emitted: a product's Global text satisfies every (channel, language),
+   * so there is no language fallback to report. Kept because run issues recorded before 174 still
+   * carry it and are read back through this schema (and labelled by the admin's run history).
+   */
   'missing_translation',
   'unresolvable_link',
   'unmapped_provider_category',
   'stale_provider_category_mapping',
   'unsupported_product_type',
   'zero_tax_rate_on_gross_feed',
+  /**
+   * Issue #430 — the unit price has more than two significant places and the
+   * template binds no `pack_quantity` field, so the price could only be
+   * published rounded; the item is skipped instead.
+   */
+  'sub_cent_price_without_pack_field',
+  /** Issue #430 — no pack of at most 10 000 units makes the price exact to the cent. */
+  'sub_cent_price_beyond_pack_limit',
 ]);
 export type FeedRunIssueReason = z.infer<typeof feedRunIssueReasonSchema>;
 
@@ -155,7 +188,6 @@ export const feedRunFailureCodeSchema = z.enum([
    * symptom once per product.
    */
   'storefront_url_unconfigured',
-  'price_list_unavailable',
   'language_unavailable',
   'skip_threshold_exceeded',
   'storage_unavailable',
@@ -633,6 +665,11 @@ export const feedTemplateSchema = z.object({
   fields: z.array(feedTemplateFieldSchema),
   /** Number of feeds referencing this template — drives the delete refusal message (FR-010). */
   usedByFeedCount: z.number().int().nonnegative(),
+  /**
+   * The length of `fields`. Every template reply answers it; the list, which
+   * carries no `fields`, shows it as the field count (issue #599).
+   */
+  fieldCount: z.number().int().nonnegative().optional(),
   version: z.number().int().positive(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -685,9 +722,35 @@ export const duplicateFeedTemplateRequestSchema = z.object({
 export type DuplicateFeedTemplateRequest = z.infer<typeof duplicateFeedTemplateRequestSchema>;
 
 export const feedTemplateResponseSchema = dataEnvelope(feedTemplateSchema);
+export type FeedTemplateResponse = z.infer<typeof feedTemplateResponseSchema>;
+
+/**
+ * `GET /api/v1/admin/feed-templates` — every template, without its field list.
+ *
+ * `pagination` is optional: the route answers the whole list in one page and has
+ * never sent it (issue #599). The rows are `feedTemplateSchema` minus `fields`.
+ */
 export const feedTemplateListResponseSchema = collectionEnvelope(
   feedTemplateSchema.omit({ fields: true }),
-);
+).extend({ pagination: paginationSchema.optional() });
+export type FeedTemplateListResponse = z.infer<typeof feedTemplateListResponseSchema>;
+
+/**
+ * FR-074 — a save that removes a provider-required field. Refused with a `409`
+ * carrying these until the operator acknowledges them, then answered beside the
+ * saved template.
+ */
+export const feedTemplateSaveWarningSchema = z.object({
+  code: z.literal('provider_required_field_removed'),
+  outputName: z.string(),
+});
+export type FeedTemplateSaveWarning = z.infer<typeof feedTemplateSaveWarningSchema>;
+
+/** `PUT /api/v1/admin/feed-templates/:id` — the saved template and the warnings the save acknowledged (issue #599). */
+export const feedTemplateUpdateResponseSchema = feedTemplateResponseSchema.extend({
+  warnings: z.array(feedTemplateSaveWarningSchema),
+});
+export type FeedTemplateUpdateResponse = z.infer<typeof feedTemplateUpdateResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // (4b) Guided binding catalogue (FR-070)
@@ -865,6 +928,8 @@ export const productFeedRunSummarySchema = z.object({
   skippedCount: z.number().int().nonnegative(),
   warningCount: z.number().int().nonnegative(),
   failureCode: feedRunFailureCodeSchema.nullable(),
+  /** Set on a `withdrawn` run only: why the pinned price book did not apply. */
+  withdrawalReason: pinnedPriceBookUnpublishableReasonSchema.nullable(),
 });
 export type ProductFeedRunSummary = z.infer<typeof productFeedRunSummarySchema>;
 
@@ -894,6 +959,12 @@ export const productFeedSchema = z.object({
   isRunning: z.boolean(),
   /** Set when the rolling average run duration exceeds half the schedule interval. */
   scheduleTooTightWarning: z.boolean(),
+  /**
+   * Feature 160 (FR-029, owner ruling 2026-10-23) — why the pinned price book
+   * publishes no prices now; `null` for an unpinned feed and for a pinned book
+   * that publishes. A run of such a feed gets no prices from the book.
+   */
+  pinnedPriceBookWarning: pinnedPriceBookUnpublishableReasonSchema.nullable(),
   version: z.number().int().positive(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -962,6 +1033,23 @@ export type DuplicateProductFeedRequest = z.infer<typeof duplicateProductFeedReq
 
 export const productFeedResponseSchema = dataEnvelope(productFeedSchema);
 export const productFeedListResponseSchema = collectionEnvelope(productFeedSchema);
+
+/**
+ * Issue #414 — one price book a feed's settings offer to pin the feed to
+ * (`GET /api/v1/admin/product-feeds/:id/price-book-options`): every book in the
+ * feed's currency, plus the book the feed is pinned to whatever its currency.
+ * `unpublishableReason` is why the book would publish no prices for this feed
+ * now (feature 160 FR-029, owner ruling 2026-10-23), `null` when it would.
+ */
+export const productFeedPriceBookOptionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  /** The currency's base book. */
+  isBase: z.boolean(),
+  unpublishableReason: pinnedPriceBookUnpublishableReasonSchema.nullable(),
+});
+export type ProductFeedPriceBookOption = z.infer<typeof productFeedPriceBookOptionSchema>;
+export const productFeedPriceBookOptionsResponseSchema = dataEnvelope(z.array(productFeedPriceBookOptionSchema));
 
 /** Returned exactly once, on create and on rotate. Never re-readable (FR-047). */
 export const productFeedTokenIssuedResponseSchema = dataEnvelope(
@@ -1033,6 +1121,7 @@ export type FeedRun = z.infer<typeof feedRunSchema>;
 export const feedRunResponseSchema = dataEnvelope(feedRunSchema);
 export const feedRunListResponseSchema = collectionEnvelope(feedRunSchema);
 export const feedRunIssueListResponseSchema = collectionEnvelope(feedRunIssueSchema);
+export type FeedRunIssueListResponse = z.infer<typeof feedRunIssueListResponseSchema>;
 
 export const feedRunListQuerySchema = listQuerySchema.extend({
   status: feedRunStatusSchema.optional(),
@@ -1375,6 +1464,7 @@ export const importFeedTemplateResponseSchema = dataEnvelope(
     ),
   }),
 );
+export type ImportFeedTemplateResponse = z.infer<typeof importFeedTemplateResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // (10) Module error codes

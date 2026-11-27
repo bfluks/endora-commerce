@@ -19,6 +19,7 @@ import type {
 import { Order } from '../../helpers/package-entities.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { SEED_DELIVERY_METHOD_ID, SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
+import { connectionPool } from '../../helpers/connection-pool.js';
 
 /**
  * `OrderTransitionEffectService` (`specs/142-order-transition-atomicity/`, D6)
@@ -118,7 +119,7 @@ describe('OrderTransitionEffectService (spec 142, T08)', () => {
       currency: 'PLN',
       placedAt: new Date(),
     });
-    await em.persistAndFlush(order);
+    await em.persist(order).flush();
     seededOrderIds.push(order.id);
     return order.id;
   }
@@ -150,7 +151,13 @@ describe('OrderTransitionEffectService (spec 142, T08)', () => {
     return Object.fromEntries(rows.map((row) => [row.effect, row]));
   }
 
-  const sweep = (now: Date = new Date()) =>
+  // A default pass runs one second after "now", which is still far inside the
+  // one-minute back-off. `record` stamps `next_attempt_at` with the
+  // database's `now()`, the start of its transaction in microseconds. A
+  // JavaScript `Date` taken in the same millisecond truncates below it, so the
+  // row just written was not yet due, and the sweep found nothing (backend-suite
+  // run 45136913927). Production loses nothing: the row waits one tick.
+  const sweep = (now: Date = new Date(Date.now() + 1_000)) =>
     withSystemScope('spec 142 test — sweep', () => service().sweep(now));
 
   // --- record -----------------------------------------------------------------
@@ -295,12 +302,10 @@ describe('OrderTransitionEffectService (spec 142, T08)', () => {
 
   it('holds no database connection while a handler runs', async () => {
     const orderId = await owingBoth();
-    const pool = (
-      h.em().getConnection().getKnex() as unknown as { client: { pool: { numUsed(): number } } }
-    ).client.pool;
+    const pool = await connectionPool(h.em());
     const usedDuringHandler: number[] = [];
     stock.mockImplementation(async () => {
-      usedDuringHandler.push(pool.numUsed());
+      usedDuringHandler.push(pool.used());
       return done();
     });
 

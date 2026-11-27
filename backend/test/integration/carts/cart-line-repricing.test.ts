@@ -10,12 +10,14 @@ import {
 } from '../../helpers/test-server.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
 import { TEST_CUSTOMER_EMPTY_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import {
   createTieredProduct,
   createUnpricedProduct,
   TIER_UNIT_PRICE,
   TIER_VOLUME_PRICE,
 } from '../../helpers/tiered-product-fixture.js';
+import { emptyCustomerBasket } from '../../helpers/customer-basket.js';
 
 /**
  * A cart line is ordered at its stored unit price, so that price is the price
@@ -27,10 +29,17 @@ import {
 describe('cart line repricing', () => {
   let h: BackendServerHandle;
   let productId: string;
+  /** The basket a request naming no channel uses — the system default's. */
+  let customer: { customerAccountId: string; organizationId: string; salesChannelId: string };
 
   beforeAll(async () => {
     h = await setupBackendServer();
     productId = await createTieredProduct(h, `cart-${Date.now()}`);
+    customer = {
+      customerAccountId: TEST_CUSTOMER_EMPTY_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
   });
 
   afterAll(async () => {
@@ -82,7 +91,6 @@ describe('cart line repricing', () => {
   });
 
   it('an agreed price holds at the agreed quantity only, and returns with it', async () => {
-    const customer = { customerAccountId: TEST_CUSTOMER_EMPTY_ID, organizationId: TEST_ORGANIZATION_ID };
     const seeded = await cartWritePortOf(h).replaceItemsForCustomer(
       customer,
       [{ productId, quantity: 10, unitPrice: '5.00', currency: 'PLN' }],
@@ -97,17 +105,16 @@ describe('cart line repricing', () => {
     await cartService.updateItem({ customer }, itemId, 10);
     expect(await storedLine(itemId)).toEqual({ quantity: 10, unitPrice: '5.00' });
 
-    await cartService.clearForCustomer(customer);
+    await emptyCustomerBasket(h, customer);
   });
 
   it('a seed without an agreement — a reorder — stores the current price, not the copied one', async () => {
-    const customer = { customerAccountId: TEST_CUSTOMER_EMPTY_ID, organizationId: TEST_ORGANIZATION_ID };
     const seeded = await cartWritePortOf(h).replaceItemsForCustomer(customer, [
       { productId, quantity: 10, unitPrice: '5.00', currency: 'PLN' },
     ]);
     expect(await storedLine(seeded.items[0]!.id)).toEqual({ quantity: 10, unitPrice: TIER_UNIT_PRICE });
 
-    await h.cartService()!.clearForCustomer(customer);
+    await emptyCustomerBasket(h, customer);
   });
 
   it('refuses a product no price list and no price of its own applies to', async () => {

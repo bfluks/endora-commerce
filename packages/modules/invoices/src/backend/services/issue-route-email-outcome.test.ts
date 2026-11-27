@@ -47,6 +47,7 @@ const DETAIL = {
   grossTotal: 123,
   paidTotal: 0,
   amountDue: 123,
+  overpayment: 0,
   total: 123,
   originalInvoiceId: null,
   templateId: null,

@@ -52,6 +52,10 @@ describe('PWA module — admin + storefront', () => {
     process.env['SETTINGS_SECRET_ENCRYPTION_KEY'] =
       originalSecretKey ?? randomBytes(32).toString('base64');
     h = await setupBackendServer();
+    // Feature 154 — the other-organisation buyer shops only if its Organization
+    // exists and is assigned the store; seeded before any request so no empty
+    // permitted-channel set is cached for it.
+    await seedOtherTestOrganization(h.em());
   });
   afterAll(async () => {
     await teardownBackendServer(h);
@@ -789,7 +793,7 @@ describe('PWA module — admin + storefront', () => {
     await enablePush();
     // The other-organisation stub session has no account row of its own.
     const OTHER_CUSTOMER_ID = '00000000-0000-4000-8000-0000000000a7';
-    const patch = (fields: Record<string, string>): string => JSON.stringify(fields);
+    const patch = (fields: Record<string, string | null>): string => JSON.stringify(fields);
     await seedOtherTestOrganization(h.em());
     await h.em().getConnection().execute(
       `insert into customer_accounts
@@ -801,6 +805,11 @@ describe('PWA module — admin + storefront', () => {
           id: OTHER_CUSTOMER_ID,
           organization_id: OTHER_TEST_ORGANIZATION_ID,
           email: `other-${randomUUID()}@example.com`,
+          // The copied role belongs to the first Organization, and an account
+          // holds a role of its own (`specs/170-organization-roles/`, a composite
+          // foreign key). Left null, the insert trigger assigns the other
+          // Organization's Member role.
+          organization_role_id: null,
         }),
         TEST_CUSTOMER_ID,
       ],

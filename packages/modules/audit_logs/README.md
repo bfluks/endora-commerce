@@ -2,7 +2,7 @@
 
 # @endora-commerce/mod-audit-logs
 
-Append-only audit log for sensitive admin and customer actions.
+Append-only audit log for sensitive admin and customer actions (values of anonymised subjects are erased in place).
 
 ## What this is
 
@@ -31,8 +31,9 @@ Everything below is a **peer** dependency, so the application resolves exactly o
 
 **Third-party**
 
-- `@mikro-orm/postgresql` ^6
+- `@mikro-orm/postgresql` ^7.2.11
 - `fastify` ^5.11.0
+- `lucide-react` ^1 — *optional*
 - `react` ^19 — *optional*
 - `react-router-dom` ^7 — *optional*
 - `zod` ^4

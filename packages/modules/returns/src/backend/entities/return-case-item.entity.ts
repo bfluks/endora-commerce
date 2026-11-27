@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -18,7 +19,9 @@ export class ReturnCaseItem {
     | 'reasonId'
     | 'description'
     | 'inspectionOutcome'
-    | 'approvedRefundAmount';
+    | 'approvedRefundAmount'
+    | 'defaultDiscountAmount'
+    | 'serialNumber';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -27,12 +30,14 @@ export class ReturnCaseItem {
   @Index()
   returnCaseId!: string;
 
-  @Property({ type: 'uuid' })
+  /** `null` on a line of a case without a platform order (180 FR-B12). */
+  @Property({ type: 'uuid', nullable: true })
   @Index()
-  orderItemId!: string;
+  orderItemId!: string | null;
 
-  @Property({ type: 'uuid' })
-  productId!: string;
+  /** `null` for a free-text model (180 FR-B12). */
+  @Property({ type: 'uuid', nullable: true })
+  productId!: string | null;
 
   @Property({ type: 'string', length: 512 })
   productName!: string;
@@ -53,6 +58,18 @@ export class ReturnCaseItem {
   @Property({ type: 'decimal', precision: 14, scale: 2 })
   defaultRefundAmount!: string;
 
+  /**
+   * Issue #417 — the part of the order-level discount the default refund
+   * carries; a correction credits the goods at `refund + discount` and the
+   * discount back on the invoice's discount line. `0` for a line recorded before.
+   */
+  @Property({ type: 'decimal', precision: 14, scale: 2, default: '0' })
+  defaultDiscountAmount: string = '0';
+
   @Property({ type: 'decimal', precision: 14, scale: 2 })
   approvedRefundAmount: string = '0.00';
+
+  /** 180 FR-B12 — the serial number the customer gave, on a complaint line. */
+  @Property({ type: 'string', length: 100, nullable: true })
+  serialNumber?: string | null;
 }

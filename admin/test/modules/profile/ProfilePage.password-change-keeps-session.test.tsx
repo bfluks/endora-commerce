@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
-import { AppLanguageContext } from '../../../../packages/admin-shell/src/i18n/app-language-context';
+// Issue #1519 — the screen mounts the `profile.security` zone, which reads the
+// real session and presence providers; no contributor here.
+import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
 import enBundle from '../../../../packages/modules/_i18n/i18n/en.json';
 
 /**
@@ -18,12 +21,15 @@ const patchSpy = vi.fn();
 const refreshSpy = vi.fn(async () => {});
 const logoutSpy = vi.fn(async () => {});
 
-vi.mock('../../../../packages/admin-shell/src/lib/api-client', async () => {
-  const actual = await vi.importActual('../../../../packages/admin-shell/src/lib/api-client');
+vi.mock('@endora-commerce/admin-kit/lib', async () => {
+  const actual = await vi.importActual('@endora-commerce/admin-kit/lib');
   return {
     ...(actual as Record<string, unknown>),
+    // The session is read through the same barrel as the transport.
+    useAuth: () => ({ me: ME, refresh: refreshSpy, logout: logoutSpy }),
     apiClient: {
-      get: vi.fn(),
+      // Feature 171 — the profile reads the content languages for the author profile.
+      get: vi.fn(async () => ({ data: { languages: [] } })),
       post: vi.fn(),
       put: vi.fn(),
       patch: (path: string, body: unknown) => patchSpy(path, body),
@@ -37,10 +43,6 @@ const ME = {
   role: { name: 'Operator' },
 };
 
-vi.mock('../../../../packages/admin-shell/src/lib/auth', () => ({
-  useAuth: () => ({ me: ME, refresh: refreshSpy, logout: logoutSpy }),
-}));
-
 const { ProfilePage } = await import(
   '../../../../packages/admin-shell/src/modules/profile/ProfilePage'
 );
@@ -51,7 +53,7 @@ const PROFILE_UPDATED = (enBundle as Record<string, string>)['profile.info.updat
 function renderProfile(): void {
   renderWithI18n(
     <AppLanguageContext.Provider value={{ language: 'en', setLanguage: () => {} }}>
-      <ProfilePage />
+      {withSession(<ProfilePage />, { session: adminSession({ permissions: ['*'] }), presence: modulePresence({}) })}
     </AppLanguageContext.Provider>,
     { core: enBundle as Record<string, string> },
   );

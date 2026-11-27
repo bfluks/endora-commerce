@@ -14,7 +14,8 @@
  *
  *   - {@link sqlTableAccesses} — the table identifiers a source *uses*, through
  *     two recognition paths: a **statement** literal, and a knex query
- *     **builder** (issue #187).
+ *     **builder** (issue #187) — plus a third, **DDL** against an existing
+ *     table, that a caller opts into for migration files (issue #108).
  *   - {@link declaredTableNames} — the table names a source *declares*, from an
  *     `@Entity()` class or from `create table` DDL. Both sources are needed: an
  *     owner map built from entity classes alone maps 220 tables and misses every
@@ -88,8 +89,36 @@
  * both do. A spelling collision is a visible finding a reader resolves; a
  * receiver rule is a miss nobody sees, and this file's whole reason for existing
  * is that the second kind of failure is the expensive one.
+ *
+ * ## What DDL has to look like (issue #108)
+ *
+ * `STATEMENT_HEAD` admits no `create` and no `alter`, so a migration could index,
+ * alter, comment on or drop another module's table and name nothing this reader
+ * saw — one real instance, an index on `cms_pages` created by another module's
+ * migration, was repaired by hand while the rule stayed blind. The DDL path
+ * reads `create [unique] index … on`, `alter table`, `drop table`, `drop index`,
+ * `comment on table|column` and `create|drop trigger … on`, quoted or bare,
+ * schema-qualified or not, through `if [not] exists`, `only` and `concurrently`.
+ * Three choices shape it:
+ *
+ *   - **Opt-in** ({@link SqlTableAccessOptions.ddl}). The rule it serves is about
+ *     migration files; elsewhere `alter table` in a literal changes no schema
+ *     this repository judges.
+ *   - **Anywhere in the literal**, not at its head. A migration's `addSql`
+ *     carries a `create table` and its indexes in one literal as a matter of
+ *     course, and wraps conditional DDL in `do $$ … $$`; the full head skeleton
+ *     (`create index <name> on <table>`) is what keeps prose out, and the owner
+ *     map bounds what is left.
+ *   - **A table the same source creates is not an existing table.** Indexing it
+ *     beside its `create table`, or dropping it in `down()`, is part of the
+ *     declaration, and who may declare a table is the owner map's question.
+ *
+ * `drop index` names an index, so it reaches a table only through the
+ * `create index` that named it — {@link declaredIndexes}, collected by the
+ * caller over every migration, since the two are usually in different files.
  */
 import ts from 'typescript';
+import { parseSource, rememberRead } from './parsed-source.js';
 
 /** Which way the statement moves rows through the table it names. */
 export type SqlAccessDirection = 'read' | 'write';
@@ -103,7 +132,29 @@ export type SqlAccessDirection = 'read' | 'write';
  * path, which is how a new signal goes blind behind an existing one's red
  * (issue #130).
  */
-export type SqlAccessSyntax = 'statement' | 'builder';
+export type SqlAccessSyntax = 'statement' | 'builder' | 'ddl';
+
+/**
+ * What a caller asks the reader to recognise beyond DML and builders.
+ *
+ * DDL is **opt-in** (issue #108). The rule it serves — a migration may not
+ * write a table another module owns — is a rule about migration files, and a
+ * service or a test that mentions `alter table` in a literal is not touching a
+ * schema; reading DDL everywhere would widen `check:transaction-context` and the
+ * host predicate for no rule either of them states.
+ */
+export interface SqlTableAccessOptions {
+  /** Read DDL heads as well — set for migration files only. */
+  readonly ddl?: boolean;
+  /**
+   * Index name → table, for `drop index`, which names an index and not a table.
+   *
+   * The caller builds it from every migration it reads ({@link declaredIndexes}),
+   * because the `drop` and the `create` it undoes are usually in two files. An
+   * index created in the same source resolves without it.
+   */
+  readonly indexTables?: ReadonlyMap<string, string> | undefined;
+}
 
 /** One table identifier a SQL literal or a query builder names. */
 export interface SqlTableAccess {
@@ -115,6 +166,13 @@ export interface SqlTableAccess {
   readonly line: number;
   /** The head of the statement, or of the builder chain, for the message. */
   readonly statement: string;
+  /**
+   * `true` for an access inside a PL/pgSQL block — a `do $$ … $$` body or a
+   * `create function|procedure` body. PL/pgSQL plans a statement when its code
+   * path runs, so such an access is a write for R2 but not a reference a fresh
+   * database fails on (`instance-migration-order`'s G3 leaves it out).
+   */
+  readonly block?: true;
 }
 
 /** Where a table name was declared — the two owner-map sources. */
@@ -148,10 +206,23 @@ function literalText(node: ts.Node): string | null {
  * The source, parsed with parent pointers.
  *
  * The parents are what let the builder path walk a call chain outwards to decide
- * whether it writes; the statement path needs only the positions.
+ * whether it writes; the statement path needs only the positions. Shared with
+ * the other recognisers inside a `withSharedParses` scope (issue #910).
  */
 function parse(source: string, file: string): ts.SourceFile {
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  return parseSource(file, source);
+}
+
+/**
+ * Every string / template literal in `source`, with its line.
+ *
+ * Remembered inside a `withSharedParses` scope (issue #910): the statement
+ * path, the DDL path, the index path and the `create table` half of the owner
+ * map all read this one list, so a check that asks all four of one file parses
+ * it once and walks it once.
+ */
+function literalsOf(source: string, file: string): ReadonlyArray<{ text: string; line: number }> {
+  return rememberRead('sql-tables:literals', file, source, () => literals(parse(source, file)));
 }
 
 /** Every string / template literal in `sf`, with its line. */
@@ -208,17 +279,27 @@ const NOT_A_TABLE = new Set(['set', 'select', 'values', 'only', 'lateral', 'tabl
  * not exist. That is what lets the check's red proofs enter here, with source
  * text, rather than below with a resolved table list.
  */
-export function sqlTableAccesses(source: string, file: string): SqlTableAccess[] {
-  const sf = parse(source, file);
-  const found = [...statementAccesses(sf), ...builderAccesses(sf)];
+export function sqlTableAccesses(
+  source: string,
+  file: string,
+  options: SqlTableAccessOptions = {},
+): SqlTableAccess[] {
+  const all = literalsOf(source, file);
+  const builders = rememberRead('sql-tables:builders', file, source, () =>
+    builderAccesses(parse(source, file)),
+  );
+  const found = [...statementAccesses(all), ...builders];
+  if (options.ddl === true) found.push(...ddlAccesses(all, options.indexTables ?? new Map()));
   found.sort((a, b) => a.line - b.line);
   return found;
 }
 
 /** The tables named inside a SQL statement literal — D-87's original path. */
-function statementAccesses(sf: ts.SourceFile): SqlTableAccess[] {
+function statementAccesses(
+  all: ReadonlyArray<{ text: string; line: number }>,
+): SqlTableAccess[] {
   const found: SqlTableAccess[] = [];
-  for (const literal of literals(sf)) {
+  for (const literal of all) {
     const head = STATEMENT_HEAD.exec(literal.text);
     if (head === null) continue;
     const verb = (head[1] ?? '').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
@@ -232,15 +313,24 @@ function statementAccesses(sf: ts.SourceFile): SqlTableAccess[] {
     }
 
     const statement = literal.text.replace(/\s+/g, ' ').trim().slice(0, 80);
-    const seen = new Set<string>();
+    // table → its index in `found`. A table the statement names twice is one
+    // access, and it is a **write** if either naming writes: `with r as (select
+    // … from "t") update "t" …` read `t` first and was recorded as a read only,
+    // which is what `test/unit/db/sql-write-targets-parity.test.ts` measured
+    // (`specs/178-extensible-columns/` T062).
+    const seen = new Map<string, number>();
     for (const match of literal.text.matchAll(TABLE_REFERENCE)) {
       const keyword = (match[1] ?? '').toLowerCase();
       const table = (match[2] ?? '').toLowerCase();
       if (table === '' || NOT_A_TABLE.has(table) || bound.has(table)) continue;
-      if (seen.has(table)) continue;
-      seen.add(table);
       const write =
         keyword === 'into' || keyword === 'update' || (verb === 'delete' && keyword === 'from');
+      const at = seen.get(table);
+      if (at !== undefined) {
+        if (write && found[at]!.direction === 'read') found[at] = { ...found[at]!, direction: 'write' };
+        continue;
+      }
+      seen.set(table, found.length);
       found.push({
         table,
         direction: write ? 'write' : 'read',
@@ -248,6 +338,39 @@ function statementAccesses(sf: ts.SourceFile): SqlTableAccess[] {
         line: literal.line,
         statement,
       });
+    }
+  }
+  found.push(...anonymousBlockWrites(all));
+  return found;
+}
+
+/**
+ * `do $$ … $$` — a PL/pgSQL block, whose head is `do` and which the statement
+ * path therefore never read — and `create [or replace] function|procedure`, whose
+ * body is the same language and writes when a trigger or a later statement calls
+ * it. A migration wraps conditional DML in one as a
+ * matter of course, so the rows it writes were invisible to R2 while the
+ * runtime guard, which reads the same text, saw them
+ * (`specs/178-extensible-columns/` T062). Only the **writes** are read here —
+ * `insert into`, `update … set`, `delete from` — because PL/pgSQL's
+ * `select … into <variable>` is an assignment, not an insert.
+ */
+const DO_BLOCK_HEAD =
+  /^\s*(?:--[^\n]*\n|\s)*(?:do\b|create\s+(?:or\s+replace\s+)?(?:function|procedure)\b)/i;
+const DO_BLOCK_WRITE =
+  /\b(?:insert\s+into|delete\s+from)\s+(?:only\s+)?(?:"?[a-z_][a-z0-9_]*"?\.)?"?([a-z_][a-z0-9_]*)"?|\bupdate\s+(?:only\s+)?(?:"?[a-z_][a-z0-9_]*"?\.)?"?([a-z_][a-z0-9_]*)"?(?:\s+(?:as\s+)?"?[a-z_][a-z0-9_]*"?)?\s+set\b/gi;
+
+function anonymousBlockWrites(all: ReadonlyArray<{ text: string; line: number }>): SqlTableAccess[] {
+  const found: SqlTableAccess[] = [];
+  for (const literal of all) {
+    if (!DO_BLOCK_HEAD.test(literal.text)) continue;
+    const statement = literal.text.replace(/\s+/g, ' ').trim().slice(0, 80);
+    const seen = new Set<string>();
+    for (const match of literal.text.matchAll(DO_BLOCK_WRITE)) {
+      const table = (match[1] ?? match[2] ?? '').toLowerCase();
+      if (table === '' || NOT_A_TABLE.has(table) || seen.has(table)) continue;
+      seen.add(table);
+      found.push({ table, direction: 'write', syntax: 'statement', line: literal.line, statement, block: true });
     }
   }
   return found;
@@ -443,6 +566,201 @@ function builderAccesses(sf: ts.SourceFile): SqlTableAccess[] {
   return found;
 }
 
+// ---------------------------------------------------------------------------
+// Data definition against an existing table (issue #108)
+// ---------------------------------------------------------------------------
+
+/** One SQL identifier, quoted or bare. A quoted one may hold anything but `"`. */
+const IDENT = String.raw`(?:"[^"]+"|[a-z_][a-z0-9_$]*)`;
+
+/** `ident`, `schema.ident`, `"schema"."ident"`, `schema.table.column`. */
+const QUALIFIED = String.raw`${IDENT}(?:\s*\.\s*${IDENT})*`;
+
+/** A comma-separated list of {@link QUALIFIED} names — `drop table a, b`. */
+const QUALIFIED_LIST = String.raw`${QUALIFIED}(?:\s*,\s*${QUALIFIED})*`;
+
+/**
+ * `create [unique] index [concurrently] [[if not exists] name] on [only] table`.
+ *
+ * Group 1 is the index name (absent for Postgres' unnamed form), group 2 the
+ * table.
+ */
+const CREATE_INDEX = new RegExp(
+  String.raw`\bcreate\s+(?:unique\s+)?index\s+(?:concurrently\s+)?` +
+    String.raw`(?:(?:if\s+not\s+exists\s+)?(${IDENT})\s+)?on\s+(?:only\s+)?(${QUALIFIED})`,
+  'gi',
+);
+
+/**
+ * The DDL heads whose target is a table that already exists, and so may be
+ * another module's. `create table` is deliberately absent: it is the
+ * **declaration** the owner map is built from ({@link declaredTableNames}).
+ *
+ * `column` says which identifier of the qualified name is the table: the last
+ * one, or — for `comment on column t.c` — the one before it. Every head is
+ * matched anywhere in a literal rather than at its start, because a
+ * migration's `addSql` carries several statements in one literal as a matter of
+ * course and wraps conditional DDL in `do $$ … $$` blocks.
+ */
+const DDL_HEADS: ReadonlyArray<{ readonly pattern: RegExp; readonly column?: boolean }> = [
+  { pattern: CREATE_INDEX },
+  {
+    pattern: new RegExp(
+      String.raw`\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(${QUALIFIED})`,
+      'gi',
+    ),
+  },
+  {
+    pattern: new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?(${QUALIFIED_LIST})`, 'gi'),
+  },
+  { pattern: new RegExp(String.raw`\bcomment\s+on\s+table\s+(${QUALIFIED})`, 'gi') },
+  { pattern: new RegExp(String.raw`\bcomment\s+on\s+column\s+(${QUALIFIED})`, 'gi'), column: true },
+  {
+    // The event list (`insert or update of "status"`) sits between the trigger
+    // name and `on`, so it is skipped lazily up to the first whole-word `on`.
+    pattern: new RegExp(
+      String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+${IDENT}\s+` +
+        String.raw`(?:before|after|instead\s+of)\b[\s\S]*?\bon\s+(?:only\s+)?(${QUALIFIED})`,
+      'gi',
+    ),
+  },
+  {
+    pattern: new RegExp(
+      String.raw`\bdrop\s+trigger\s+(?:if\s+exists\s+)?${IDENT}\s+on\s+(${QUALIFIED})`,
+      'gi',
+    ),
+  },
+];
+
+/** `drop index [concurrently] [if exists] a, b` — names indexes, not tables. */
+const DROP_INDEX = new RegExp(
+  String.raw`\bdrop\s+index\s+(?:concurrently\s+)?(?:if\s+exists\s+)?(${QUALIFIED_LIST})`,
+  'gi',
+);
+
+/** The identifiers of a qualified name, unquoted and lower-cased. */
+function identifiersOf(qualified: string): string[] {
+  const parts: string[] = [];
+  for (const match of qualified.matchAll(new RegExp(IDENT, 'gi'))) {
+    parts.push(match[0].replace(/^"(.*)"$/, '$1').toLowerCase());
+  }
+  return parts;
+}
+
+/** The qualified names a comma-separated list holds. */
+function namesOf(list: string): string[] {
+  return [...list.matchAll(new RegExp(QUALIFIED, 'gi'))].map((match) => match[0]);
+}
+
+/**
+ * The table a qualified name denotes: its last identifier — the schema is
+ * dropped for the reason the statement path drops it — or, for a column, the
+ * one before that.
+ */
+function tableOfName(qualified: string, column: boolean): string | null {
+  const parts = identifiersOf(qualified);
+  const table = column ? parts[parts.length - 2] : parts[parts.length - 1];
+  return table !== undefined && /^[a-z_][a-z0-9_]*$/.test(table) ? table : null;
+}
+
+/** The text a DDL match starts, for the message. */
+function ddlStatement(text: string, at: number): string {
+  const end = text.indexOf(';', at);
+  const statement = text.slice(at, end === -1 ? undefined : end + 1);
+  return statement.replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
+/** Every `create index … on <table>` in one literal, as index → table. */
+function indexesIn(text: string): Array<{ index: string; table: string }> {
+  const found: Array<{ index: string; table: string }> = [];
+  for (const match of text.matchAll(CREATE_INDEX)) {
+    if (match[1] === undefined || match[2] === undefined) continue;
+    const index = identifiersOf(match[1])[0];
+    const table = tableOfName(match[2], false);
+    if (index !== undefined && table !== null) found.push({ index, table });
+  }
+  return found;
+}
+
+/**
+ * The indexes `source` creates, with the table each one is on.
+ *
+ * `drop index` names an index, so the reader can attribute it to a table only
+ * through what created it — which is usually an earlier migration, often in
+ * another module. A caller reading many sources collects these into the map
+ * {@link SqlTableAccessOptions.indexTables} takes. Read from literal nodes, like
+ * everything else here, so a comment declares nothing.
+ */
+export function declaredIndexes(
+  source: string,
+  file: string,
+): Array<{ index: string; table: string }> {
+  const found: Array<{ index: string; table: string }> = [];
+  for (const literal of literalsOf(source, file)) found.push(...indexesIn(literal.text));
+  return found;
+}
+
+/**
+ * The existing tables named by DDL in a source's literals — each a **write**: a
+ * module that indexes, alters, comments on or drops a table changes that
+ * table's schema, which is exactly what the owner decides.
+ */
+function ddlAccesses(
+  all: ReadonlyArray<{ text: string; line: number }>,
+  indexTables: ReadonlyMap<string, string>,
+): SqlTableAccess[] {
+  const found: SqlTableAccess[] = [];
+  // A table this source itself creates is not an *existing* table: indexing it
+  // beside its `create table`, or dropping it in the same migration's `down()`,
+  // is part of that declaration. Who may declare a table is the owner map's
+  // question (entity over migration), not this path's — reporting the index and
+  // not the `create` would attribute the finding to the wrong statement.
+  const created = new Set<string>();
+  for (const literal of all) {
+    for (const match of literal.text.matchAll(CREATE_TABLE)) {
+      if (match[1] !== undefined) created.add(match[1].toLowerCase());
+    }
+  }
+  for (const literal of all) {
+    const local = new Map(indexTables);
+    for (const { index, table } of indexesIn(literal.text)) local.set(index, table);
+
+    const named: Array<{ table: string; at: number }> = [];
+    for (const head of DDL_HEADS) {
+      for (const match of literal.text.matchAll(head.pattern)) {
+        const target = match[match.length - 1];
+        if (target === undefined) continue;
+        for (const name of namesOf(target)) {
+          const table = tableOfName(name, head.column === true);
+          if (table !== null) named.push({ table, at: match.index });
+        }
+      }
+    }
+    for (const match of literal.text.matchAll(DROP_INDEX)) {
+      for (const name of namesOf(match[1] ?? '')) {
+        const index = identifiersOf(name).pop();
+        const table = index === undefined ? undefined : local.get(index);
+        if (table !== undefined) named.push({ table, at: match.index });
+      }
+    }
+
+    named.sort((a, b) => a.at - b.at);
+    const seen = new Set<string>();
+    for (const { table, at } of named) {
+      if (seen.has(table) || created.has(table)) continue;
+      seen.add(table);
+      found.push({
+        table,
+        direction: 'write',
+        syntax: 'ddl',
+        line: literal.line,
+        statement: ddlStatement(literal.text, at),
+      });
+    }
+  }
+  return found;
+}
+
 /** `create table "x"` / `create table if not exists x`, inside a SQL literal. */
 const CREATE_TABLE = /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?"?([a-z_][a-z0-9_]*)"?/gi;
 
@@ -484,31 +802,50 @@ export function declaredTableNames(
     found.push({ table, source: from });
   };
 
-  const sf = parse(source, file);
   if (source.includes('@Entity')) {
-    const visit = (node: ts.Node): void => {
-      if (ts.isClassDeclaration(node) && ts.canHaveDecorators(node)) {
-        for (const decorator of ts.getDecorators(node) ?? []) {
-          const call = decorator.expression;
-          if (!ts.isCallExpression(call)) continue;
-          if (!ts.isIdentifier(call.expression) || call.expression.text !== 'Entity') continue;
-          const declared = entityTableName(call);
-          if (declared !== null) add(declared, 'entity');
-          else if (node.name) add(tableNameOf(node.name.text), 'entity');
-        }
-      }
-      node.forEachChild(visit);
-    };
-    sf.forEachChild(visit);
+    for (const entity of entityDeclarationsOf(source, file)) {
+      if (entity.tableName !== null) add(entity.tableName, 'entity');
+      else if (entity.className !== null) add(tableNameOf(entity.className), 'entity');
+    }
   }
 
-  for (const literal of literals(sf)) {
+  for (const literal of literalsOf(source, file)) {
     for (const match of literal.text.matchAll(CREATE_TABLE)) {
       const table = match[1];
       if (table !== undefined) add(table.toLowerCase(), 'migration');
     }
   }
   return found;
+}
+
+/**
+ * Every `@Entity(…)` decorator in `source`, in source order: the `tableName` it
+ * sets, or else the name of the class it decorates.
+ *
+ * The class name is kept rather than turned into a table here, because the
+ * naming strategy is the caller's parameter and a remembered answer must not
+ * depend on which strategy asked first (issue #910).
+ */
+function entityDeclarationsOf(
+  source: string,
+  file: string,
+): ReadonlyArray<{ readonly tableName: string | null; readonly className: string | null }> {
+  return rememberRead('sql-tables:entities', file, source, () => {
+    const found: Array<{ tableName: string | null; className: string | null }> = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isClassDeclaration(node) && ts.canHaveDecorators(node)) {
+        for (const decorator of ts.getDecorators(node) ?? []) {
+          const call = decorator.expression;
+          if (!ts.isCallExpression(call)) continue;
+          if (!ts.isIdentifier(call.expression) || call.expression.text !== 'Entity') continue;
+          found.push({ tableName: entityTableName(call), className: node.name?.text ?? null });
+        }
+      }
+      node.forEachChild(visit);
+    };
+    parse(source, file).forEachChild(visit);
+    return found;
+  });
 }
 
 /** The `tableName` option of an `@Entity({ … })` call, when it sets one. */

@@ -1,5 +1,86 @@
 # create-endora-commerce
 
+## 0.112.0
+
+### Patch Changes
+
+- Updated dependencies [e01e1ff]
+- Updated dependencies [eeed5c8]
+- Updated dependencies [0686447]
+- Updated dependencies [9eee781]
+  - @endora-commerce/cli@0.112.0
+
+## 0.111.0
+
+### Patch Changes
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- Updated dependencies [1937bed]
+- Updated dependencies [4c4c869]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [cbbf070]
+- Updated dependencies [e135ccc]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [8a4ca9c]
+- Updated dependencies [4d7b141]
+- Updated dependencies [027aba4]
+- Updated dependencies [1daba64]
+- Updated dependencies [d290897]
+- Updated dependencies [498b99b]
+- Updated dependencies [01e73d1]
+  - @endora-commerce/cli@0.111.0
+
+## 0.110.0
+
+### Patch Changes
+
+- Updated dependencies [0b64c13]
+- Updated dependencies [d69e765]
+- Updated dependencies [717e4c6]
+- Updated dependencies [3fed394]
+- Updated dependencies [7a0f3e2]
+- Updated dependencies [4940f0a]
+  - @endora-commerce/cli@0.110.0
+
+## 0.109.0
+
+### Patch Changes
+
+- Updated dependencies [5d192d3]
+- Updated dependencies [8082616]
+- Updated dependencies [bbf7182]
+- Updated dependencies [f261ed3]
+- Updated dependencies [eeed924]
+- Updated dependencies [9cb3c8d]
+- Updated dependencies [b6c9cb9]
+- Updated dependencies [cce12dd]
+- Updated dependencies [f8effbf]
+- Updated dependencies [453b25b]
+- Updated dependencies [46de85c]
+- Updated dependencies [0d6983a]
+  - @endora-commerce/cli@0.109.0
+
+## 0.108.0
+
+### Patch Changes
+
+- @endora-commerce/cli@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- @endora-commerce/cli@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

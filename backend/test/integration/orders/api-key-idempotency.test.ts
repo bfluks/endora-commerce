@@ -16,6 +16,7 @@ import {
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order, OrderPlacementIntent } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 062 / T021 — durable order-intake idempotency (SC-003, FR-012):
@@ -63,10 +64,12 @@ describe('external order intake — idempotency (062 / T021)', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     await h.salesChannels.cache.invalidate('ext-idem');
+    // Issue #699 — the intake places only on one of the bound Organization's
+    // active assigned channels.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['ext-idem']);
     await em.getConnection().execute(
       `insert into sales_channel_products (sales_channel_id, product_id) values (?,?)`,
       [channel.id, SEED_PRODUCT_101_ID],
@@ -141,7 +144,7 @@ describe('external order intake — idempotency (062 / T021)', () => {
     const [a, b] = await Promise.all([post(payload(), key), post(payload(), key)]);
     const statuses = [a.statusCode, b.statusCode].sort((x, y) => x - y);
     // One caller placed (201). The other was serialized: either it replayed the
-    // finished intent (200) or hit the per-key lock (409 intake_busy).
+    // finished intent (200) or hit the per-key lock (409 ORDER_INTAKE_BUSY).
     expect(statuses).toContain(201);
 
     const winner = a.statusCode === 201 ? a : b;
@@ -155,7 +158,8 @@ describe('external order intake — idempotency (062 / T021)', () => {
       const err = (loser.json() as {
         error: { code: string; details?: Record<string, unknown> };
       }).error;
-      expect(err.details).toMatchObject({ code: 'intake_busy' });
+      // Its own code since issue #627, where it was `VALIDATION_FAILED` with `intake_busy`.
+      expect(err.code).toBe(ERROR_CODES.ORDER_INTAKE_BUSY);
       // Retrying the same request is idempotency-safe: it lands on the
       // winner's order.
       const retry = await post(payload(), key);

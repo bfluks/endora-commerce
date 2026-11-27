@@ -16,6 +16,7 @@ import {
 } from './seed-commerce.js';
 import { ADMIN_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from './test-actors.js';
 import type { BackendServerHandle } from './test-server.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
 
 /**
  * Fixtures shared by the `crm` contract and integration tests
@@ -141,11 +142,51 @@ export async function seedCrmOrder(
     placedAt: new Date(),
     ...(overrides.sourceQuoteRequestId ? { sourceQuoteRequestId: overrides.sourceQuoteRequestId } : {}),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
   return { id: order.id, businessId: order.businessId ?? null };
 }
 
 /** A second Organization with a row behind it — `crm_opportunities` has a real foreign key. */
+/**
+ * The representative every fixture Organization is assigned to (issue #305).
+ *
+ * A sales representative reaches every Organization nobody else governs, so an
+ * Organization with no assignment at all is in every representative's reach.
+ * The fixtures model the B2B book instead: each Organization is somebody's, and
+ * a representative reaches the ones {@link seedCrmSalesRep} gives them (they
+ * share the assignment, so it is theirs) and no other. No admin account carries
+ * this id; it exists only as the assignment's other party.
+ */
+export const CRM_BOOK_REP_ID = randomUUID();
+
+/**
+ * Issue #305 — put an Organization the harness seeds (`TEST_ORGANIZATION_ID`,
+ * `OTHER_TEST_ORGANIZATION_ID`) into the book of {@link CRM_BOOK_REP_ID}, so a
+ * representative not given it does not reach it. Returns the undo, which a case
+ * runs in `finally` so the assignment does not stand for the rest of its file;
+ * the next file starts with none either way (issue #1056).
+ */
+export async function assignToCrmBook(
+  em: EntityManager,
+  organizationIds: readonly string[],
+): Promise<() => Promise<void>> {
+  for (const organizationId of organizationIds) {
+    await em.getConnection().execute(
+      `insert into "organization_sales_rep_assignments" ("id", "organization_id", "admin_user_id", "created_at")
+       values (gen_random_uuid(), ?, ?, now()) on conflict do nothing`,
+      [organizationId, CRM_BOOK_REP_ID],
+    );
+  }
+  return async () => {
+    await em
+      .getConnection()
+      .execute(
+        `delete from "organization_sales_rep_assignments" where "admin_user_id" = ? and "organization_id" = any(?::uuid[])`,
+        [CRM_BOOK_REP_ID, `{${organizationIds.join(',')}}`],
+      );
+  };
+}
+
 export async function seedCrmOrganization(em: EntityManager, label: string): Promise<string> {
   const organization = em.create(Organization, {
     name: `CRM ${label} ${randomUUID().slice(0, 8)}`,
@@ -154,7 +195,13 @@ export async function seedCrmOrganization(em: EntityManager, label: string): Pro
     vatStatus: 'vat_payer',
     registeredAddress: { street: 'ul. Testowa 1', city: 'Warszawa', postalCode: '00-100', country: 'PL' },
   });
-  await em.persistAndFlush(organization);
+  await em.persist(organization).flush();
+  await em.persist(
+    em.create(OrganizationSalesRepAssignment, { organizationId: organization.id, adminUserId: CRM_BOOK_REP_ID }),
+  ).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [organization.id]);
   return organization.id;
 }
 
@@ -174,7 +221,7 @@ export async function seedCrmAdmin(
     name: `CRM ${label}`,
     permissions,
   });
-  await em.persistAndFlush(role);
+  await em.persist(role).flush();
   return registerAdmin(em, role.id, `crm-${label}-${suffix}`);
 }
 
@@ -182,6 +229,15 @@ export async function seedCrmAdmin(
  * A Sales Representative confined to `organizationIds` — the allowed-set tenant
  * context — holding `permissions` on top of whatever the role already carries.
  * The role's code is the platform's own: it is what makes the scope narrow.
+ *
+ * **The assignments last until the end of the file, and the harness owns their
+ * cleanup** (issue #1056): `organizations` declares
+ * `organization_sales_rep_assignments` volatile, so the next file's
+ * `setupBackendServer` starts with none. Inside one file they do stand for
+ * every later case — and since a representative reaches every Organization
+ * nobody is assigned to, they narrow what *other* representatives reach too. A
+ * case that needs an assignment the rest of its file must not see takes
+ * {@link assignToCrmBook}'s undo in a `finally` instead.
  */
 export async function seedCrmSalesRep(
   em: EntityManager,
@@ -198,7 +254,7 @@ export async function seedCrmSalesRep(
   } else {
     role.permissions = [...new Set([...role.permissions, ...permissions])];
   }
-  await em.persistAndFlush(role);
+  await em.persist(role).flush();
   const admin = await registerAdmin(em, role.id, `crm-rep-${randomUUID().slice(0, 8)}`);
   for (const organizationId of organizationIds) {
     em.create(OrganizationSalesRepAssignment, { organizationId, adminUserId: admin.adminUserId });
@@ -220,7 +276,7 @@ async function registerAdmin(
     lastName: slug,
     status: 'active',
   });
-  await em.persistAndFlush(admin);
+  await em.persist(admin).flush();
   const cookie = `stub-${slug}`;
   ADMIN_COOKIES[cookie] = { adminUserId: admin.id };
   return {
@@ -654,4 +710,33 @@ export async function unassignCrmSalesRep(
   adminUserId: string,
 ): Promise<void> {
   await em.nativeDelete(OrganizationSalesRepAssignment, { organizationId, adminUserId });
+}
+
+/** One row of `crm_opportunity_value_changes` — what an Opportunity's write changed, with the values (#470). */
+export interface CrmValueChangeRow {
+  id: string;
+  opportunityId: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+/**
+ * The value-store row a `crm.opportunity.*` audit entry points at by
+ * `valueChangeId` (issue #470), read raw — or `null` when the entry points at
+ * none or the row is not there. Since #470 the audit entry names what changed
+ * and the values are here.
+ */
+export async function crmValueChangeOf(
+  h: BackendServerHandle,
+  entry: { stateBefore?: Record<string, unknown> | null; stateAfter?: Record<string, unknown> | null },
+): Promise<CrmValueChangeRow | null> {
+  const pointer = entry.stateAfter?.valueChangeId ?? entry.stateBefore?.valueChangeId;
+  if (typeof pointer !== 'string') return null;
+  const rows = (await h.orm.em
+    .getConnection()
+    .execute(
+      `select "id", "opportunity_id" as "opportunityId", "before", "after" from "crm_opportunity_value_changes" where "id" = ?`,
+      [pointer],
+    )) as CrmValueChangeRow[];
+  return rows[0] ?? null;
 }

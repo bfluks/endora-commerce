@@ -3,6 +3,7 @@
   "palette.entry.label": "Ask the assistant…",
   "palette.entry.description": "Describe what you want to do in plain language",
   "panel.inputPlaceholder": "e.g. Set the stock of \"Bolts 0193\" in warehouse \"Default\" to 120",
+  "panel.inputLabel": "Instruction",
   "panel.voiceInput": "Dictate (speech-to-text)",
   "panel.voiceInputStop": "Stop dictation",
   "panel.submit": "Interpret",
@@ -36,5 +37,15 @@
   "capability.disabled": "The prompt assistant is disabled on this platform.",
   "capability.notConfigured": "The prompt assistant is not configured yet — set the provider and API key in Settings.",
   "palette.group.label": "Assistant",
-  "activity.verb.prompt_action.execute": "ran a prompt action"
+  "activity.verb.prompt_action.execute": "ran a prompt action",
+  "settingGroups.prompt_actions.name": "Prompt actions (AI assistant)",
+  "settingLabels.prompt_actions.activation.name": "Prompt actions enabled",
+  "settingLabels.prompt_actions.enabled.name": "Assistant enabled",
+  "settingLabels.prompt_actions.enabled.description": "Turns on natural-language prompts in the admin command palette.",
+  "settingLabels.prompt_actions.llm_credentials.name": "LLM credentials",
+  "settingLabels.prompt_actions.llm_credentials.description": "The LLM configuration (Credentials screen) the assistant uses. Required to turn it on.",
+  "settingLabels.prompt_actions.bulk_limit.name": "Bulk operation limit",
+  "settingLabels.prompt_actions.bulk_limit.description": "Most records a single prompt may change. Larger plans are blocked before they run.",
+  "module.name": "Prompt actions",
+  "module.description": "Natural-language prompt mode for the admin command palette: interpret an operator instruction with an LLM, preview the plan, execute it through existing module services after explicit confirmation."
 }

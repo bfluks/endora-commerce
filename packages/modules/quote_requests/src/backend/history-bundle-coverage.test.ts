@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  quoteRequestDeliveryChannelSchema,
+  quoteRequestDeliveryStatusSchema,
   quoteRequestHistoryChangeSchema,
   quoteRequestHistoryEntryKindSchema,
 } from '@endora-commerce/contracts';
@@ -56,6 +58,10 @@ const OTHER_KEYS = [
   'rfq.detail.history.noChanges',
   'rfq.detail.history.none',
   'rfq.detail.history.note',
+  // Feature 159 — the name of the ungrouped section in a `line_group` change.
+  'rfq.detail.history.ungrouped',
+  // Feature 159 (N-32) — a line of a product on several lines, with its group.
+  'rfq.detail.history.lineInGroup',
   'rfq.detail.history.reason',
   'rfq.detail.history.revision',
   'rfq.detail.history.order',
@@ -69,7 +75,26 @@ const OTHER_KEYS = [
   'rfq.detail.history.change.validity_removed',
 ];
 
+/**
+ * `specs/179-rfq-and-customer-notifications/` WP-06 (FR-070) — every channel
+ * and every delivery status the History can answer has a label, so a delivery
+ * never reads as its code.
+ */
+const DELIVERY_CHANNELS = [...quoteRequestDeliveryChannelSchema.options];
+const DELIVERY_STATUSES = [...quoteRequestDeliveryStatusSchema.options];
+const DELIVERY_KEYS = [
+  'rfq.detail.history.delivery.title',
+  'rfq.detail.history.delivery.recipient.admin',
+  'rfq.detail.history.delivery.recipient.customer',
+  'rfq.detail.history.delivery.attempts',
+  'rfq.detail.history.delivery.showError',
+  'rfq.detail.history.delivery.noError',
+];
+
 const REQUIRED = [
+  ...DELIVERY_CHANNELS.map((c) => `rfq.detail.history.delivery.channel.${c}`),
+  ...DELIVERY_STATUSES.map((s) => `rfq.detail.history.delivery.status.${s}`),
+  ...DELIVERY_KEYS,
   ...ENTRY_KINDS.map((k) => `rfq.detail.history.entry.${k}`),
   ...CHANGE_KINDS.map((k) => `rfq.detail.history.change.${k}`),
   ...ROLE_KEYS.map((k) => `rfq.detail.history.role.${k}`),
@@ -78,8 +103,10 @@ const REQUIRED = [
 
 describe('quote request history — bundle coverage (T058)', () => {
   it('iterates the full schema enums', () => {
-    expect(ENTRY_KINDS).toHaveLength(13);
-    expect(CHANGE_KINDS).toHaveLength(8);
+    // Feature 162 added custom_field_carry_skipped; 192 added shared.
+    expect(ENTRY_KINDS).toHaveLength(15);
+    // Feature 159 added the five grouping kinds; 192 added validity_days.
+    expect(CHANGE_KINDS).toHaveLength(14);
   });
 
   it.each(REQUIRED)('%s exists, non-empty, in en and pl', (key) => {
@@ -93,6 +120,7 @@ describe('quote request history — bundle coverage (T058)', () => {
     const titles = [
       ...ENTRY_KINDS.map((k) => `rfq.detail.history.entry.${k}`),
       ...CHANGE_KINDS.map((k) => `rfq.detail.history.change.${k}`),
+      ...DELIVERY_STATUSES.map((s) => `rfq.detail.history.delivery.status.${s}`),
     ];
     for (const key of titles) expect(PL[key], key).not.toBe(EN[key]);
   });

@@ -19,13 +19,30 @@
  */
 export { FileDropzone } from './FileDropzone.js';
 export { PaginationFooter } from './PaginationFooter.js';
-export type { PaginationFooterProps } from './PaginationFooter.js';
+export type { CursorPaginationFooterProps, PaginationFooterProps } from './PaginationFooter.js';
 export { ResponsiveTable } from './ResponsiveTable.js';
 export type { ResponsiveColumn, ResponsiveTableProps } from './ResponsiveTable.js';
 export { RowActionMenu, RowActionMenuItem, RowActionMenuSeparator } from './RowActionMenu.js';
 export type { RowActionMenuItemProps, RowActionMenuProps } from './RowActionMenu.js';
+// Issue #1441 (DS-07) — one primary action per view: a detail header's primary, secondary and "More" menu.
+export { DetailHeaderActions } from './DetailHeaderActions.js';
+export type { DetailHeaderActionsProps } from './DetailHeaderActions.js';
+// Issue #1439 (UX audit DS-05) — the list page pattern; README "List pages".
+export { ListPage } from './list-page/ListPage.js';
+export type { ListPageLoad, ListPageProps } from './list-page/ListPage.js';
+export { fitPageSize, lastPageIndex, pageSizesUpTo, useListPagination } from './list-page/use-list-pagination.js';
+export type { ListPagination, UseListPaginationOptions } from './list-page/use-list-pagination.js';
+export { useCursorPagination } from './list-page/use-cursor-pagination.js';
+export type { CursorListPagination, CursorPageInfo } from './list-page/use-cursor-pagination.js';
 export { StickyFormActions } from './StickyFormActions.js';
 export type { StickyFormActionsProps } from './StickyFormActions.js';
+// Feature 180 — the generic Save and outcome summary of an editor's save session.
+export { SaveSessionActions } from './save-session/SaveSessionActions.js';
+export type { SaveSessionActionsProps } from './save-session/SaveSessionActions.js';
+export { SaveSessionSummary } from './save-session/SaveSessionSummary.js';
+export type { SaveSessionSummaryProps } from './save-session/SaveSessionSummary.js';
+export { ImmediateBadge } from './save-session/ImmediateBadge.js';
+export type { ImmediateBadgeProps } from './save-session/ImmediateBadge.js';
 export { TouchReorderButtons } from './TouchReorderButtons.js';
 export type { TouchReorderButtonsProps } from './TouchReorderButtons.js';
 export { AdminUserPicker } from './admin-user-picker/AdminUserPicker.js';
@@ -45,6 +62,13 @@ export type { CategoryTreePickerProps } from './category-tree-picker/CategoryTre
 export { adminLanguageToLocale, ancestorIdsForSelected, buildCategoryTree, computeParentIndeterminateIds, expandedIdsForFilteredTree, filterCategoryTree, flattenCategoryTree, pickCategoryDisplayName, subtreeHasSelection, visibleFlattenedTree } from './category-tree-picker/category-tree-utils.js';
 export type { CategoryTreeNode, CategoryTreePickerCategory } from './category-tree-picker/category-tree-utils.js';
 export { EChart } from './charts/echart.js';
+// Issue #464 — the analytics helpers CRM and Projects each kept a copy of.
+export { FigureCard } from './analytics/FigureCard.js';
+export type { FigureCardProps } from './analytics/FigureCard.js';
+export { useFigure } from './analytics/use-figure.js';
+export type { Figure } from './analytics/use-figure.js';
+export { prefersReducedMotion, useChartColors } from './charts/use-chart-colors.js';
+export type { ChartColors } from './charts/use-chart-colors.js';
 export { ContentLanguageTabs } from './content-language-tabs/ContentLanguageTabs.js';
 export type { ContentLanguageTabsProps } from './content-language-tabs/ContentLanguageTabs.js';
 export { CmsBlockPicker } from './cms-picker/CmsBlockPicker.js';
@@ -61,8 +85,33 @@ export type { CurrencyPickerProps } from './dictionary-picker/CurrencyPicker.js'
 export { listDictionaryCountries, listDictionaryCurrencies } from './dictionary-picker/dictionary-api.js';
 export { useCountriesQuery } from './country-select/useCountriesQuery.js';
 export type { UseCountriesQueryResult } from './country-select/useCountriesQuery.js';
+export { CustomFieldListFilters } from './custom-field-filters/CustomFieldListFilters.js';
+export type { CustomFieldListFiltersProps } from './custom-field-filters/CustomFieldListFilters.js';
+export {
+  customFieldDisplayName,
+  customFieldFilterChips,
+  resolveCustomFieldLabel,
+} from './custom-field-filters/custom-field-filter-chips.js';
+export type { CustomFieldFilterChip, CustomFieldFilterTranslator } from './custom-field-filters/custom-field-filter-chips.js';
+export {
+  customFieldFilterRefusal,
+  emptyCustomFieldFilters,
+  pruneRemovedOptions,
+  readCustomFieldFilterParams,
+  sanitizeCustomFieldFilters,
+  toCustomFieldFiltersParam,
+  withCustomFieldFilter,
+  withoutCustomFieldFilter,
+  writeCustomFieldFilterParams,
+} from './custom-field-filters/custom-field-filter-params.js';
+export { useCustomFieldListFilterFields } from './custom-field-filters/useCustomFieldListFilterFields.js';
+export type {
+  CustomFieldListFilterFieldsState,
+  CustomFieldListFilterFieldsStatus,
+} from './custom-field-filters/useCustomFieldListFilterFields.js';
 export { CustomFieldValuesPanel } from './custom-field-values/CustomFieldValuesPanel.js';
 export type { CustomFieldValuesPanelProps } from './custom-field-values/CustomFieldValuesPanel.js';
+export { customFieldErrorsOf } from './custom-field-values/custom-field-errors.js';
 export { CustomerGroupPicker } from './customer-group-picker/CustomerGroupPicker.js';
 export type { CustomerGroupPickerProps } from './customer-group-picker/CustomerGroupPicker.js';
 export { CustomerPicker } from './customer-picker/CustomerPicker.js';
@@ -76,19 +125,62 @@ export type { OrganizationPickerMultiProps } from './organization-picker/Organiz
 export { OrganizationStatusBadge } from './organization-picker/OrganizationStatusBadge.js';
 export type { OrganizationStatusBadgeProps } from './organization-picker/OrganizationStatusBadge.js';
 export { useOrganizationsQuery } from './organization-picker/useOrganizationsQuery.js';
-export type { UseOrganizationsQueryOptions, UseOrganizationsQueryResult } from './organization-picker/useOrganizationsQuery.js';
+export type {
+  OrganizationPickerKind,
+  UseOrganizationsQueryOptions,
+  UseOrganizationsQueryResult,
+} from './organization-picker/useOrganizationsQuery.js';
 export { useFocusTrap } from './hooks/useFocusTrap.js';
 export type { FocusTrapOptions } from './hooks/useFocusTrap.js';
-export { ModalDialog } from './modal-dialog/ModalDialog.js';
-export type { ModalDialogProps } from './modal-dialog/ModalDialog.js';
+export { ModalDialog, MODAL_OVERLAY_Z_INDEX } from './modal-dialog/ModalDialog.js';
+export type { ModalDialogLayer, ModalDialogPlacement, ModalDialogProps } from './modal-dialog/ModalDialog.js';
+// Issue #313 — the design-system replacement for the browser's `confirm()`.
+export { ConfirmDialog, useConfirmDialog } from './confirm-dialog/ConfirmDialog.js';
+export type {
+  ConfirmDialogProps,
+  ConfirmFocusTarget,
+  ConfirmOptions,
+  UseConfirmDialog,
+  UseConfirmDialogOptions,
+} from './confirm-dialog/ConfirmDialog.js';
+// Issue #1446 (DS-13) — the one unsaved-changes guard: Save / Discard / Stay before a navigation drops edits.
+export { UnsavedChangesDialog, UnsavedChangesHint, useUnsavedChangesGuard } from './unsaved-changes/UnsavedChangesGuard.js';
+export type {
+  UnsavedChangesAsk,
+  UnsavedChangesDialogProps,
+  UnsavedChangesGuard,
+  UnsavedChangesGuardOptions,
+  UnsavedChangesHintProps,
+} from './unsaved-changes/UnsavedChangesGuard.js';
+// Issue #1435 (DS-18) — a status changed through a confirmed dialog, never a select that writes on change.
+export { StatusChangeControl } from './status-change/StatusChangeControl.js';
+export type { StatusChangeControlProps, StatusChangeOption } from './status-change/StatusChangeControl.js';
+// Issue #1495 (CONTENT-13) — a list search that runs as the operator types, one request per pause.
+export { SEARCH_DEBOUNCE_MS, useDebouncedValue } from './hooks/useDebouncedValue.js';
+// Issue #1495 (CONTENT-13) — focus to the next row, or the create action, after a row is deleted.
+export { useRemovalFocus } from './hooks/useRemovalFocus.js';
+export type { RemovalFocus } from './hooks/useRemovalFocus.js';
 export { useViewportTier } from './hooks/useViewportTier.js';
 export type { ViewportTier } from './hooks/useViewportTier.js';
 export { MethodAvailabilityCaption, MethodAvailabilityCell, MethodNotOfferedNotice } from './payment-method-availability/MethodAvailabilityCell.js';
-export { KanbanBoard } from './kanban/index.js';
-export type { KanbanBoardLabels, KanbanBoardProps, KanbanCardRenderState, KanbanColumnRenderState, KanbanColumnState, KanbanDropState } from './kanban/index.js';
+// Feature 161 — the editable grid (`specs/161-price-book-editor/research.md` R4).
+export { EditableGrid } from './editable-grid/index.js';
+export type { EditableGridCellChange, EditableGridChangeReason, EditableGridColumn, EditableGridHandle, EditableGridProps, EditableGridRenderContext, EditableGridRow, EditableGridSelection } from './editable-grid/index.js';
+export { KanbanBoard, MoveToMenu } from './kanban/index.js';
+export type { KanbanBoardLabels, KanbanBoardProps, KanbanCardRenderState, KanbanColumnRenderState, KanbanColumnState, KanbanDropState, MoveToMenuProps, MoveToMenuTarget } from './kanban/index.js';
 export { ReorderAnnouncer } from './reorder/ReorderAnnouncer.js';
 export type { ReorderAnnouncerProps } from './reorder/ReorderAnnouncer.js';
 export { moveItem, useReorderList } from './reorder/useReorderList.js';
+// Issue #1633 — a configuration list reordered by one server call: the optimistic move, the rollback, ORDER_STALE.
+export { ReorderControls } from './reorder/ReorderControls.js';
+export type { ReorderControlsProps } from './reorder/ReorderControls.js';
+export { useServerReorder } from './reorder/useServerReorder.js';
+export type { ReorderableRow, ReorderNotice, UseServerReorderOptions, UseServerReorderResult } from './reorder/useServerReorder.js';
+// Feature 159 — named, ordered line groups: the editor and its section reorder hook.
+export { LineGroupsEditor, SplitLineDialog, canSplitLine, splitLineInto } from './line-groups/index.js';
+export type { LineGroupsEditorGroup, LineGroupsEditorLabels, LineGroupsEditorLine, LineGroupsEditorLineSlots, LineGroupsEditorProps, LineGroupsEditorSection, SplitLineDialogLabels, SplitLineDialogProps, SplitLineDialogTarget } from './line-groups/index.js';
+export { useGroupedReorder } from './reorder/useGroupedReorder.js';
+export type { GroupedHandleProps, GroupedItemContext, GroupedItemProps, GroupedReorderKeyboardEvent, GroupedReorderLabels, GroupedReorderModel, GroupedReorderSection, GroupedSectionContext, GroupedSectionHandleProps, GroupedSectionProps, UseGroupedReorderOptions, UseGroupedReorderResult } from './reorder/useGroupedReorder.js';
 export type { ReorderHandleProps, ReorderItemProps, ReorderKeyboardEvent, ReorderLabelContext, ReorderLabels, ReorderListOptions, UseReorderListOptions, UseReorderListResult } from './reorder/useReorderList.js';
 export { RuleBuilder } from './rule-builder/RuleBuilder.js';
 export { ProductBrowserDialog } from './product-browser/ProductBrowserDialog.js';
@@ -96,7 +188,7 @@ export type { ProductBrowserDialogProps } from './product-browser/ProductBrowser
 export { ProductBrowserTrigger } from './product-browser/ProductBrowserTrigger.js';
 export type { ProductBrowserTriggerProps } from './product-browser/ProductBrowserTrigger.js';
 export { parsePositiveInt, productDisplayName } from './product-browser/product-line.js';
-export { productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
+export { isProductArchived, productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
 export type { ProductBrowserRules, ProductSelectability, ProductSelectabilityContext, ProductSelectabilityReason } from './product-browser/selectability.js';
 export type { ProductBrowserItem, ProductBrowserStatus, ProductBrowserType } from './product-browser/types.js';
 export { ProductPicker } from './product-picker/ProductPicker.js';
@@ -104,6 +196,8 @@ export type { ProductPickerProps } from './product-picker/ProductPicker.js';
 export { ScopePicker } from './scope-picker/ScopePicker.js';
 export type { ScopePickerProps, ScopePickerValue } from './scope-picker/ScopePicker.js';
 export { fetchScopeSalesChannel, listScopeSalesChannels } from './scope-picker/sales-channels-api.js';
+export { contentLanguageName, loadChannelLanguages, offerContentLanguages, useChannelLanguages } from './channel-languages/channel-languages.js';
+export type { ChannelLanguagesState, ContentLanguageOffer, ContentLanguageOfferDegraded } from './channel-languages/channel-languages.js';
 export { SalesChannelPicker } from './sales-channel-picker/SalesChannelPicker.js';
 export type { SalesChannelPickerProps } from './sales-channel-picker/SalesChannelPicker.js';
 export {
@@ -123,4 +217,62 @@ export { ScopeNotice } from './scope-notice/ScopeNotice.js';
 export type { ScopeNoticeProps } from './scope-notice/ScopeNotice.js';
 export { SavedViewsControl } from './saved-views/SavedViewsControl.js';
 export type { SavedViewState, SavedViewsControlProps } from './saved-views/SavedViewsControl.js';
+// Issue #1440 (UX audit DS-06) — the list toolbar: labelled search, primary filters, *More filters (n)*, applied-filter chips.
+export { FilterChip } from './list-toolbar/FilterChip.js';
+export type { FilterChipProps } from './list-toolbar/FilterChip.js';
+export { ListToolbar, ListToolbarSearch } from './list-toolbar/ListToolbar.js';
+export type { AppliedFilter, ListToolbarProps, ListToolbarSearchProps } from './list-toolbar/ListToolbar.js';
+export { InlineEdit, InlineEditPencil } from './inline-edit/InlineEdit.js';
+export type { InlineEditorProps, InlineEditProps } from './inline-edit/InlineEdit.js';
+export { InlineEditTitle } from './inline-edit/InlineEditTitle.js';
+export type { InlineEditTitleProps } from './inline-edit/InlineEditTitle.js';
+// Issue #1558 (UX audit WORK-07) — the *List | Board* switch, moved from Tasks.
+export { ViewModeToggle } from './view-mode-toggle/ViewModeToggle.js';
+export type { ViewModeToggleProps } from './view-mode-toggle/ViewModeToggle.js';
 export type { RuleAttributeField, RuleBuilderBuiltinField, RuleBuilderLabels, RuleBuilderProps, RuleFieldOptions, StructuralRule, StructuralRuleCondition, StructuralRuleField, StructuralRuleValue } from './rule-builder/RuleBuilder.js';
+// Feature 163 — the collaboration components promoted from CRM (`specs/163-projects-and-tasks/research.md` R-17).
+export { ReferenceField } from './references/ReferenceField.js';
+export type { ReferenceFieldProps } from './references/ReferenceField.js';
+export { ReferenceText } from './references/ReferenceText.js';
+export type { ReferenceTextProps } from './references/ReferenceText.js';
+export { REFERENCE_TRIGGER_KINDS } from './references/reference-kinds.js';
+export type { ReferenceLookups, ReferenceSuggestion, ReferenceTriggerKind } from './references/reference-kinds.js';
+export { clipReferenceText, findMentionTrigger, MENTION_QUERY_LIMIT } from './references/mention-trigger.js';
+export type { MentionTrigger } from './references/mention-trigger.js';
+export { editorDocOf, REFERENCE_NODE, textOfEditorDoc } from './references/rich-text-doc.js';
+export type { EditorDoc } from './references/rich-text-doc.js';
+export { COMMENT_MAX_LENGTH, CommentComposer } from './comments/CommentComposer.js';
+export type { CommentComposerProps } from './comments/CommentComposer.js';
+export { CommentThread } from './comments/CommentThread.js';
+export type { CommentThreadApi, CommentThreadCopy, CommentThreadProps, RecordComment } from './comments/CommentThread.js';
+export { TagChips, TagMultiSelect, useTagOptions } from './tags/TagPicker.js';
+export type { TagMultiSelectProps, TagOption } from './tags/TagPicker.js';
+export { AttachmentUploader } from './attachments/AttachmentUploader.js';
+export type { AttachmentUploaderProps } from './attachments/AttachmentUploader.js';
+export { uploadAttachment } from './attachments/upload-attachment.js';
+export {
+  RecordHistory,
+  RecordHistoryChangeList,
+  recordHistoryChanges,
+  useRecordHistory,
+} from './record-history/RecordHistory.js';
+export type {
+  RecordHistoryChange,
+  RecordHistoryChangeListProps,
+  RecordHistoryCopy,
+  RecordHistoryEntryShape,
+  RecordHistoryPageShape,
+  RecordHistoryProps,
+  RecordHistoryState,
+} from './record-history/RecordHistory.js';
+export { CursorPagination } from './record-history/CursorPagination.js';
+export type { CursorPaginationProps } from './record-history/CursorPagination.js';
+export { ScopedField, ScopedFieldGrid } from './scoped-field/ScopedField.js';
+export type { ScopedFieldControlProps, ScopedFieldProps, ScopedFieldViewWithParent } from './scoped-field/ScopedField.js';
+export { BoardCardFieldsEditor } from './board-card-fields/BoardCardFieldsEditor.js';
+export type {
+  BoardCardFieldChoice,
+  BoardCardFieldsConfig,
+  BoardCardFieldsEditorCopy,
+  BoardCardFieldsEditorProps,
+} from './board-card-fields/BoardCardFieldsEditor.js';

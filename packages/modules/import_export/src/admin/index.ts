@@ -25,7 +25,7 @@
  * would make the registry evaluate React to be enumerated. Vite therefore emits
  * one chunk for this screen by construction rather than by a build rule.
  */
-import type { AdminContributions } from '@endora-commerce/admin-kit/contributions';
+import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
 
 /** The centre's one route. */
 const ROUTE_PATH = '/import-export';
@@ -64,13 +64,23 @@ export const contributions: AdminContributions = {
       // author had to edit.
       labelKey: 'nav.importExport.label',
       icon: 'Upload',
-      // Bulk operations span many domains, so the entry belongs under System
-      // rather than to any one of them — the section it has always rendered in.
-      section: 'system',
-      // The weight the hand-written NAV gave it by position: between
-      // `credentials` and `settings` in the System section.
-      weight: 700,
+      section: 'platform',
+      // Issue #1519 (UX audit SHELL-11, DEC-02) split *System*: *Platform* is
+      // how the instance is configured and extended, ordered with the host's
+      // own rows by weight — Modules 100, Settings 200, Custom fields 300,
+      // Import/export 400, Bulk operations 500, Webhooks 600, Global search
+      // 700, PWA 800, Command hooks 900, API description 1000. Import and
+      // export span many domains, so the row belongs to no one of them.
+      weight: 400,
       requiredPermission: [...REQUIRED_PERMISSION],
     },
+  ],
+  zones: [
+    // Issue #1455 (CAT-02) — *Import / export* on the products list header. The
+    // centre's Products card is gated by catalog's own codes (`catalog:read` to
+    // export, `catalog:write` to import), so those are what open the link.
+    zoneComponent('product.list.actions', () => import('./zones/ProductListImportExportLink.js'), {
+      requiredPermission: ['catalog:read', 'catalog:write'],
+    }),
   ],
 };

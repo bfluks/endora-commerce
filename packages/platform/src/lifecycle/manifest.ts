@@ -7,7 +7,7 @@ import { defineModuleManifest } from '@endora-commerce/contracts';
  */
 export const manifest = defineModuleManifest({
   id: '_lifecycle',
-  name: 'Module Lifecycle',
+  name: 'Module lifecycle',
   description:
     'Platform-internal subsystem that orchestrates install / uninstall / ' +
     'enable / disable / status across every domain module.',
@@ -53,11 +53,26 @@ export const manifest = defineModuleManifest({
    * is to inform the flip, not to refuse it.
    *
    * The second edge does refuse, narrowly: `mfaDeactivationGuardPort` answers
-   * whether administrators are currently *required* to use a second factor,
-   * and while they are the switch-off is refused so that requirement is turned
-   * off as its own change. Non-binding for the same reason as the count.
+   * whether administrators are currently *required* to use a second factor —
+   * by `mfa.admin.totp_enforced` or by a role's `requiresTwoFactor` — and while
+   * they are the switch-off is refused so that requirement is turned off as its
+   * own change. Non-binding for the same reason as the count.
    */
   nonBindingDependencies: [
+    {
+      moduleId: '_i18n',
+      name: 'adminI18nService',
+      kind: 'degrades-without',
+      whenAbsent:
+        'The module list names, describes and explains every module in its manifest\'s ' +
+        'English, whatever language the administrator reads the screen in.',
+      reason:
+        'GET /api/v1/admin/modules names each module, describes it and says why it cannot be ' +
+        'switched off in the language the response is read in (issue #1809). The sentences are ' +
+        "each module's manifest prose and their translations are in that module's own bundle, " +
+        'which `_i18n` resolves. Non-binding because this is the sentinel manifest the install ' +
+        'order starts from, and the route is ungated: a lookup that fails answers the English.',
+    },
     {
       moduleId: 'mfa',
       name: 'mfaDeactivationGuardPort',
@@ -67,8 +82,9 @@ export const manifest = defineModuleManifest({
         'to protect, and switching it back on is never refused.',
       reason:
         'POST /api/v1/admin/modules/:id/activation refuses to switch `mfa` off while ' +
-        '`mfa.admin.totp_enforced` is on, so the administrator requirement is withdrawn as its ' +
-        'own change rather than as a side effect of the module toggle. The setting is `mfa`\'s, ' +
+        '`mfa.admin.totp_enforced` is on or any admin role requires a second factor, and names ' +
+        'which, so the administrator requirement is withdrawn as its own change rather than as ' +
+        'a side effect of the module toggle. The setting and the role flag are read by `mfa`, ' +
         'so `mfa` answers through a port; the route asks only while `mfa` is present.',
     },
     {
@@ -125,8 +141,61 @@ export const manifest = defineModuleManifest({
       icon: 'Boxes',
       targetRoute: '/platform/modules',
       requiredPermission: 'platform.modules.read',
-      keywords: ['modules', 'moduły', 'włącz', 'wyłącz', 'enable', 'disable', 'platform'],
+      keywords: ['modules', 'enable', 'disable', 'platform'],
+      keywordsKey: 'actions.openPlatformModules.keywords',
       weight: 300,
+    },
+    /**
+     * The API description screen. Kernel-served like `/platform/modules`: the
+     * document describes every module's routes, so no module owns it. Gated on
+     * the code its backing route `GET /api/v1/admin/api-description` enforces.
+     */
+    {
+      id: 'open-api-description',
+      labelKey: 'actions.openApiDescription.label',
+      descriptionKey: 'actions.openApiDescription.description',
+      icon: 'BookOpen',
+      targetRoute: '/api-description',
+      requiredPermission: 'platform.api_description.read',
+      keywords: ['api', 'openapi', 'swagger', 'docs', 'integration'],
+      keywordsKey: 'actions.openApiDescription.keywords',
+      weight: 310,
+    },
+    /**
+     * The command-hook screen (`specs/176-command-hooks-outbox/` FR-041): the
+     * execution plan and the outbox. Kernel-served, because hooks span every
+     * module that declares or registers one. Gated on the code the plan route
+     * enforces; the outbox tab asks for its own.
+     */
+    {
+      id: 'open-command-hooks',
+      labelKey: 'actions.openCommandHooks.label',
+      descriptionKey: 'actions.openCommandHooks.description',
+      icon: 'Webhook',
+      targetRoute: '/platform/command-hooks',
+      requiredPermission: 'platform.modules.read',
+      keywords: ['command hooks', 'hooks', 'extensions', 'execution plan'],
+      keywordsKey: 'actions.openCommandHooks.keywords',
+      weight: 320,
+    },
+    /**
+     * The outbox tab on its own (architect ruling 2 on #1080): an operator who
+     * may read the outbox and not the plan is a degraded role, not a broken
+     * one, and reaches the deliveries directly. One code per action, so the
+     * outbox gets its own.
+     */
+    {
+      id: 'open-command-outbox',
+      labelKey: 'actions.openCommandOutbox.label',
+      descriptionKey: 'actions.openCommandOutbox.description',
+      icon: 'Webhook',
+      targetRoute: '/platform/command-hooks/outbox',
+      requiredPermission: 'platform.command_outbox.read',
+      // Issue #1088 — the tab's entry request; no API path sits under its SPA one.
+      entryApiRoute: '/api/v1/admin/command-outbox',
+      keywords: ['outbox', 'dead letter', 'retry', 'failed deliveries'],
+      keywordsKey: 'actions.openCommandOutbox.keywords',
+      weight: 330,
     },
   ],
   permissions: [
@@ -139,6 +208,34 @@ export const manifest = defineModuleManifest({
       code: 'platform.modules.activate',
       module: 'module_lifecycle',
       label: 'Switch modules on and off',
+    },
+    /**
+     * Read the API description — the OpenAPI document and its interactive
+     * reference (`http/api-description.ts`). Declared here because this is
+     * the manifest of the platform's own surfaces; the routes are kernel
+     * resident and mounted from this module. An API key carries it as a scope,
+     * held like every scope to the issuing administrator's own role.
+     */
+    {
+      code: 'platform.api_description.read',
+      module: 'platform',
+      label: 'Read the API description',
+    },
+    /**
+     * The command outbox (`specs/176-command-hooks-outbox/` FR-040): reading
+     * its rows, and retrying a dead one through the audited
+     * `command_outbox.retry` Command. Platform-owned, like the table.
+     */
+    {
+      code: 'platform.command_outbox.read',
+      module: 'platform',
+      label: 'View the command outbox',
+    },
+    {
+      code: 'platform.command_outbox.manage',
+      module: 'platform',
+      label: 'Retry failed command outbox deliveries',
+      requires: ['platform.command_outbox.read'],
     },
   ],
 });

@@ -6,6 +6,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import {
+  assignToCrmBook,
   CRM_ADMIN,
   CRM_API,
   defineCrmCustomField,
@@ -13,6 +14,7 @@ import {
   seedCrmOrganization,
   seedCrmSalesRep,
   restoreDefaultCrmWorkflow,
+  crmValueChangeOf,
 } from '../../helpers/seed-crm.js';
 import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 
@@ -184,15 +186,15 @@ describe('crm custom fields on an opportunity (User Story 15)', () => {
     const updates = await h.auditLogService.query({ action: 'crm.opportunity.update', objectId: created.id });
     expect(creates).toHaveLength(1);
     expect(updates).toHaveLength(1);
-    expect((creates[0]!.stateAfter as { customFieldValues: unknown }).customFieldValues).toEqual({
-      lead_source: 'referral',
-    });
-    expect((updates[0]!.stateBefore as { customFieldValues: unknown }).customFieldValues).toEqual({
-      lead_source: 'referral',
-    });
-    expect((updates[0]!.stateAfter as { customFieldValues: unknown }).customFieldValues).toEqual({
-      lead_source: 'referral',
-      seats: 7,
+    // The entries name the fields; the values are in the Opportunity's own store (#470).
+    expect(creates[0]!.stateAfter).toMatchObject({ changedCustomFields: ['lead_source'] });
+    expect(creates[0]!.stateAfter).not.toHaveProperty('customFieldValues');
+    expect((await crmValueChangeOf(h, creates[0]!))?.after?.customFieldValues).toEqual({ lead_source: 'referral' });
+    expect(updates[0]!.stateAfter).toMatchObject({ changedCustomFields: ['seats'] });
+    expect(updates[0]!.stateBefore).not.toHaveProperty('customFieldValues');
+    expect(await crmValueChangeOf(h, updates[0]!)).toMatchObject({
+      before: { customFieldValues: { seats: null } },
+      after: { customFieldValues: { seats: 7 } },
     });
     // Nothing else was recorded against this Opportunity: the generic layer
     // validates and never writes or audits.
@@ -201,36 +203,45 @@ describe('crm custom fields on an opportunity (User Story 15)', () => {
   });
 
   it('hides the values with the Opportunity from somebody confined to another Organization', async () => {
-    const created = OpportunityDetailResponseSchema.parse(
-      (await post({ customFieldValues: { lead_source: 'referral', seats: 99 } })).json(),
-    ).data;
-    // Positive control: the same person reads an Opportunity of their own Organization, values included.
-    const own = await call('POST', '/opportunities', {
-      cookies: rep.cookies,
-      payload: {
-        title: 'Own',
-        organizationId: otherOrganizationId,
-        currency: 'PLN',
-        customFieldValues: { lead_source: 'trade_fair' },
-      },
-    });
-    expect(own.statusCode, own.body).toBe(201);
-    const ownId = OpportunityDetailResponseSchema.parse(own.json()).data.id;
-    const ownRead = await call('GET', `/opportunities/${ownId}`, { cookies: rep.cookies });
-    expect(OpportunityDetailResponseSchema.parse(ownRead.json()).data.customFieldValues).toEqual({
-      lead_source: 'trade_fair',
-    });
+    // #305 — the test Organization is another representative's: one nobody
+    // is assigned to is in every representative's reach, so without this the
+    // case passes only after an earlier file in the same database left an
+    // assignment on it (issue #1019).
+    const undoBook = await assignToCrmBook(h.em(), [TEST_ORGANIZATION_ID]);
+    try {
+      const created = OpportunityDetailResponseSchema.parse(
+        (await post({ customFieldValues: { lead_source: 'referral', seats: 99 } })).json(),
+      ).data;
+      // Positive control: the same person reads an Opportunity of their own Organization, values included.
+      const own = await call('POST', '/opportunities', {
+        cookies: rep.cookies,
+        payload: {
+          title: 'Own',
+          organizationId: otherOrganizationId,
+          currency: 'PLN',
+          customFieldValues: { lead_source: 'trade_fair' },
+        },
+      });
+      expect(own.statusCode, own.body).toBe(201);
+      const ownId = OpportunityDetailResponseSchema.parse(own.json()).data.id;
+      const ownRead = await call('GET', `/opportunities/${ownId}`, { cookies: rep.cookies });
+      expect(OpportunityDetailResponseSchema.parse(ownRead.json()).data.customFieldValues).toEqual({
+        lead_source: 'trade_fair',
+      });
 
-    const foreign = await call('GET', `/opportunities/${created.id}`, { cookies: rep.cookies });
-    expect(foreign.statusCode, foreign.body).toBe(404);
-    expect(foreign.body).not.toContain('seats');
-    const write = await call('PATCH', `/opportunities/${created.id}`, {
-      cookies: rep.cookies,
-      payload: { customFieldValues: { seats: 1 } },
-    });
-    expect(write.statusCode, write.body).toBe(404);
-    const after = OpportunityDetailResponseSchema.parse((await call('GET', `/opportunities/${created.id}`)).json()).data;
-    expect(after.customFieldValues).toEqual({ lead_source: 'referral', seats: 99 });
+      const foreign = await call('GET', `/opportunities/${created.id}`, { cookies: rep.cookies });
+      expect(foreign.statusCode, foreign.body).toBe(404);
+      expect(foreign.body).not.toContain('seats');
+      const write = await call('PATCH', `/opportunities/${created.id}`, {
+        cookies: rep.cookies,
+        payload: { customFieldValues: { seats: 1 } },
+      });
+      expect(write.statusCode, write.body).toBe(404);
+      const after = OpportunityDetailResponseSchema.parse((await call('GET', `/opportunities/${created.id}`)).json()).data;
+      expect(after.customFieldValues).toEqual({ lead_source: 'referral', seats: 99 });
+    } finally {
+      await undoBook();
+    }
   });
 
   it('drops a value whose definition has been removed from what the detail shows', async () => {

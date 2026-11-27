@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 import { setMobileViewport } from '../../setup';
 
 const getSpy = vi.fn();
@@ -16,9 +17,9 @@ const getSpy = vi.fn();
  * would throw `useAuth must be used inside <AuthProvider>`, which is what it
  * did.
  *
- * `useAuth` and `usePageSizePreference` are stubbed for the reason they always
- * were: this is a layout-only test with no `AuthProvider` mounted, which is the
- * pattern `OrdersList.mobile` and `AppShell.mobile` follow.
+ * `useAuth` is stubbed, so the screen sees a platform admin. Since issue #1500
+ * the list is rendered inside a real session too, because the kit pager reads
+ * the admin's remembered page size from it.
  */
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
   const actual = await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>(
@@ -34,7 +35,6 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
       delete: vi.fn(),
     },
     useAuth: () => ({ me: { role: { code: 'platform_admin' } } }),
-    usePageSizePreference: () => ({ pageSize: 20 as const, setPageSize: vi.fn() }),
   };
 });
 
@@ -51,7 +51,6 @@ const { RfqList } = await import('../../../../packages/modules/quote_requests/sr
 
 const BUNDLE = passthroughBundle('core', [
   'rfq.list.title',
-  'rfq.list.description',
   'rfq.list.field.visibility',
   'rfq.list.scope.mine',
   'rfq.list.scope.unassigned',
@@ -67,7 +66,7 @@ const BUNDLE = passthroughBundle('core', [
   'rfq.list.column.lines',
   'rfq.list.column.total',
   'rfq.list.statusFilter.all',
-  'rfq.list.open',
+  'rfq.list.create',
 ]);
 
 const RFQ_LIST = {
@@ -94,20 +93,28 @@ beforeEach(() => {
   getSpy.mockReset();
   // Feature 147: the page's saved-views control asks for its views too.
   getSpy.mockImplementation(async (path: string) =>
-    path.startsWith('/api/v1/admin/quote-requests/list-views') ? { data: [] } : RFQ_LIST,
+    path.startsWith('/api/v1/admin/quote-requests/list-views') ||
+    path.startsWith('/api/v1/admin/quote-requests/custom-field-filters')
+      ? { data: [] }
+      : RFQ_LIST,
   );
 });
 
 describe('RfqList mobile', () => {
   it('renders card layout without table column headers', async () => {
     renderWithI18n(
+      withSession(
       <MemoryRouter>
-        <RfqList />
-      </MemoryRouter>,
+          <RfqList />
+        </MemoryRouter>,
+      // The kit pager reads the admin's remembered page size, inside the session (issue #1500).
+      { session: adminSession({ permissions: ['*'] }) },
+    ),
       BUNDLE,
     );
+    // The request number is the way in on a card too: no separate Open button (issue #1500).
     await waitFor(() => {
-      expect(screen.getByText('rfq.list.open')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: '#00000000' })).toBeInTheDocument();
     });
     expect(screen.queryByRole('columnheader')).not.toBeInTheDocument();
   });

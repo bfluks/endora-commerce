@@ -1,14 +1,33 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 import type {
   FulfilmentStrategy,
+  GlobalOnlyProductFields,
   SettingDto,
   StockLevelRow,
   Warehouse,
 } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { FulfilmentStrategyPicker } from '@endora-commerce/admin-kit/components';
+import { FulfilmentStrategyPicker, ImmediateBadge } from '@endora-commerce/admin-kit/components';
 import type { FulfilmentStrategyValue } from '@endora-commerce/admin-kit/components';
+import {
+  Alert,
+  Button,
+  EditorSection,
+  InlineStatus,
+  Input,
+  SettingRow,
+  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  useInlineStatus,
+} from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useProductEditor } from './editor/editor-context.js';
 
 /**
  * Read one setting by code (feature 091, P6).
@@ -34,19 +53,24 @@ interface WarehousesResponse {
 interface SetStockResponse {
   data: { before: number; after: number; productId: string; warehouseId: string };
 }
-interface AdminProductResponse {
-  data: {
-    id: string;
-    manageStock: boolean;
-    backorderEnabled: boolean;
-    lowStockThreshold: number | null;
-    lowStockThresholdMode: 'cumulative' | 'per_warehouse';
-    fulfilmentStrategy: FulfilmentStrategy | null;
-    fulfilmentStrategyWarehouseOrder: string[] | null;
-  };
-}
-
 type ThresholdMode = 'cumulative' | 'per_warehouse';
+/** Sentinel for the load failure without a server message; see `refresh`. */
+const LOAD_FAILED = Symbol('inventoryTab.error.load');
+
+/** The product-row settings this tab stages into the editor's one Save (feature 180, FR-025). */
+type RowField = Extract<
+  keyof GlobalOnlyProductFields,
+  | 'manageStock'
+  | 'backorderEnabled'
+  | 'lowStockThreshold'
+  | 'lowStockThresholdMode'
+  | 'fulfilmentStrategy'
+  | 'fulfilmentStrategyWarehouseOrder'
+>;
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
 
 /**
  * Per-product Inventory tab — feature 010 / US2.
@@ -56,9 +80,43 @@ type ThresholdMode = 'cumulative' | 'per_warehouse';
  *     summed on-hand across every warehouse holding the product.
  *   - `per_warehouse`: each warehouse evaluated against its own threshold
  *     (per-(product, warehouse) row, falling back to the warehouse default).
+ *
+ * **Feature 180 (FR-025, owner ruling OQ-7 = B).** The product-row settings —
+ * stock management, backorders, the low-stock threshold and its mode, the
+ * fulfilment strategy — are staged Global cells (`product:<field>`) of the
+ * product editor's own write: the one Save sends them in its
+ * `PUT …/scoped-values` (`changes.product`), which the scoped-values contract
+ * already carries (research R22). They are read from the editor's scoped read,
+ * not from a second product request. Per-warehouse stock levels and thresholds
+ * stay immediate — each its own audited `inventory` write — under an
+ * "Applies immediately" badge.
+ *
+ * **Issue #1454 (UX audit CAT-01).** Because those rows write at once, each has
+ * an `outline` "Apply" rather than a filled "Save": the editor's one Save stays
+ * the only primary on the page (Von Restorff, DS-07 #1441). Every row input is
+ * named after its warehouse, the row's button says busy while its write is in
+ * flight, a result is announced through an always-mounted `InlineStatus`, and a
+ * failure is an `Alert`. Stock tracking is a positive "Track stock" switch.
  */
-export function ProductInventoryTab({ productId }: { productId: string }): ReactNode {
+export function ProductInventoryTab({ productId, editable = true }: { productId: string; editable?: boolean }): ReactNode {
   const t = useTranslation('catalog');
+  const editor = useProductEditor();
+  const saved = editor.state.data?.product ?? null;
+  /** The value a product-row setting has on the page: staged, else saved. */
+  const valueOf = <F extends RowField>(field: F): GlobalOnlyProductFields[F] | null => {
+    const op = editor.state.staged.get(`product:${field}`);
+    if (op?.op === 'set') return op.value as GlobalOnlyProductFields[F];
+    return (saved?.[field] ?? null) as GlobalOnlyProductFields[F] | null;
+  };
+  /** Stage a product-row setting; setting it back to the saved value unstages it. */
+  const stage = (field: RowField, value: unknown): void => {
+    const path = `product:${field}`;
+    editor.dispatch({
+      type: 'stage',
+      path,
+      op: saved !== null && sameValue(value, saved[field]) ? undefined : { op: 'set', value },
+    });
+  };
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [perWarehouse, setPerWarehouse] = useState<Map<string, number>>(new Map());
   const [perWarehouseThreshold, setPerWarehouseThreshold] = useState<
@@ -67,32 +125,28 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
   const [thresholdDraft, setThresholdDraft] = useState<Map<string, string>>(new Map());
   const [draft, setDraft] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  const [error, setError] = useState<string | typeof LOAD_FAILED | null>(null);
+  const status = useInlineStatus();
   const [saving, setSaving] = useState<string | null>(null);
   const [savingThreshold, setSavingThreshold] = useState<string | null>(null);
-  const [lowStockThreshold, setLowStockThreshold] = useState<string>('');
-  const [lowStockSaving, setLowStockSaving] = useState(false);
-  const [mode, setMode] = useState<ThresholdMode>('cumulative');
-  const [modeSaving, setModeSaving] = useState(false);
-  const [fulfilment, setFulfilment] = useState<FulfilmentStrategyValue>({
-    strategy: null,
-    warehouseOrder: [],
-  });
-  const [fulfilmentSaving, setFulfilmentSaving] = useState(false);
-  const [manageStock, setManageStock] = useState(true);
-  const [backorderEnabled, setBackorderEnabled] = useState(false);
   const [allowNegativeGlobal, setAllowNegativeGlobal] = useState(false);
-  const [stockMgmtSaving, setStockMgmtSaving] = useState(false);
+  const manageStock = valueOf('manageStock') ?? true;
+  const backorderEnabled = valueOf('backorderEnabled') ?? false;
+  const mode: ThresholdMode = valueOf('lowStockThresholdMode') ?? 'cumulative';
+  const threshold = valueOf('lowStockThreshold');
+  const lowStockThreshold = threshold === null || threshold === undefined ? '' : String(threshold);
+  const fulfilment: FulfilmentStrategyValue = {
+    strategy: (valueOf('fulfilmentStrategy') ?? null) as FulfilmentStrategy | null,
+    warehouseOrder: valueOf('fulfilmentStrategyWarehouseOrder') ?? [],
+  };
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      const [whRes, rosterRes, productRes, allowNegativeSetting] = await Promise.all([
+      const [whRes, rosterRes, allowNegativeSetting] = await Promise.all([
         apiClient.get<WarehousesResponse>('/api/v1/admin/warehouses?activeOnly=true&pageSize=200'),
         apiClient.get<RosterResponse>(`/api/v1/admin/inventory/levels?productId=${productId}`),
-        apiClient.get<AdminProductResponse>(`/api/v1/admin/catalog/products/${productId}`),
         readSetting('inventory.allow_negative_stock').catch(() => null),
       ]);
       setWarehouses(whRes.items);
@@ -116,24 +170,14 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
       }
       setDraft(initialOnHand);
       setThresholdDraft(initialThreshold);
-      setLowStockThreshold(
-        productRes.data.lowStockThreshold == null
-          ? ''
-          : String(productRes.data.lowStockThreshold),
-      );
-      setMode(productRes.data.lowStockThresholdMode);
-      setFulfilment({
-        strategy: productRes.data.fulfilmentStrategy,
-        warehouseOrder: productRes.data.fulfilmentStrategyWarehouseOrder ?? [],
-      });
-      setManageStock(productRes.data.manageStock ?? true);
-      setBackorderEnabled(productRes.data.backorderEnabled ?? false);
       if (allowNegativeSetting) {
         const effective = allowNegativeSetting.globalValue ?? allowNegativeSetting.defaultValue;
         setAllowNegativeGlobal(effective === true);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load warehouses.');
+      // A key, not `t(…)`: translating here would put `t` in this callback's dependencies, and a
+      // late-arriving bundle would refetch and drop the operator's drafts. Translated at render.
+      setError(err instanceof ApiError ? err.envelope.error.message : LOAD_FAILED);
     } finally {
       setLoading(false);
     }
@@ -149,99 +193,29 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
     return s;
   }, [perWarehouse]);
 
-  const handleModeChange = async (next: ThresholdMode): Promise<void> => {
-    if (next === mode) return;
-    setModeSaving(true);
-    setError(null);
-    setInfo(null);
-    try {
-      await apiClient.patch(`/api/v1/admin/catalog/products/${productId}`, {
-        lowStockThresholdMode: next,
-      });
-      setMode(next);
-      setInfo(t('inventoryTab.lowStock.modeSaved'));
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.envelope.error.message
-          : t('inventoryTab.lowStock.error'),
-      );
-    } finally {
-      setModeSaving(false);
-    }
+  const setFulfilment = (next: FulfilmentStrategyValue): void => {
+    stage('fulfilmentStrategy', next.strategy);
+    stage('fulfilmentStrategyWarehouseOrder', next.strategy === 'defined_order' ? next.warehouseOrder : null);
   };
 
-  const handleSaveFulfilment = async (): Promise<void> => {
-    setFulfilmentSaving(true);
-    setError(null);
-    setInfo(null);
-    try {
-      await apiClient.patch(`/api/v1/admin/catalog/products/${productId}`, {
-        fulfilmentStrategy: fulfilment.strategy,
-        fulfilmentStrategyWarehouseOrder:
-          fulfilment.strategy === 'defined_order' ? fulfilment.warehouseOrder : null,
-      });
-      setInfo(t('inventoryTab.fulfilment.saved'));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('inventoryTab.error.save'));
-    } finally {
-      setFulfilmentSaving(false);
-    }
+  const setLowStockThreshold = (text: string): void => {
+    const trimmed = text.trim();
+    stage('lowStockThreshold', trimmed === '' ? null : Math.max(0, Number.parseInt(trimmed, 10) || 0));
   };
 
-  const handleSaveStockMgmt = async (
-    next: { manageStock?: boolean; backorderEnabled?: boolean },
-  ): Promise<void> => {
-    const nextManage = next.manageStock ?? manageStock;
-    const nextBackorder = next.backorderEnabled ?? backorderEnabled;
-    setStockMgmtSaving(true);
-    setError(null);
-    setInfo(null);
-    try {
-      await apiClient.patch(`/api/v1/admin/catalog/products/${productId}`, {
-        manageStock: nextManage,
-        backorderEnabled: nextBackorder,
-      });
-      setManageStock(nextManage);
-      setBackorderEnabled(nextBackorder);
-      setInfo(t('inventoryTab.stockMgmt.saved'));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('inventoryTab.error.save'));
-    } finally {
-      setStockMgmtSaving(false);
-    }
-  };
-
-  const handleSaveLowStock = async (): Promise<void> => {
-    setLowStockSaving(true);
-    setError(null);
-    setInfo(null);
-    try {
-      const trimmed = lowStockThreshold.trim();
-      const value =
-        trimmed === '' ? null : Math.max(0, Number.parseInt(trimmed, 10) || 0);
-      await apiClient.patch(`/api/v1/admin/catalog/products/${productId}`, {
-        lowStockThreshold: value,
-      });
-      setInfo(t('inventoryTab.lowStock.success'));
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.envelope.error.message
-          : t('inventoryTab.lowStock.error'),
-      );
-    } finally {
-      setLowStockSaving(false);
-    }
-  };
-
-  const handleSaveWarehouseThreshold = async (warehouseId: string): Promise<void> => {
-    const raw = thresholdDraft.get(warehouseId) ?? '';
+  /** A threshold draft as the value it would write: empty is "inherit", anything else a non-negative integer. */
+  const thresholdFromDraft = (raw: string): number | null => {
     const trimmed = raw.trim();
-    const threshold = trimmed === '' ? null : Math.max(0, Number.parseInt(trimmed, 10) || 0);
+    return trimmed === '' ? null : Math.max(0, Number.parseInt(trimmed, 10) || 0);
+  };
+  const onHandFromDraft = (raw: string): number => Math.max(0, Number.parseInt(raw, 10) || 0);
+
+  const handleSaveWarehouseThreshold = async (warehouse: Warehouse): Promise<void> => {
+    const warehouseId = warehouse.id;
+    const threshold = thresholdFromDraft(thresholdDraft.get(warehouseId) ?? '');
     setSavingThreshold(warehouseId);
     setError(null);
-    setInfo(null);
+    status.clear();
     try {
       await apiClient.put('/api/v1/admin/inventory/warehouse-low-stock-thresholds', {
         productId,
@@ -252,7 +226,7 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
         next.set(warehouseId, threshold);
         return next;
       });
-      setInfo(t('inventoryTab.lowStock.perWarehouseSaved'));
+      status.show(t('inventoryTab.lowStock.perWarehouseSaved', { warehouse: warehouse.name }));
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -264,12 +238,12 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
     }
   };
 
-  const handleSave = async (warehouseId: string): Promise<void> => {
-    const raw = draft.get(warehouseId) ?? '0';
-    const onHand = Math.max(0, Number.parseInt(raw, 10) || 0);
+  const handleSave = async (warehouse: Warehouse): Promise<void> => {
+    const warehouseId = warehouse.id;
+    const onHand = onHandFromDraft(draft.get(warehouseId) ?? '0');
     setSaving(warehouseId);
     setError(null);
-    setInfo(null);
+    status.clear();
     try {
       const res = await apiClient.put<SetStockResponse>('/api/v1/admin/inventory/levels', {
         productId,
@@ -281,7 +255,7 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
         next.set(warehouseId, res.data.after);
         return next;
       });
-      setInfo(t('inventoryTab.success.save', { value: res.data.after }));
+      status.show(t('inventoryTab.success.save', { warehouse: warehouse.name, value: res.data.after }));
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('inventoryTab.error.save'));
     } finally {
@@ -289,213 +263,149 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
     }
   };
 
-  if (loading) return <div className="b2b-help">{t('inventoryTab.loading')}</div>;
+  if (loading) {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        {t('inventoryTab.loading')}
+      </p>
+    );
+  }
 
   return (
-    <div className="b2b-col" style={{ gap: 16 }}>
-      <div className="b2b-card">
-        <div className="b2b-card__head">
-          <h2>{t('inventoryTab.stockMgmt.title')}</h2>
-        </div>
-        <div className="b2b-card__body b2b-col" style={{ gap: 12 }}>
-          <label className="b2b-row" style={{ gap: 8, alignItems: 'flex-start' }}>
-            <input
-              type="checkbox"
-              checked={!manageStock}
-              disabled={stockMgmtSaving}
-              onChange={(e): void => {
-                void handleSaveStockMgmt({ manageStock: !e.target.checked });
-              }}
-            />
-            <span>
-              <div>{t('inventoryTab.stockMgmt.disableManageStock')}</div>
-              <div className="b2b-help">{t('inventoryTab.stockMgmt.disableManageStockHelp')}</div>
-            </span>
-          </label>
-
-          <label className="b2b-row" style={{ gap: 8, alignItems: 'flex-start' }}>
-            <input
-              type="checkbox"
-              checked={backorderEnabled}
-              disabled={stockMgmtSaving || manageStock === false || !allowNegativeGlobal}
-              onChange={(e): void => {
-                void handleSaveStockMgmt({ backorderEnabled: e.target.checked });
-              }}
-            />
-            <span>
-              <div>{t('inventoryTab.stockMgmt.backorder')}</div>
-              <div className="b2b-help">
-                {!allowNegativeGlobal
-                  ? t('inventoryTab.stockMgmt.backorderGloballyDisabled')
-                  : manageStock === false
-                    ? t('inventoryTab.stockMgmt.backorderUnmanaged')
-                    : t('inventoryTab.stockMgmt.backorderHelp')}
-              </div>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div className="b2b-card" style={{ padding: 12 }}>
-        <div className="b2b-row" style={{ gap: 16 }}>
-          <div>
-            <div className="b2b-muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>
-              {t('inventoryTab.summary.cumulativeOnHand')}
-            </div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{totalOnHand.toLocaleString()}</div>
-          </div>
-          <div>
-            <div className="b2b-muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>
-              {t('inventoryTab.summary.activeWarehouses')}
-            </div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{warehouses.length}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="b2b-card">
-        <div className="b2b-card__head">
-          <h2>{t('inventoryTab.lowStock.title')}</h2>
-        </div>
-        <div className="b2b-card__body">
-          <div className="b2b-row" style={{ gap: 16, alignItems: 'flex-start', marginBottom: 12 }}>
-            <label className="b2b-row" style={{ gap: 6, alignItems: 'center' }}>
-              <input
-                type="radio"
-                name={`low-stock-mode-${productId}`}
-                checked={mode === 'cumulative'}
-                disabled={modeSaving}
-                onChange={(): void => { void handleModeChange('cumulative'); }}
-              />
-              {t('inventoryTab.lowStock.modeCumulative')}
-            </label>
-            <label className="b2b-row" style={{ gap: 6, alignItems: 'center' }}>
-              <input
-                type="radio"
-                name={`low-stock-mode-${productId}`}
-                checked={mode === 'per_warehouse'}
-                disabled={modeSaving}
-                onChange={(): void => { void handleModeChange('per_warehouse'); }}
-              />
-              {t('inventoryTab.lowStock.modePerWarehouse')}
-            </label>
-          </div>
-
-          {mode === 'cumulative' ? (
-            <>
-              <div className="b2b-row" style={{ gap: 8, alignItems: 'flex-end' }}>
-                <div style={{ minWidth: 220 }}>
-                  <input
-                    className="b2b-field"
-                    type="number"
-                    min="0"
-                    value={lowStockThreshold}
-                    placeholder={t('inventoryTab.lowStock.placeholder')}
-                    onChange={(e): void => setLowStockThreshold(e.target.value)}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="b2b-btn b2b-btn--primary b2b-btn--sm"
-                  onClick={(): void => { void handleSaveLowStock(); }}
-                  disabled={lowStockSaving}
-                >
-                  {lowStockSaving
-                    ? t('inventoryTab.lowStock.saving')
-                    : t('inventoryTab.lowStock.save')}
-                </button>
-              </div>
-              <div className="b2b-help" style={{ marginTop: 6 }}>
-                {t('inventoryTab.lowStock.help')}
-              </div>
-            </>
-          ) : (
-            <div className="b2b-help">
-              {t('inventoryTab.lowStock.perWarehouseHelp')}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="b2b-card">
-        <div className="b2b-card__head">
-          <h2>{t('inventoryTab.fulfilment.title')}</h2>
-        </div>
-        <div className="b2b-card__body">
-          <FulfilmentStrategyPicker
-            value={fulfilment}
-            onChange={setFulfilment}
-            warehouses={warehouses.map((w) => ({ id: w.id, code: w.code, name: w.name }))}
-            allowInherit
-            idPrefix={`product-${productId}`}
+    // Issue #1488 (CAT-06): sections of the editor's card, not cards inside it. A fragment, so
+    // they are siblings of the tab's other sections and take the rule between them.
+    <>
+      <EditorSection title={t('inventoryTab.stockMgmt.title')}>
+        {/* A positive state, not "Disable stock management" checked when it is off (Mental Model). */}
+        <SettingRow label={t('inventoryTab.stockMgmt.trackStock')}>
+          <Switch checked={manageStock} onCheckedChange={(next): void => stage('manageStock', next)} />
+        </SettingRow>
+        <SettingRow
+          label={t('inventoryTab.stockMgmt.backorder')}
+          description={
+            !allowNegativeGlobal
+              ? t('inventoryTab.stockMgmt.backorderGloballyDisabled')
+              : !manageStock
+                ? t('inventoryTab.stockMgmt.backorderUnmanaged')
+                : t('inventoryTab.stockMgmt.backorderHelp')
+          }
+        >
+          {/* The reason it is unavailable is the row's description, already on screen. */}
+          <Switch
+            checked={backorderEnabled}
+            disabled={!manageStock || !allowNegativeGlobal}
+            onCheckedChange={(next): void => stage('backorderEnabled', next)}
           />
-          <div style={{ marginTop: 12 }}>
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--primary b2b-btn--sm"
-              onClick={(): void => { void handleSaveFulfilment(); }}
-              disabled={fulfilmentSaving}
-            >
-              {fulfilmentSaving ? t('inventoryTab.lowStock.saving') : t('inventoryTab.lowStock.save')}
-            </button>
-          </div>
+        </SettingRow>
+      </EditorSection>
+
+      <EditorSection title={t('inventoryTab.lowStock.title')}>
+        {/* Issue #1492 (CAT-17): one radio group, named by its section, so the choice says what
+            it is about; each label is the whole target (Fitts). */}
+        <div role="radiogroup" aria-label={t('inventoryTab.lowStock.title')} className="mb-3 flex flex-wrap gap-4">
+          {(['cumulative', 'per_warehouse'] as const).map((value) => (
+            <label key={value} className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="radio"
+                className="size-4 accent-primary"
+                name={`low-stock-mode-${productId}`}
+                checked={mode === value}
+                onChange={(): void => stage('lowStockThresholdMode', value)}
+              />
+              {value === 'cumulative'
+                ? t('inventoryTab.lowStock.modeCumulative')
+                : t('inventoryTab.lowStock.modePerWarehouse')}
+            </label>
+          ))}
         </div>
-      </div>
+
+        {mode === 'cumulative' ? (
+          <div className="space-y-1">
+            <Input
+              className="max-w-56"
+              type="number"
+              min="0"
+              aria-label={t('inventoryTab.lowStock.title')}
+              aria-describedby={`low-stock-help-${productId}`}
+              value={lowStockThreshold}
+              placeholder={t('inventoryTab.lowStock.placeholder')}
+              onChange={(e): void => setLowStockThreshold(e.target.value)}
+            />
+            <p id={`low-stock-help-${productId}`} className="text-xs text-muted-foreground">
+              {t('inventoryTab.lowStock.help')}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('inventoryTab.lowStock.perWarehouseHelp')}</p>
+        )}
+      </EditorSection>
+
+      <EditorSection title={t('inventoryTab.fulfilment.title')}>
+        <FulfilmentStrategyPicker
+          value={fulfilment}
+          onChange={setFulfilment}
+          warehouses={warehouses.map((w) => ({ id: w.id, code: w.code, name: w.name }))}
+          allowInherit
+          idPrefix={`product-${productId}`}
+        />
+      </EditorSection>
 
       {error ? (
-        <div
-          className="b2b-card"
-          style={{ background: 'var(--danger-soft)', color: 'var(--danger-soft-fg)', padding: 10 }}
-        >
-          {error}
-        </div>
-      ) : null}
-      {info ? (
-        <div
-          className="b2b-card"
-          style={{ background: 'var(--success-soft)', color: 'var(--success-soft-fg)', padding: 10 }}
-        >
-          {info}
-        </div>
+        <Alert variant="destructive">{error === LOAD_FAILED ? t('inventoryTab.error.load') : error}</Alert>
       ) : null}
 
-      <div className="b2b-card">
-        <div className="b2b-card__head"><h2>{t('inventoryTab.table.title')}</h2></div>
-        <table className="b2b-tbl">
-          <thead>
-            <tr>
-              <th>{t('inventoryTab.column.warehouse')}</th>
-              <th>{t('inventoryTab.column.code')}</th>
-              <th className="num">{t('inventoryTab.column.onHand')}</th>
-              <th className="num">{t('inventoryTab.column.newValue')}</th>
-              <th />
+      {/* Per-warehouse stock and thresholds write at once, each its own audited command. The
+          stock summary is the section's stat line, not a box of its own (#1488). */}
+      <EditorSection
+        title={
+          <>
+            {t('inventoryTab.table.title')}
+            {editable ? <ImmediateBadge /> : null}
+          </>
+        }
+        description={t('inventoryTab.summary.line', {
+          onHand: totalOnHand.toLocaleString(),
+          warehouses: String(warehouses.length),
+        })}
+        // Mounted before it has text, so the result of a row's Apply is announced (WCAG 4.1.3).
+        action={<InlineStatus {...status.props} />}
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('inventoryTab.column.warehouse')}</TableHead>
+              <TableHead>{t('inventoryTab.column.code')}</TableHead>
+              <TableHead className="text-right">{t('inventoryTab.column.onHand')}</TableHead>
+              <TableHead className="text-right">{t('inventoryTab.column.newValue')}</TableHead>
+              <TableHead className="w-[1%]" />
               {mode === 'per_warehouse' ? (
                 <>
-                  <th className="num">{t('inventoryTab.column.threshold')}</th>
-                  <th />
+                  <TableHead className="text-right">{t('inventoryTab.column.threshold')}</TableHead>
+                  <TableHead className="w-[1%]" />
                 </>
               ) : null}
-            </tr>
-          </thead>
-          <tbody>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {warehouses.map((w) => {
               const current = perWarehouse.get(w.id) ?? 0;
               const resolvedThreshold = perWarehouseThreshold.get(w.id) ?? null;
               const draftValue = thresholdDraft.get(w.id) ?? '';
+              const onHandDraft = draft.get(w.id) ?? '0';
+              const stockChanged = onHandFromDraft(onHandDraft) !== current;
+              const thresholdChanged = thresholdFromDraft(draftValue) !== resolvedThreshold;
               return (
-                <tr key={w.id}>
-                  <td>{w.name}</td>
-                  <td>
-                    <span className="b2b-mono" style={{ fontSize: 12 }}>{w.code}</span>
-                  </td>
-                  <td className="num b2b-tabular">{current.toLocaleString()}</td>
-                  <td>
-                    <input
-                      className="b2b-field"
+                <TableRow key={w.id}>
+                  <TableCell>{w.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{w.code}</TableCell>
+                  <TableCell className="text-right tabular-nums">{current.toLocaleString()}</TableCell>
+                  <TableCell className="text-right">
+                    <Input
+                      className="ml-auto w-24 text-right"
                       type="number"
                       min="0"
-                      style={{ width: 100, textAlign: 'right' }}
-                      value={draft.get(w.id) ?? '0'}
+                      aria-label={t('inventoryTab.column.newValueFor', { warehouse: w.name })}
+                      value={onHandDraft}
                       onChange={(e): void =>
                         setDraft((prev) => {
                           const next = new Map(prev);
@@ -504,25 +414,24 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
                         })
                       }
                     />
-                  </td>
-                  <td className="actions">
-                    <button
-                      type="button"
-                      className="b2b-btn b2b-btn--primary b2b-btn--sm"
-                      onClick={(): void => { void handleSave(w.id); }}
-                      disabled={saving === w.id}
-                    >
-                      {saving === w.id ? 'Saving…' : 'Save'}
-                    </button>
-                  </td>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <RowApplyButton
+                      label={t('inventoryTab.action.applyStockFor', { warehouse: w.name })}
+                      text={t('inventoryTab.action.apply')}
+                      busy={saving === w.id}
+                      disabled={!stockChanged}
+                      onApply={(): void => { void handleSave(w); }}
+                    />
+                  </TableCell>
                   {mode === 'per_warehouse' ? (
                     <>
-                      <td>
-                        <input
-                          className="b2b-field"
+                      <TableCell className="text-right">
+                        <Input
+                          className="ml-auto w-28 text-right"
                           type="number"
                           min="0"
-                          style={{ width: 110, textAlign: 'right' }}
+                          aria-label={t('inventoryTab.column.thresholdFor', { warehouse: w.name })}
                           value={draftValue}
                           placeholder={
                             resolvedThreshold != null
@@ -537,27 +446,61 @@ export function ProductInventoryTab({ productId }: { productId: string }): React
                             })
                           }
                         />
-                      </td>
-                      <td className="actions">
-                        <button
-                          type="button"
-                          className="b2b-btn b2b-btn--default b2b-btn--sm"
-                          onClick={(): void => { void handleSaveWarehouseThreshold(w.id); }}
-                          disabled={savingThreshold === w.id}
-                        >
-                          {savingThreshold === w.id
-                            ? t('inventoryTab.lowStock.saving')
-                            : t('inventoryTab.lowStock.save')}
-                        </button>
-                      </td>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <RowApplyButton
+                          label={t('inventoryTab.action.applyThresholdFor', { warehouse: w.name })}
+                          text={t('inventoryTab.action.apply')}
+                          busy={savingThreshold === w.id}
+                          disabled={!thresholdChanged}
+                          onApply={(): void => { void handleSaveWarehouseThreshold(w); }}
+                        />
+                      </TableCell>
                     </>
                   ) : null}
-                </tr>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+          </TableBody>
+        </Table>
+      </EditorSection>
+    </>
+  );
+}
+
+/**
+ * A per-warehouse row's immediate write. `outline`, never filled: the editor's one
+ * Save is the page's only primary (DS-07, #1441). Its visible word stays "Apply"
+ * while the write is in flight — a spinner and `aria-busy` say busy — so the
+ * accessible name, which adds the warehouse, keeps containing the visible label
+ * (WCAG 2.5.3) and the row does not reflow. Disabled while busy (no double write,
+ * Doherty) and while the draft equals what is stored (nothing to apply).
+ */
+function RowApplyButton({
+  label,
+  text,
+  busy,
+  disabled,
+  onApply,
+}: {
+  label: string;
+  text: string;
+  busy: boolean;
+  disabled: boolean;
+  onApply: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-label={label}
+      aria-busy={busy ? true : undefined}
+      disabled={busy || disabled}
+      onClick={onApply}
+    >
+      {busy ? <Loader2 aria-hidden="true" className="motion-safe:animate-spin" /> : null}
+      {text}
+    </Button>
   );
 }

@@ -5,12 +5,16 @@ import {
   type FederatedProvider,
   type FederatedSignInState,
 } from '../lib/federated-sign-in';
+import { FEDERATED_SIGN_IN_START_PATH } from '../lib/auth/federated-sign-in-start-path';
 
 /**
  * Federated sign-in buttons (feature 042, US4; corrected by issue #193).
  *
- * Anchor links to the backend OAuth `start` endpoint — absolute, because the
- * hand-off runs in the browser against the backend origin.
+ * Anchor links to the storefront's own start route (`/auth/federated/start`,
+ * issue #1279) — relative, because the flow starts and ends on this host: the
+ * route binds the attempt to the browser with a cookie here and only then
+ * sends it to the API's OAuth `start`, which may be on another host. The route
+ * also names the sales channel to the API, from the request's stamped channel.
  *
  * **A provider the platform cannot complete a sign-in with is absent, not
  * disabled.** The caller resolves that (module presence AND provider
@@ -43,13 +47,11 @@ import {
  * failed presence read must not be able to fabricate buttons.
  */
 export function SocialLoginButtons({
-  backendBaseUrl,
   next,
   locale,
   modulePresent,
   availableProviders,
 }: {
-  backendBaseUrl: string;
   next: string;
   locale: string;
   /** `mfa` effective presence, projected from `/module-presence`. */
@@ -65,7 +67,7 @@ export function SocialLoginButtons({
 
   const t = tForLocale(locale);
   const href = (provider: FederatedProvider): string =>
-    `${backendBaseUrl}/api/v1/auth/customer/oauth/${provider}/start?next=${encodeURIComponent(next)}`;
+    `${FEDERATED_SIGN_IN_START_PATH}?provider=${provider}&next=${encodeURIComponent(next)}`;
 
   return (
     <div

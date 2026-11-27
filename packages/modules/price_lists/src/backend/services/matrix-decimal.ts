@@ -1,36 +1,39 @@
 /**
  * Integer decimal arithmetic for matrix prices (feature 148, research R17/R18).
  *
- * Amounts are `numeric(14,4)` and percentages `numeric(5,2)`, and both travel as
- * strings. A percentage price is the one place this module *computes* an
- * amount rather than reading one, so it is computed on integers: amounts in
- * ten-thousandths, percentages in hundredths, one multiplication and one
- * half-up rounding back to four fractional digits — the precision a typed
- * bracket is stored at, so a computed price and a typed one are
- * indistinguishable to carts and orders. A double carries fifteen significant
- * digits and `numeric(14,4)` eighteen, which is why nothing here goes through
- * `Number`. No dependency: one multiplication does not justify one
- * (Constitution IV).
+ * The price-book helpers — `parseUnits`, `formatUnits`, `parseSignedUnits`,
+ * `parseSignedPercentHundredths`, `applySignedPercent`, `applyAmountAdjustment`,
+ * `normaliseAmount` and `compareDecimal` — live in `@endora-commerce/contracts`
+ * (`price-book-decimal.ts`, feature 161 G17) so the admin's previews round
+ * exactly as the resolver does; they are re-exported here so the resolver's
+ * imports stay as they were and the server keeps **one** implementation. What
+ * remains below is built on them and is used by this module alone: the
+ * normalisation of stored signed values, the duplicate's multiplier, and the
+ * old `discount_percent` helpers of feature 148.
  */
+import {
+  applyAmountAdjustment,
+  applySignedPercent,
+  compareDecimal,
+  formatUnits,
+  normaliseAmount,
+  parseSignedPercentHundredths,
+  parseSignedUnits,
+  parseUnits,
+} from '@endora-commerce/contracts';
 
-const AMOUNT = /^(\d+)(?:\.(\d{1,4}))?$/;
+export {
+  applyAmountAdjustment,
+  applySignedPercent,
+  compareDecimal,
+  formatUnits,
+  normaliseAmount,
+  parseSignedPercentHundredths,
+  parseSignedUnits,
+  parseUnits,
+};
+
 const PERCENT = /^(\d{1,3})(?:\.(\d{1,2}))?$/;
-
-/** A non-negative decimal string with up to four fractional digits, as ten-thousandths. */
-export function parseUnits(value: string): bigint {
-  const match = AMOUNT.exec(value);
-  if (!match) throw new Error(`Not a decimal amount with up to 4 fractional digits: "${value}"`);
-  return BigInt(match[1]!) * 10_000n + BigInt((match[2] ?? '').padEnd(4, '0'));
-}
-
-/** Ten-thousandths as a decimal string with exactly four fractional digits. */
-export function formatUnits(units: bigint): string {
-  const negative = units < 0n;
-  const abs = negative ? -units : units;
-  const whole = abs / 10_000n;
-  const fraction = (abs % 10_000n).toString().padStart(4, '0');
-  return `${negative ? '-' : ''}${whole.toString()}.${fraction}`;
-}
 
 /** A percentage with up to two fractional digits, as hundredths of a percent. */
 export function parsePercentHundredths(value: string): bigint {
@@ -52,9 +55,34 @@ export function applyDiscountPercent(reference: string, percent: string): string
   return formatUnits((units * keep + 5_000n) / 10_000n);
 }
 
-/** Numeric comparison of two non-negative decimal strings: −1, 0 or 1. */
-export function compareDecimal(a: string, b: string): -1 | 0 | 1 {
-  const x = parseUnits(a);
-  const y = parseUnits(b);
-  return x < y ? -1 : x > y ? 1 : 0;
+/** A signed decimal string normalised to four fractional digits. */
+export function normaliseSignedAmount(value: string): string {
+  return formatUnits(parseSignedUnits(value));
+}
+
+/** A signed percentage normalised to two fractional digits (the column's scale). */
+export function normaliseSignedPercent(value: string): string {
+  const hundredths = parseSignedPercentHundredths(value);
+  const negative = hundredths < 0n;
+  const abs = negative ? -hundredths : hundredths;
+  return `${negative ? '-' : ''}${(abs / 100n).toString()}.${(abs % 100n).toString().padStart(2, '0')}`;
+}
+
+const MULTIPLIER = /^(\d{1,6})(?:\.(\d{1,6}))?$/;
+
+/**
+ * `value × multiplier`, rounded half-up (half away from zero) to four
+ * fractional digits — a duplicated book's fixed and amount rows (FR-036). The
+ * multiplier carries up to six fractional digits, so the product is exact in
+ * millionths of a ten-thousandth before the one rounding step.
+ */
+export function multiplySignedAmount(value: string, multiplier: string): string {
+  const match = MULTIPLIER.exec(multiplier);
+  if (!match) throw new Error(`Not a multiplier with up to 6 fractional digits: "${multiplier}"`);
+  const factor = BigInt(match[1]!) * 1_000_000n + BigInt((match[2] ?? '').padEnd(6, '0'));
+  const units = parseSignedUnits(value);
+  const negative = units < 0n;
+  const product = (negative ? -units : units) * factor;
+  const rounded = (product + 500_000n) / 1_000_000n;
+  return formatUnits(negative && rounded !== 0n ? -rounded : rounded);
 }

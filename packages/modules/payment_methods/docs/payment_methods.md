@@ -1,9 +1,9 @@
 ---
-title: payment_methods
+title: Payment methods
 description: Configured payment methods
 ---
 
-# `payment_methods`
+# Payment methods (`payment_methods`)
 
 CRUD over the configured payment methods that Customers can pick at
 checkout. Each `PaymentMethod` row is backed by a registered **adapter**
@@ -43,7 +43,7 @@ holder reaches the shared list any more.
 | `GET /api/v1/admin/order-statuses` | admin | `payment_methods:read` **or** `delivery_methods:read` | Order-status options for the `statusOn*` selectors, here and on the delivery-method screen |
 | `PUT /api/v1/admin/payment-methods/:code` | admin | `payment_methods:write` | Upsert by code; `adapter` defaults to `kind`, `statusOn*` validated against the order-status registry |
 | `PATCH /api/v1/admin/payment-methods/:id/status` | admin | `payment_methods:write` | Availability alone — the one write the four gateway screens link to |
-| `DELETE /api/v1/admin/payment-methods/:id` | admin | `payment_methods:write` | Delete — blocked (409) when a `Payment` references the method; set it `inactive` instead |
+| `DELETE /api/v1/admin/payment-methods/:id` | admin | `payment_methods:write` | Delete — blocked with `409 PAYMENT_METHOD_IN_USE` (`details`: `paymentMethodId`, `paymentMethodCode`, `paymentCount`) when a `Payment` references the method, and with `409 PAYMENT_METHOD_USAGE_UNKNOWN` (`details`: `paymentMethodId`, `module: "payments"`) while the `payments` module is off; set it `inactive` instead. Both were `409 VALIDATION_FAILED` until issue #635 |
 
 ## Entities
 
@@ -95,7 +95,7 @@ condition. The bundled `bank_transfer`, `pickup`, `credit_limit`, and
 
 `Payment.status` (the payment-process status: `awaiting_payment → paid |
 failed`, plus `deferred` for credit limit) is **separate** from the
-order-status mapping. `statusOn*` reference *Order Statuses* resolved through
+order-status mapping. `statusOn*` reference *Order statuses* resolved through
 the `OrderStatusRegistry` port — enum-backed today, swappable for the Orders
 module's configurable registry later with no change here.
 
@@ -183,7 +183,7 @@ The assignment is enforced where a buyer meets it:
   earlier release needs the same change in `lib/api/methods.ts`, or it is
   answered with the default channel's methods.
 - Placing an order, and previewing its total, refuses a method that is not
-  offered in the order's sales channel with `400 VALIDATION_FAILED` and
+  offered in the order's sales channel with `400 ORDER_PAYMENT_METHOD_UNAVAILABLE` and
   `details.code = "payment_method_not_in_sales_channel"`. That holds for a
   storefront checkout, for one-click buy, for an order an administrator creates
   on a customer's behalf (the channel chosen for the order) and for an API-key
@@ -244,3 +244,10 @@ platform's sales-channel membership service.
 active methods are offered; non-empty ⇒ only the listed methods. Use it to
 filter the methods a given Organization may use. Managed through the
 organizations restriction service / admin restrictions UI.
+
+## Methods for a related payer {#methods-for-a-related-payer}
+
+`GET /api/v1/payment-methods?payerOrganizationId=` lists the methods for an order paid by a related
+payer (the *Related payers* module): the module's policy port first vouches that the buyer may use
+that payer, then the **payer's** allow-list applies instead of the buyer's. While the module is off a
+request naming a payer answers `503 MODULE_DISABLED`; every other listing is unaffected.

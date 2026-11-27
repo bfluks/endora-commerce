@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property, Unique } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy';
 import { CustomerScoped } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -13,19 +14,29 @@ import { randomUUID } from 'crypto';
  *   abandoned    → active     (owner activity)
  *   active       → completed  (checkout success OR cart→QR conversion)
  *   active       → rejected   (org-admin reject OR platform-admin reject)
+ *   working      → completed  (placement of the order it was created for)
  *
- * Legacy `converted` was migrated to `completed` by migration 050. Mass
- * code in the repo that previously wrote `'converted'` now writes
- * `'completed'` (CartService.clearForCustomer).
+ * `working` (issue #169) is a basket the platform places an order from on the
+ * customer's behalf — admin order creation, one-click buy, the external order
+ * intake — written from the request's lines beside the customer's active
+ * basket, which it never touches. It is never the customer's basket: not
+ * unique per channel, not swept, not listed. Placement completes it against
+ * the order (`completed_order_id`) or removes it when it refuses.
+ *
+ * Legacy `converted` was migrated to `completed` by migration 050; the
+ * quote-request conversion, which wrote `'converted'`, now writes
+ * `'completed'` beside `converted_to_quote_request_id`.
  *
  * `approval_status` is the orthogonal sub-state that gates checkout when
- * the Organization's `requires_cart_approval` policy is `true`. Self-
- * approval exemption: a cart created by an Org Admin is born with
- * `approval_status='not_required'` regardless of the policy. Post-approval
- * mutation re-arms `approved → pending` (see CartApprovalService).
+ * the owner's organization role lacks `carts.order_without_approval`
+ * (`specs/170-organization-roles/`, OR-3 — it replaced the Organization's
+ * `requires_cart_approval` policy and the administrator exemption). Every
+ * cart is born `not_required`; placement judges the owner's permission, not
+ * this column alone (research R-25). Post-approval mutation re-arms
+ * `approved → pending` (see CartApprovalService).
  *
  * `version` is the optimistic-lock token used by the approval / mutation
- * race (buyer-vs-Org-Admin) — aligned with the convention shared by
+ * race (buyer-vs-approver) — aligned with the convention shared by
  * features 003 / 026.
  */
 @CustomerScoped()
@@ -48,6 +59,8 @@ export class Cart {
     | 'rejectedByActor'
     | 'rejectedReason'
     | 'appliedPromotionCode'
+    | 'buyingForOrganizationId'
+    | 'buyingForTerms'
     | 'completedOrderId'
     | 'convertedToQuoteRequestId'
     | 'sourceQuoteRequestId'
@@ -125,9 +138,14 @@ export class Cart {
    *
    * Nullable, and it stays nullable. It cannot be backfilled — no surviving
    * record says which order emptied which historical cart — and
-   * `status = 'completed'` does not imply it: `CartService.clearForCustomer`,
-   * the anonymous-merge source and the quote-request conversion all reach
-   * `completed` without an order.
+   * `status = 'completed'` does not imply it. Two paths reach `completed`
+   * without an order, and each leaves its own record of why: the
+   * quote-request conversion sets {@link convertedToQuoteRequestId}, and the
+   * source basket of an anonymous-into-customer merge is left with neither a
+   * customer nor an {@link anonymousCartToken}. Every basket an order is placed
+   * from — the customer's own or a `working` one — is completed against the
+   * order. No other path reaches `completed`: the published write port has no
+   * operation that empties a basket and closes it without an order (issue #601).
    */
   @Property({ type: 'uuid', nullable: true })
   completedOrderId?: string | null;
@@ -150,6 +168,19 @@ export class Cart {
    */
   @Property({ type: 'uuid', nullable: true })
   sourceQuoteRequestId?: string | null;
+
+  /**
+   * `specs/182-related-payers/` FR-110 — *Buying for*: the payer whose commercial terms price
+   * this basket, or `null` for the buyer's own. Set and cleared only by `CartBuyingForService`,
+   * which asks `relatedPayerPolicyPort` first; reset on a read that finds the link unusable
+   * (FR-116); cleared on completion.
+   */
+  @Property({ type: 'uuid', nullable: true })
+  buyingForOrganizationId?: string | null;
+
+  /** The terms the link carried when *Buying for* was chosen; `null` with no payer. */
+  @Property({ type: 'string', length: 8, nullable: true })
+  buyingForTerms?: 'buyer' | 'payer' | null;
 
   /**
    * Idempotency stamp for the abandonment-sweep notification. Cleared on
@@ -177,13 +208,14 @@ export class Cart {
   updatedAt: Date = new Date();
 }
 
-export type CartStatus = 'active' | 'abandoned' | 'completed' | 'rejected';
+export type CartStatus = 'active' | 'abandoned' | 'completed' | 'rejected' | 'working';
 
 export const CART_STATUSES: readonly CartStatus[] = [
   'active',
   'abandoned',
   'completed',
   'rejected',
+  'working',
 ] as const;
 
 export type CartApprovalStatus =

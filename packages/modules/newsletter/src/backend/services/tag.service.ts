@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, type CreateNewsletterTagRequest, type NewsletterTag as NewsletterTagDto, type UpdateNewsletterTagRequest } from '@endora-commerce/contracts';
+import { ERROR_CODES, type CreateNewsletterTagRequest, type NewsletterTag as NewsletterTagDto, type UpdateNewsletterTagRequest, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { NewsletterTag } from '../entities/newsletter-tag.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
@@ -33,7 +33,13 @@ export class NewsletterTagService {
   async create(input: CreateNewsletterTagRequest): Promise<NewsletterTagDto> {
     const em = this.emFactory();
     const existing = await em.findOne(NewsletterTag, { code: input.code });
-    if (existing) throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Tag code already exists.');
+    // `tagCode`, not `code`: the error envelope reads `details.code` as the
+    // refusal token that picks the sentence.
+    if (existing) {
+      throw new HttpError(409, ERROR_CODES.NEWSLETTER_TAG_CODE_TAKEN, 'Tag code already exists.', {
+        tagCode: input.code,
+      });
+    }
     const tag = em.create(NewsletterTag, {
       code: input.code,
       name: input.name,
@@ -47,17 +53,19 @@ export class NewsletterTagService {
 
   async update(id: string, input: UpdateNewsletterTagRequest): Promise<NewsletterTagDto> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Tag not found.');
     const tag = await em.findOne(NewsletterTag, { id });
     if (!tag) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Tag not found.');
     if (input.name !== undefined) tag.name = input.name;
     if (input.description !== undefined) tag.description = input.description;
     this.#audit(em, 'newsletter_tag.update', tag.id, { name: tag.name });
-    await em.persistAndFlush(tag);
+    await em.persist(tag).flush();
     return this.toDto(tag);
   }
 
   async remove(id: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Tag not found.');
     const tag = await em.findOne(NewsletterTag, { id });
     if (!tag) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Tag not found.');
     // Guard: block delete if referenced by a campaign target or automation trigger.
@@ -70,13 +78,14 @@ export class NewsletterTagService {
       em.getTransactionContext(),
     )) as unknown[];
     if (refs.length > 0) {
-      throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Tag is used by a campaign or automation.', {
-        code: 'tag_in_use',
+      throw new HttpError(409, ERROR_CODES.NEWSLETTER_TAG_IN_USE, 'Tag is used by a campaign or automation.', {
+        tagId: tag.id,
+        tagCode: tag.code,
       });
     }
     // Subscriber-tag bridge rows cascade via FK.
     this.#audit(em, 'newsletter_tag.delete', tag.id, null);
-    await em.removeAndFlush(tag);
+    await em.remove(tag).flush();
   }
 
   private toDto(t: NewsletterTag): NewsletterTagDto {

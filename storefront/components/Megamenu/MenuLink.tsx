@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { ResolvedMenuItem } from '@endora-commerce/contracts';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 interface MenuLinkProps {
   item: ResolvedMenuItem;
@@ -21,7 +22,7 @@ export function MenuLink({ item, className, onClick }: MenuLinkProps): ReactNode
   const icon = item.icon ?? null;
   const baseClass = `inline-flex items-center gap-2 ${className ?? ''}`;
   return (
-    <a href={item.url} className={baseClass} {...(onClick ? { onClick } : {})}>
+    <LocalizedAnchor href={item.url} className={baseClass} {...(onClick ? { onClick } : {})}>
       {icon && icon.position === 'left' ? (
         <img src={icon.url} alt="" className="h-4 w-4 shrink-0" />
       ) : null}
@@ -29,6 +30,6 @@ export function MenuLink({ item, className, onClick }: MenuLinkProps): ReactNode
       {icon && icon.position === 'right' ? (
         <img src={icon.url} alt="" className="h-4 w-4 shrink-0" />
       ) : null}
-    </a>
+    </LocalizedAnchor>
   );
 }

@@ -110,6 +110,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -146,10 +147,16 @@ import {
   evaluateA9,
   evaluateA16,
   evaluateA17,
+  evaluateA18,
+  evaluateA19,
+  evaluateA20,
   type ActorScopeObservation,
   type AdminStylesheetObservation,
   type DivergenceReportEntry,
   type OverlayModuleObservation,
+  type OverlayBuildCase,
+  type OverlayBuildObservation,
+  type OverlaySchemaObservation,
   type TenancyGuardObservation,
   type DocsSiteObservation,
   evaluateA14,
@@ -176,6 +183,7 @@ import {
   type PackageDependencyDeclaration,
   type ShippedFiles,
   type SuppliedPackage,
+  registryModuleIds,
 } from './instance-assertions.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -219,6 +227,26 @@ const OVERLAY_MODULE_ID = 'instance_acceptance_overlay';
 const OVERLAY_REGISTRATION = 'instanceAcceptanceOverlayService';
 const OVERLAY_MARKER = 'decorated-by-the-instance-acceptance-overlay';
 const OVERLAY_PROBE_PATH = '/api/v1/storefront/instance-acceptance-overlay/ping';
+/**
+ * A19's fixture (`specs/190-overlay-full-modules/` T080, #1850): an overlay module that owns one
+ * table, written beside A8's after A18 has put that tree back. A global entity, because the
+ * route's subject is the table and the mapping, not the tenancy filter — the cross-tenant half of
+ * an overlay table is `backend/test/integration/overlay/overlay-table.test.ts`'.
+ */
+const SCHEMA_MODULE_ID = 'instance_acceptance_notes';
+const SCHEMA_MIGRATION_FILE = '20270101T000000_instance_acceptance_notes_init.ts';
+const SCHEMA_MIGRATION = 'Migration20270101T000000InstanceAcceptanceNotesInit';
+const SCHEMA_SEEDED = 'seeded by its own migration';
+const SCHEMA_PROBE_PATH = '/api/v1/storefront/instance-acceptance-notes/list';
+
+/**
+ * A20's fixture (`specs/190-overlay-full-modules/` T049, #1855): an overlay module with an admin
+ * layer — one landing route, its palette action, and a screen rendering {@link ADMIN_MARKER}
+ * through the kit — so the admin built for the deployment can be searched for it.
+ */
+const ADMIN_MODULE_ID = 'instance_acceptance_screens';
+const ADMIN_ROUTE = '/instance-acceptance-screens';
+const ADMIN_MARKER = 'a20-overlay-screen';
 const OVERLAY_REASON =
   'The acceptance criterion writes this overlay module, so R6.3 A8 has an overlay module to ' +
   'compose and a decoration to look for in the rendered report.';
@@ -957,7 +985,10 @@ interface BootObservation {
   readonly healthStatus: number | null;
   /** The module ids the presence route enumerated, in its own order. */
   readonly enumerated: readonly string[] | null;
-  /** `"<METHOD> <path>"` for every endpoint the served OpenAPI document holds. */
+  /**
+   * `"<METHOD> <path>"` for every endpoint the served OpenAPI document holds;
+   * `null` when no administrator session was available to read it with.
+   */
   readonly servedRoutes: readonly string[] | null;
   /** One entry per extra path the caller asked for: its status and its body. */
   readonly probes: ReadonlyMap<string, { status: number; body: unknown }>;
@@ -1018,10 +1049,14 @@ async function bootOnce(
     actorScope: null,
     output,
   });
-  const ask = async (path: string): Promise<{ status: number; body: unknown } | null> => {
+  const ask = async (
+    path: string,
+    cookie?: string,
+  ): Promise<{ status: number; body: unknown } | null> => {
     try {
       const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, {
         signal: AbortSignal.timeout(30_000),
+        ...(cookie === undefined ? {} : { headers: { cookie } }),
       });
       const text = await response.text();
       let body: unknown = text;
@@ -1053,20 +1088,6 @@ async function bootOnce(
             .filter((id): id is string => typeof id === 'string')
         : null;
 
-      // The API surface, read off the document the platform generates from the
-      // routes Fastify actually registered — never off a list of what this
-      // composition was supposed to serve.
-      const document = await ask(OPENAPI_PATH);
-      const paths = (document?.body as { paths?: Record<string, unknown> } | undefined)?.paths;
-      const servedRoutes =
-        document?.status === 200 && paths !== undefined && paths !== null
-          ? Object.entries(paths).flatMap(([path, operations]) =>
-              Object.keys(operations as Record<string, unknown>).map(
-                (method) => `${method.toUpperCase()} ${path}`,
-              ),
-            )
-          : null;
-
       const probes = new Map<string, { status: number; body: unknown }>();
       for (const path of probePaths) {
         const answer = await ask(path);
@@ -1077,6 +1098,7 @@ async function bootOnce(
       // process whose failure would be a different finding.
       let loginStatus: number | null = null;
       let sessionCookie = false;
+      let adminCookie: string | null = null;
       let loginBody = '';
       if (withLogin) {
         try {
@@ -1087,9 +1109,11 @@ async function bootOnce(
             signal: AbortSignal.timeout(20_000),
           });
           loginStatus = login.status;
-          sessionCookie = (login.headers.getSetCookie?.() ?? []).some((cookie) =>
+          const issued = (login.headers.getSetCookie?.() ?? []).find((cookie) =>
             cookie.startsWith(`${ADMIN_SESSION_COOKIE_NAME}=`),
           );
+          sessionCookie = issued !== undefined;
+          adminCookie = issued === undefined ? null : (issued.split(';')[0] ?? null);
           loginBody = await login.text();
         } catch (thrown) {
           // Not a `catch` that decides anything: the transport failing is a
@@ -1098,6 +1122,23 @@ async function bootOnce(
           loginBody = thrown instanceof Error ? thrown.message : String(thrown);
         }
       }
+      // The API surface, read off the document the platform generates from the
+      // routes Fastify actually registered — never off a list of what this
+      // composition was supposed to serve. The document is served to an
+      // administrator holding `platform.api_description.read`, which the
+      // administrator A15 signed in as holds through the wildcard role, so it is
+      // read with that session; without one it is not served and A7 says so.
+      const document = adminCookie === null ? null : await ask(OPENAPI_PATH, adminCookie);
+      const paths = (document?.body as { paths?: Record<string, unknown> } | undefined)?.paths;
+      const servedRoutes =
+        document?.status === 200 && paths !== undefined && paths !== null
+          ? Object.entries(paths).flatMap(([path, operations]) =>
+              Object.keys(operations as Record<string, unknown>).map(
+                (method) => `${method.toUpperCase()} ${path}`,
+              ),
+            )
+          : null;
+
       // A17, after the login it depends on and on the same boot. A login that
       // did not earn a session is A15's finding; asking as nobody would only
       // report it a second time.
@@ -1201,11 +1242,7 @@ function bundleEvidence(adminDist: string): { named: readonly string[]; bytes: n
   for (const file of filesWithSuffix(adminDist, ['.js', '.mjs'])) {
     const text = readFileSync(file, 'utf8');
     bytes += text.length;
-    // The registry's own shape, which survives minification: the property is a
-    // plain object key and esbuild does not mangle one.
-    for (const match of text.matchAll(/moduleId\s*:\s*["']([a-z0-9_]+)["']/g)) {
-      named.add(match[1]!);
-    }
+    for (const moduleId of registryModuleIds(text)) named.add(moduleId);
   }
   return { named: [...named].sort(), bytes };
 }
@@ -1717,6 +1754,265 @@ function renderedDivergence(
  * never has, so the fixture is written after A4 has answered and the arithmetic
  * it breaks is reported as a note.
  */
+/**
+ * A18's probe (`specs/190-overlay-full-modules/` T021, #1848): over the tree A8 left — its
+ * overlay module written and built — break the compiled tree one way at a time, ask the
+ * instance's own processes, and put the tree back exactly, modification times included,
+ * before the next. Then the restored tree has to compose. `migrate` is not asked: since
+ * schema discovery (#1850) it reads the compiled overlay schema, but its configuration is
+ * handed the compiled deployment root alone (`overlay-schema-discovery.md` §3), so it
+ * compares nothing with the sources — A19 asks it over a tree that was built.
+ */
+function measureOverlayBuild(
+  target: string,
+  deployment: string,
+  environment: NodeJS.ProcessEnv,
+): OverlayBuildObservation {
+  const moduleDir = join(target, 'apps', deployment, 'modules', OVERLAY_MODULE_ID);
+  const compiledDir = join(target, 'backend', 'dist', 'apps', deployment, 'modules', OVERLAY_MODULE_ID);
+  const backendSource = join(moduleDir, 'backend.ts');
+  if (!existsSync(backendSource) || !existsSync(join(compiledDir, 'backend.js'))) {
+    return {
+      cases: [],
+      clean: null,
+      failure: `A8 left no built overlay module to break (${backendSource} and its compiled twin)`,
+    };
+  }
+  const status = (): { code: number; output: string } =>
+    run('pnpm', ['run', 'module:status'], { cwd: target, env: environment, timeout: 180_000 });
+  const api = (): { code: number; output: string } =>
+    // A refusal exits at once; a composition that went through would listen until the timeout.
+    run('pnpm', ['-C', 'backend', 'run', 'start'], { cwd: target, env: environment, timeout: 90_000 });
+  const cases: OverlayBuildCase[] = [];
+  const record = (kind: OverlayBuildCase['kind'], probe: OverlayBuildCase['probe'], answer: { code: number; output: string }): void => {
+    cases.push({ kind, probe, code: answer.code, output: answer.output });
+  };
+
+  // stale: an edit after the build, the compiled unit left as it was.
+  const before = readFileSync(backendSource, 'utf8');
+  const times = statSync(backendSource);
+  writeFileSync(backendSource, `${before}\n// A18: edited after the build\n`, 'utf8');
+  const later = new Date(statSync(join(compiledDir, 'backend.js')).mtimeMs + 60_000);
+  utimesSync(backendSource, later, later);
+  record('stale', 'module:status', status());
+  record('stale', 'api', api());
+  writeFileSync(backendSource, before, 'utf8');
+  utimesSync(backendSource, times.atime, times.mtime);
+
+  // unbuilt: a module in the sources that no build has seen.
+  const unbuilt = join(target, 'apps', deployment, 'modules', 'a18_unbuilt');
+  mkdirSync(unbuilt, { recursive: true });
+  writeFileSync(join(unbuilt, 'manifest.ts'), "export const manifest = { id: 'a18_unbuilt' };\n", 'utf8');
+  record('unbuilt', 'module:status', status());
+  rmSync(unbuilt, { recursive: true, force: true });
+
+  // orphan: a compiled unit whose source is gone.
+  const orphan = join(compiledDir, 'a18-orphan.js');
+  writeFileSync(orphan, 'export {};\n', 'utf8');
+  record('orphan', 'module:status', status());
+  rmSync(orphan, { force: true });
+
+  // package-in-disguise: a module that declares itself a package.
+  const disguise = join(moduleDir, 'package.json');
+  writeFileSync(disguise, '{ "name": "a18-disguise" }\n', 'utf8');
+  record('package-in-disguise', 'module:status', status());
+  rmSync(disguise, { force: true });
+
+  return { cases, clean: status() };
+}
+
+/** A19's fixture module, under the deployment's overlay modules root. */
+function writeSchemaOverlayModule(target: string, deployment: string): readonly string[] {
+  const moduleDir = join(target, 'apps', deployment, 'modules', SCHEMA_MODULE_ID);
+  const files: Record<string, string> = {
+    'manifest.ts':
+      `// Written by \`acceptance:instance\` — A19's fixture: an overlay module that owns a table.\n` +
+      `export const manifest = {\n` +
+      `  id: '${SCHEMA_MODULE_ID}',\n` +
+      `  name: 'Instance acceptance notes',\n` +
+      `  description: "The acceptance criterion's overlay module that owns a table.",\n` +
+      `  version: '1.0.0',\n` +
+      `  dependencies: [],\n` +
+      `};\n`,
+    'entities/acceptance-note.entity.ts':
+      `import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';\n` +
+      `import { GlobalEntity } from '${SCOPE}/platform/tenancy';\n` +
+      `\n` +
+      `@GlobalEntity()\n` +
+      `@Entity({ tableName: 'instance_acceptance_notes' })\n` +
+      `export class InstanceAcceptanceNote {\n` +
+      `  @PrimaryKey({ type: 'text' })\n` +
+      `  id!: string;\n` +
+      `\n` +
+      `  @Property({ type: 'text' })\n` +
+      `  body!: string;\n` +
+      `}\n`,
+    [`migrations/${SCHEMA_MIGRATION_FILE}`]:
+      `import { Migration } from '@mikro-orm/migrations';\n` +
+      `\n` +
+      `export class ${SCHEMA_MIGRATION} extends Migration {\n` +
+      `  override async up(): Promise<void> {\n` +
+      `    this.addSql('create table "instance_acceptance_notes" ("id" text not null, "body" text not null, ' +\n` +
+      `      'constraint "instance_acceptance_notes_pkey" primary key ("id"));');\n` +
+      `    this.addSql(\`insert into "instance_acceptance_notes" ("id", "body") values ('a19', '${SCHEMA_SEEDED}');\`);\n` +
+      `  }\n` +
+      `}\n`,
+    'backend.ts':
+      `import type { EntityManager } from '@mikro-orm/core';\n` +
+      `import type { ModuleContext } from '${SCOPE}/platform/kernel';\n` +
+      `import { InstanceAcceptanceNote } from './entities/acceptance-note.entity.js';\n` +
+      `\n` +
+      `export const entities = [InstanceAcceptanceNote];\n` +
+      `\n` +
+      `export function registerModule(ctx: ModuleContext): void {\n` +
+      `  ctx.routes(async (app) => {\n` +
+      `    app.get('${SCHEMA_PROBE_PATH}', async () => {\n` +
+      `      const { emFactory } = ctx.cradle() as { emFactory: () => EntityManager };\n` +
+      `      const notes = await emFactory().find(InstanceAcceptanceNote, {});\n` +
+      `      return { module: '${SCHEMA_MODULE_ID}', bodies: notes.map((note) => note.body) };\n` +
+      `    });\n` +
+      `  });\n` +
+      `}\n`,
+  };
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(moduleDir, path)), { recursive: true });
+    writeFileSync(join(moduleDir, path), content, 'utf8');
+  }
+  return Object.keys(files).map((path) => `apps/${deployment}/modules/${SCHEMA_MODULE_ID}/${path}`);
+}
+
+/** A20's fixture module, under the deployment's overlay modules root. */
+function writeAdminOverlayModule(target: string, deployment: string): readonly string[] {
+  const moduleDir = join(target, 'apps', deployment, 'modules', ADMIN_MODULE_ID);
+  const files: Record<string, string> = {
+    'manifest.ts':
+      `// Written by \`acceptance:instance\` — A20's fixture: an overlay module with an admin layer.\n` +
+      `export const manifest = {\n` +
+      `  id: '${ADMIN_MODULE_ID}',\n` +
+      `  name: 'Instance acceptance screens',\n` +
+      `  description: "The acceptance criterion's overlay module with an admin layer.",\n` +
+      `  version: '1.0.0',\n` +
+      `  dependencies: [],\n` +
+      `  actions: [\n` +
+      `    {\n` +
+      `      id: 'open-instance-acceptance-screens',\n` +
+      `      labelKey: 'actions.open.label',\n` +
+      `      descriptionKey: 'actions.open.description',\n` +
+      `      icon: 'Box',\n` +
+      `      targetRoute: '${ADMIN_ROUTE}',\n` +
+      `    },\n` +
+      `  ],\n` +
+      `};\n`,
+    'admin/index.tsx':
+      `import type { AdminContributions } from '${SCOPE}/admin-kit/contributions';\n` +
+      `\n` +
+      `export const contributions: AdminContributions = {\n` +
+      `  routes: [{ path: '${ADMIN_ROUTE}', index: true, component: () => import('./pages/ScreensPage.js') }],\n` +
+      `};\n`,
+    'admin/pages/ScreensPage.tsx':
+      `import type { ReactNode } from 'react';\n` +
+      `import { Card, CardContent } from '${SCOPE}/admin-kit/ui';\n` +
+      `\n` +
+      `export default function ScreensPage(): ReactNode {\n` +
+      `  return (\n` +
+      `    <Card>\n` +
+      `      <CardContent>${ADMIN_MARKER}</CardContent>\n` +
+      `    </Card>\n` +
+      `  );\n` +
+      `}\n`,
+  };
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(moduleDir, path)), { recursive: true });
+    writeFileSync(join(moduleDir, path), content, 'utf8');
+  }
+  return Object.keys(files).map((path) => `apps/${deployment}/modules/${ADMIN_MODULE_ID}/${path}`);
+}
+
+/** Does any script `outDir` holds carry `needle`? */
+function bundleHolds(outDir: string, needle: string): boolean {
+  return filesWithSuffix(outDir, ['.js', '.mjs']).some((file) => readFileSync(file, 'utf8').includes(needle));
+}
+
+/**
+ * A20's probe (`specs/190-overlay-full-modules/` T049, #1855): write an overlay module with an
+ * admin layer, run the instance's own `generate`, then the admin member's own `build` twice —
+ * with `DEPLOYMENT` set to the deployment and with it blank — each into a directory of its own,
+ * so `admin/dist`, which A5, A7 and A13 read, stays the tree the command wrote. Last, the admin
+ * member's own `typecheck`, whose program includes the overlay admin layers.
+ */
+function measureOverlayAdmin(
+  target: string,
+  deployment: string,
+  environment: NodeJS.ProcessEnv,
+): Parameters<typeof evaluateA20>[0] {
+  const base = { moduleId: ADMIN_MODULE_ID, deployment, marker: ADMIN_MARKER };
+  const none = {
+    generated: null,
+    deploymentBuild: null,
+    deploymentHolds: null,
+    bareBuild: null,
+    bareHolds: null,
+    typecheck: null,
+  };
+  if (!existsSync(join(target, 'admin'))) {
+    return { ...base, ...none, failure: 'the created tree holds no `admin/` member, so there is no admin to build' };
+  }
+  const written = writeAdminOverlayModule(target, deployment);
+  notes.push(`wrote ${written.join(', ')} — A20's fixture, an overlay module with an admin layer`);
+  const generated = run('pnpm', ['run', 'generate'], { cwd: target, env: environment });
+  if (generated.code !== 0) return { ...base, ...none, generated };
+  const withDeployment = join(target, 'admin', 'dist-a20-deployment');
+  const bare = join(target, 'admin', 'dist-a20-bare');
+  const deploymentBuild = run('pnpm', ['-C', 'admin', 'run', 'build', '--outDir', withDeployment], {
+    cwd: target,
+    env: { ...environment, DEPLOYMENT: deployment },
+  });
+  const bareBuild = run('pnpm', ['-C', 'admin', 'run', 'build', '--outDir', bare], {
+    cwd: target,
+    env: { ...environment, DEPLOYMENT: '' },
+  });
+  const typecheck = run('pnpm', ['-C', 'admin', 'run', 'typecheck'], { cwd: target, env: environment });
+  const observation = {
+    ...base,
+    generated,
+    deploymentBuild,
+    deploymentHolds: deploymentBuild.code === 0 ? bundleHolds(withDeployment, ADMIN_MARKER) : null,
+    bareBuild,
+    bareHolds: bareBuild.code === 0 ? bundleHolds(bare, ADMIN_MARKER) : null,
+    typecheck,
+  };
+  rmSync(withDeployment, { recursive: true, force: true });
+  rmSync(bare, { recursive: true, force: true });
+  return observation;
+}
+
+/**
+ * A19's probe (`specs/190-overlay-full-modules/` T080, #1850): write an overlay module that owns a
+ * table, run the instance's own `setup` over it — `generate`, `build`, `typecheck`, `migrate` and
+ * `module:install --all`, what a client runs after adding a module — boot, and ask its route for
+ * the row its migration seeded. The build is asked on its own first, so a fixture that does not
+ * compile is reported as that rather than as a failed `setup`.
+ */
+async function measureOverlaySchema(
+  target: string,
+  deployment: string,
+  environment: NodeJS.ProcessEnv,
+  databaseUrl: string,
+): Promise<OverlaySchemaObservation> {
+  const written = writeSchemaOverlayModule(target, deployment);
+  notes.push(`wrote ${written.join(', ')} — A19's fixture, an overlay module that owns a table`);
+  const base = { moduleId: SCHEMA_MODULE_ID, migrationName: SCHEMA_MIGRATION, seeded: SCHEMA_SEEDED };
+  const built = run('pnpm', ['-C', 'backend', 'run', 'build'], { cwd: target, env: environment });
+  if (built.code !== 0) return { ...base, built, migrated: null, applied: null, probe: null };
+  const migrated = run('pnpm', ['run', 'setup'], { cwd: target, env: environment });
+  const read = migrated.code === 0 ? await appliedMigrations(databaseUrl) : null;
+  const applied = read?.kind === 'read' ? read.names : null;
+  if (migrated.code !== 0 || applied === null) return { ...base, built, migrated, applied, probe: null };
+  const boot = await bootOnce(target, environment, false, [SCHEMA_PROBE_PATH]);
+  const probe = boot.healthStatus === null ? null : (boot.probes.get(SCHEMA_PROBE_PATH) ?? null);
+  return { ...base, built, migrated, applied, probe };
+}
+
 async function measureOverlay(
   target: string,
   deployment: string,
@@ -1739,6 +2035,18 @@ async function measureOverlay(
     `wrote ${fixture.written.join(' and ')} — A8's own fixture, and the one decoration a ` +
       `booting instance accepts: the two it refuses are recorded beside \`OVERLAY_MODULE_ID\``,
   );
+
+  // Overlay code is compiled (#1848): a module added to `apps/` is composed only once
+  // the backend member's build has run `endora build overlays` over it — what an
+  // operator does after adding one. Without it the compiled entry points refuse the
+  // boot as `unbuilt` (FR-015), which is the guard and not this assertion's subject.
+  const rebuilt = run('pnpm', ['-C', 'backend', 'run', 'build'], { cwd: target, env: environment });
+  if (rebuilt.code !== 0) {
+    return unreachable(
+      `the backend member's own \`build\` exited ${String(rebuilt.code)} over the tree carrying ` +
+        `A8's overlay module: ${failureExcerpt(rebuilt.output, 5)}`,
+    );
+  }
 
   const rendered = renderedDivergence(target, deployment, environment);
 
@@ -2412,6 +2720,9 @@ async function main(): Promise<void> {
               'the created tree holds no directory under `apps/`, so this instance has no ' +
               'deployment to write an overlay module into (`contracts/instance-tree.md` §2.2)',
           });
+          results.push({ id: 'A18', state: 'unmeasured', detail: 'there is no deployment to build an overlay in' });
+          results.push({ id: 'A19', state: 'unmeasured', detail: 'there is no deployment to write an overlay module into' });
+          results.push({ id: 'A20', state: 'unmeasured', detail: 'there is no deployment to write an overlay admin layer into' });
         } else {
           overlayEnvironment = { ...environment, DEPLOYMENT: deployment };
           notes.push(
@@ -2420,6 +2731,13 @@ async function main(): Promise<void> {
               'this is the value the instance already runs as and not one this harness chose',
           );
           results.push(evaluateA8(await measureOverlay(target, deployment, overlayEnvironment)));
+          results.push(evaluateA18(measureOverlayBuild(target, deployment, overlayEnvironment)));
+          results.push(
+            evaluateA19(
+              await measureOverlaySchema(target, deployment, overlayEnvironment, database.databaseUrl),
+            ),
+          );
+          results.push(evaluateA20(measureOverlayAdmin(target, deployment, overlayEnvironment)));
         }
       } else {
         results.push(
@@ -2436,6 +2754,9 @@ async function main(): Promise<void> {
           state: 'unmeasured',
           detail: 'the instance did not migrate, so there is nothing to compose an overlay in',
         });
+        results.push({ id: 'A18', state: 'unmeasured', detail: 'the instance did not migrate, so there is no overlay build to break' });
+        results.push({ id: 'A19', state: 'unmeasured', detail: 'the instance did not migrate, so there is no schema to add an overlay table to' });
+        results.push({ id: 'A20', state: 'unmeasured', detail: 'the instance did not migrate, so the overlay steps before A20 did not run' });
         results.push({
           id: 'A9',
           state: 'unmeasured',
@@ -2465,6 +2786,9 @@ async function main(): Promise<void> {
         state: 'unmeasured',
         detail: 'there is no install to compose an overlay module in',
       });
+      results.push({ id: 'A18', state: 'unmeasured', detail: 'there is no install to build an overlay in' });
+      results.push({ id: 'A19', state: 'unmeasured', detail: 'there is no install to migrate an overlay module in' });
+      results.push({ id: 'A20', state: 'unmeasured', detail: 'there is no install to build an admin in' });
       results.push({
         id: 'A9',
         state: 'unmeasured',

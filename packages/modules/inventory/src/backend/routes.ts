@@ -3,8 +3,9 @@ import { z } from 'zod';
 import {
   availabilityNotificationRequestSchema,
   inventoryDisplayModeSchema,
-  isProductVisibleTo,
+  requestScopeLanguage,
   type CatalogCategoryReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CustomerAccountReadPort,
   type InventoryDisplayMode,
@@ -32,6 +33,12 @@ export interface InventoryRoutesDeps {
   catalogCategories: CatalogCategoryReadPort;
   /** `customerAccountReadPort`, owned by `customer_accounts` (feature 075). */
   customerAccounts: CustomerAccountReadPort;
+  /**
+   * `catalogProductAvailabilityPort`, owned by `catalog` (feature 163) — the
+   * stock figure answers only about a product available at the request's
+   * (channel, language) to the caller.
+   */
+  catalogAvailability: CatalogProductAvailabilityPort;
   availabilityService: AvailabilityNotificationService;
   requireCustomer: (req: FastifyRequest, reply: unknown) => Promise<void>;
   resolveCustomerContext: (req: FastifyRequest) => {
@@ -64,6 +71,7 @@ export async function registerInventoryRoutes(
     catalogProducts,
     catalogCategories,
     customerAccounts,
+    catalogAvailability,
     availabilityService,
     requireCustomer,
     resolveCustomerContext,
@@ -105,6 +113,8 @@ export async function registerInventoryRoutes(
         // six modules that serve a product to a buyer share, so an account with
         // no organisation cannot be answered differently here than next door.
         audience: productAudienceOf(request),
+        // Feature 163 — the language the availability question is asked in.
+        languageTag: channelLanguageOf(request),
       });
       reply.status(202);
       return {
@@ -156,6 +166,8 @@ export async function registerInventoryRoutes(
         // become whatever a future edit to that `catch` made it.
         // `productAudienceOf` reads the actor and nothing else.
         audience: productAudienceOf(request),
+        // Feature 163 — the language the availability question is asked in.
+        languageTag: channelLanguageOf(request),
       });
       reply.status(202);
       return {
@@ -190,7 +202,19 @@ export async function registerInventoryRoutes(
       // Issue #227 — this route is anonymous and answers "how many of this
       // product are there". Both halves of that are a disclosure about a
       // product an operator restricted: that it exists, and how it is selling.
-      if (!product || !isProductVisibleTo(product, productAudienceOf(request))) {
+      // Feature 163 — so the product has to be available at the request's
+      // (channel, language) to this caller now; every "no" is this one 404.
+      const requestChannel = getResolvedChannel(request);
+      const available = product
+        ? await catalogAvailability.filterAvailable([product.id], {
+            channelId: requestChannel.id,
+            // Issue #1011 — the channel language the whole `Accept-Language` asks for:
+            // q-weighted, matched exactly then by base language, else the channel's default.
+            languageCode: requestScopeLanguage(requestChannel, request.headers['accept-language']),
+            audience: productAudienceOf(request),
+          })
+        : new Set<string>();
+      if (!product || !available.has(product.id)) {
         reply.status(404);
         return {
           error: {
@@ -296,6 +320,20 @@ export async function registerInventoryRoutes(
       return { data: payload };
     },
   );
+}
+
+/**
+ * The channel language the request's `Accept-Language` asks for, or `undefined` without the
+ * header (the subscription is then judged in the channel's default, as before). Issue #1011 —
+ * `requestScopeLanguage` over the whole header, as the catalogue resolves it since #397: the
+ * tags in descending `q`, each matched against the resolved channel's languages (exactly, then
+ * by base language), the first one the channel offers winning, else the channel's default. This
+ * used to be the header's first tag alone, so `en;q=0.2, pl-PL;q=0.9` asked about English.
+ */
+function channelLanguageOf(request: FastifyRequest): string | undefined {
+  const header = request.headers['accept-language'];
+  if (header === undefined || header.length === 0) return undefined;
+  return requestScopeLanguage(getResolvedChannel(request), header);
 }
 
 async function resolveChannelId(

@@ -1,13 +1,33 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Data } from '@puckeditor/core';
-import { firstSlugSegment, slugify as slugifyText, type CmsPageDetail } from '@endora-commerce/contracts';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, SaveButtonGroup, Select, Textarea } from '@endora-commerce/admin-kit/ui';
+import {
+  CMS_PAGE_PATH_MAX_LEVELS,
+  cmsLocalizedPage,
+  cmsPagePublicPaths,
+  firstSlugSegment,
+  type CmsBreadcrumbsScheme,
+  type CmsPagePathNode,
+  type CmsPageDetail,
+  type CmsPageStatus,
+  type CmsPageSummary,
+  type CmsPageTranslations,
+} from '@endora-commerce/contracts';
+import { Alert, AlertDescription, Badge, Button, EditorSection, FormField, Input, Label, PageHeader, SaveButtonGroup, Select, Textarea } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import {
+  AssetFieldPicker,
+  CmsPagePicker,
+  ContentLanguageTabs,
+  ScopePicker,
+  UnsavedChangesHint,
+  type ScopePickerValue,
+} from '@endora-commerce/admin-kit/components';
+import { isDraftEqual, useDerivedKey } from '@endora-commerce/admin-kit/lib';
 import { PageBuilderEditor } from '../components/PageBuilderEditor.js';
 import {
   emptyPageBuilderData,
+  hasUnsavedCanvas,
   PageBuilderEditorLayout,
   usePageBuilderEditorSettingsPanel,
 } from '@endora-commerce/page-builder-admin';
@@ -16,17 +36,49 @@ import {
   loadCmsTemplateCanvas,
   saveCanvasAsCmsTemplate,
 } from '../components/cms-template-layout.js';
-import { resolveScopedContentLanguage } from '../components/scope-utils.js';
+import { isSameScope, resolveScopedContentLanguage } from '../components/scope-utils.js';
 import { cmsClient } from '../api/cms-client.js';
+import { useDuplicatedLanding } from '../components/duplicate-record.js';
+
+/** One language's own name, slug and description (R24) — an empty field inherits the page's. */
+interface LanguageFields {
+  name: string;
+  slug: string;
+  description: string;
+}
+
+/** One language's meta fields. */
+interface MetaFields {
+  title: string;
+  description: string;
+  keywords: string;
+}
+
+const blankLanguageFields: LanguageFields = { name: '', slug: '', description: '' };
+const blankMetaFields: MetaFields = { title: '', description: '', keywords: '' };
 
 interface FormState {
   name: string;
   slug: string;
   active: boolean;
   description: string;
-  metaTitle: string;
-  metaDescription: string;
-  metaKeywords: string;
+  /** R24: by language code. */
+  translations: Record<string, LanguageFields>;
+  /**
+   * By language code. One set until R24, read from `en-US` whatever the page's
+   * languages and saved for the active language alone — which replaced every
+   * other language's meta on the server.
+   */
+  meta: Record<string, MetaFields>;
+  parentPageId: string | null;
+  /** R19D — serve the page under its parent's path. */
+  parentPathInUrl: boolean;
+  breadcrumbsVisible: boolean;
+  breadcrumbsScheme: CmsBreadcrumbsScheme;
+  /** R21H (T355): the trail over the first section. */
+  breadcrumbsOverlay: boolean;
+  /** Feature 163 (FR-033) — `null` means the deployment default applies. */
+  shareImageAssetId: string | null;
 }
 
 const blankForm: FormState = {
@@ -34,24 +86,164 @@ const blankForm: FormState = {
   slug: '',
   active: true,
   description: '',
-  metaTitle: '',
-  metaDescription: '',
-  metaKeywords: '',
+  translations: {},
+  meta: {},
+  parentPageId: null,
+  parentPathInUrl: false,
+  breadcrumbsVisible: true,
+  breadcrumbsScheme: 'light',
+  breadcrumbsOverlay: false,
+  shareImageAssetId: null,
 };
 
 /**
- * Build a URL slug from a free-text page name (so Polish `Łatwy poradnik` gives
- * `latwy-poradnik`), within the 180-character limit the CMS slug validation
- * regex enforces.
- *
- * `slugify` from `@endora-commerce/contracts`, **imported, never re-implemented** (issue
- * #245) — aliased because this wrapper keeps the local name the JSX reads. This
- * site's chain was already correct: it and `BlockEditor` were the only two of
- * eight that cut to length *before* stripping the trailing separator, so
- * nothing about its output moves.
+ * A page above this one whose slug is part of its address (R19D), with what
+ * its slug is in each language (R24).
  */
-function slugify(input: string): string {
-  return slugifyText(input, { maxLength: 180 });
+interface PathAncestor extends CmsPagePathNode {
+  name: string;
+  languages: string[];
+  translations: CmsPageTranslations;
+}
+
+/** The fields of `translations` the request carries: the languages the page has, the fields set. */
+function translationsToSave(
+  translations: Record<string, LanguageFields>,
+  languages: readonly string[],
+): CmsPageTranslations {
+  const out: CmsPageTranslations = {};
+  for (const language of languages) {
+    const fields = translations[language];
+    if (!fields) continue;
+    const entry: CmsPageTranslations[string] = {};
+    if (fields.name.trim()) entry.name = fields.name.trim();
+    if (fields.slug.trim()) entry.slug = fields.slug.trim();
+    if (fields.description.trim()) entry.description = fields.description;
+    if (Object.keys(entry).length > 0) out[language] = entry;
+  }
+  return out;
+}
+
+/** The meta the request carries: every language the page has, each with the fields set. */
+function metaToSave(
+  meta: Record<string, MetaFields>,
+  languages: readonly string[],
+): Record<string, { title?: string; description?: string; keywords?: string }> {
+  const out: Record<string, { title?: string; description?: string; keywords?: string }> = {};
+  for (const language of languages) {
+    const fields = meta[language];
+    if (!fields || !(fields.title || fields.description || fields.keywords)) continue;
+    out[language] = {
+      ...(fields.title ? { title: fields.title } : {}),
+      ...(fields.description ? { description: fields.description } : {}),
+      ...(fields.keywords ? { keywords: fields.keywords } : {}),
+    };
+  }
+  return out;
+}
+
+/** The id the page being edited takes in the path rule before it has one. */
+const UNSAVED_PAGE_ID = 'unsaved-page';
+
+/** Spelled out rather than built, so every label key is a literal a key check can find. */
+const BREADCRUMB_SCHEME_LABEL_KEYS: ReadonlyArray<[CmsBreadcrumbsScheme, string]> = [
+  ['light', 'pageEditor.breadcrumbs.scheme.light'],
+  ['muted', 'pageEditor.breadcrumbs.scheme.muted'],
+  ['dark', 'pageEditor.breadcrumbs.scheme.dark'],
+];
+
+/**
+ * The page and every page below it, from the rows the editor has seen — what
+ * a parent picker must not offer (feature 163, FR-032). Best effort by
+ * design: the list is bounded, and the `cms_page.update` Command refuses a
+ * cycle whatever the client offered.
+ */
+function pageAndDescendantIds(
+  pageId: string,
+  rows: ReadonlyArray<Pick<CmsPageSummary, 'id' | 'parentPageId'>>,
+): string[] {
+  const children = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.parentPageId) continue;
+    const list = children.get(row.parentPageId) ?? [];
+    list.push(row.id);
+    children.set(row.parentPageId, list);
+  }
+  const out = new Set<string>([pageId]);
+  const queue = [pageId];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    for (const child of children.get(next) ?? []) {
+      if (out.has(child)) continue;
+      out.add(child);
+      queue.push(child);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The 180-character limit the CMS slug validation regex enforces. Slugs are
+ * derived through the kit's `useDerivedKey` (issue #1513), which is `slugify`
+ * from `@endora-commerce/contracts` — so Polish `Łatwy poradnik` gives
+ * `latwy-poradnik` (issue #245).
+ */
+const SLUG_MAX_LENGTH = 180;
+
+/** The header badge for each status (issue #1513): a label, never a disabled select. */
+const STATUS_BADGES: Readonly<Record<CmsPageStatus, { labelKey: string; variant: 'secondary' | 'success' | 'outline' }>> = {
+  draft: { labelKey: 'status.draft', variant: 'secondary' },
+  published: { labelKey: 'status.published', variant: 'success' },
+  archived: { labelKey: 'status.archived', variant: 'outline' },
+};
+
+/** The three fields a language can carry of its own. */
+type LanguageFieldKey = keyof LanguageFields;
+
+/** Whether a language carries any name, slug or description of its own. */
+function hasOwnTranslation(fields: LanguageFields | undefined): boolean {
+  return Boolean(fields && (fields.name.trim() || fields.slug.trim() || fields.description.trim()));
+}
+
+/** The form as the page was last saved (issue #1461: also what `dirty` compares against). */
+function formFor(loaded: CmsPageDetail | null): FormState {
+  if (!loaded) return blankForm;
+  return {
+    name: loaded.name,
+    slug: loaded.slug,
+    active: loaded.active,
+    description: loaded.description ?? '',
+    translations: Object.fromEntries(
+      Object.entries(loaded.translations ?? {}).map(([language, own]) => [
+        language,
+        { name: own.name ?? '', slug: own.slug ?? '', description: own.description ?? '' },
+      ]),
+    ),
+    meta: Object.fromEntries(
+      Object.entries(loaded.meta ?? {}).map(([language, own]) => [
+        language,
+        { title: own.title ?? '', description: own.description ?? '', keywords: own.keywords ?? '' },
+      ]),
+    ),
+    parentPageId: loaded.parentPageId ?? null,
+    parentPathInUrl: loaded.parentPathInUrl ?? false,
+    breadcrumbsVisible: loaded.breadcrumbsVisible ?? true,
+    breadcrumbsScheme: loaded.breadcrumbsScheme ?? 'light',
+    breadcrumbsOverlay: loaded.breadcrumbsOverlay ?? false,
+    shareImageAssetId: loaded.shareImageAssetId ?? null,
+  };
+}
+
+/**
+ * Issue #1461 (CONTENT-02) — the form as a save would send it: a language's
+ * fields cleared again are the same as never touched.
+ */
+function comparableForm(form: FormState, languages: readonly string[]): unknown {
+  return {
+    ...form,
+    translations: translationsToSave(form.translations, languages),
+    meta: metaToSave(form.meta, languages),
+  };
 }
 
 function dataFor(page: CmsPageDetail | null, language: string | null): Data | null {
@@ -68,6 +260,14 @@ export function PageEditor(): ReactNode {
   const navigate = useNavigate();
   const settingsPanel = usePageBuilderEditorSettingsPanel(isNew);
   const [page, setPage] = useState<CmsPageDetail | null>(null);
+  // Issue #1495 (DEC-17) — opened on a fresh copy: the notice, and focus on its name.
+  const nameRef = useRef<HTMLInputElement>(null);
+  const landedOnCopy = useDuplicatedLanding({
+    ready: page !== null,
+    reveal: settingsPanel.reveal,
+    open: settingsPanel.open,
+    nameRef,
+  });
   const [form, setForm] = useState<FormState>(blankForm);
   const [scope, setScope] = useState<ScopePickerValue>({ salesChannelIds: [], languages: [] });
   const [activeLanguage, setActiveLanguage] = useState<string | null>(null);
@@ -75,9 +275,6 @@ export function PageEditor(): ReactNode {
   const [languageContentOverrides, setLanguageContentOverrides] = useState<Record<string, Data>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // For a new page the slug is auto-derived from the name until the operator
-  // edits the slug field themselves, after which it is left untouched.
-  const [slugEdited, setSlugEdited] = useState(false);
   /**
    * The deployment's reserved first path segments (feature 105, FR-033).
    *
@@ -87,23 +284,73 @@ export function PageEditor(): ReactNode {
    * refusal is worse than no warning.
    */
   const [reservedSegments, setReservedSegments] = useState<readonly string[]>([]);
+  /** The stored parent's name, so the picker shows it before any search. */
+  const [parentLabel, setParentLabel] = useState('');
+  /** The rows the parent picker must not offer: this page and its descendants. */
+  const [excludedParentIds, setExcludedParentIds] = useState<readonly string[]>([]);
+  /**
+   * R19D: the ancestors whose slugs the address is built from — the parent,
+   * and further up while each one includes its own parent's path. Read only
+   * while the option is on; a failed read leaves the flat address shown, and
+   * the backend serves the path whatever the preview said.
+   */
+  const [pathAncestors, setPathAncestors] = useState<readonly PathAncestor[]>([]);
+
+  useEffect(() => {
+    if (!form.parentPathInUrl || !form.parentPageId) {
+      setPathAncestors([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const chain: PathAncestor[] = [];
+      let nextId: string | null = form.parentPageId;
+      while (nextId && chain.length < CMS_PAGE_PATH_MAX_LEVELS && !chain.some((node) => node.id === nextId)) {
+        const ancestor = await cmsClient.getPage(nextId);
+        const node: PathAncestor = {
+          id: ancestor.id,
+          name: ancestor.name,
+          slug: ancestor.slug,
+          parentPageId: ancestor.parentPageId ?? null,
+          parentPathInUrl: ancestor.parentPathInUrl ?? false,
+          languages: ancestor.languages,
+          translations: ancestor.translations ?? {},
+        };
+        chain.push(node);
+        nextId = node.parentPathInUrl ? node.parentPageId : null;
+      }
+      if (!cancelled) setPathAncestors(chain);
+    })().catch(() => {
+      if (!cancelled) setPathAncestors([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.parentPageId, form.parentPathInUrl]);
 
   const load = useCallback(async () => {
     if (isNew || !id) return;
     setError(null);
     const loaded = await cmsClient.getPage(id);
     setPage(loaded);
-    setForm({
-      name: loaded.name,
-      slug: loaded.slug,
-      active: loaded.active,
-      description: loaded.description ?? '',
-      metaTitle: loaded.meta?.['en-US']?.title ?? '',
-      metaDescription: loaded.meta?.['en-US']?.description ?? '',
-      metaKeywords: loaded.meta?.['en-US']?.keywords ?? '',
-    });
+    setForm(formFor(loaded));
     setScope({ salesChannelIds: loaded.salesChannelIds, languages: loaded.languages });
     setActiveLanguage(loaded.languages[0] ?? null);
+    setExcludedParentIds([loaded.id]);
+    // Both reads only refine the picker; a failure leaves it usable, and the
+    // server still refuses a cyclic parent on Save.
+    if (loaded.parentPageId) {
+      void cmsClient
+        .getPage(loaded.parentPageId)
+        .then((parent) => setParentLabel(parent.name))
+        .catch(() => setParentLabel(''));
+    } else {
+      setParentLabel('');
+    }
+    void cmsClient
+      .listPages()
+      .then((list) => setExcludedParentIds(pageAndDescendantIds(loaded.id, list.data)))
+      .catch(() => undefined);
   }, [id, isNew]);
 
   useEffect(() => {
@@ -141,13 +388,36 @@ export function PageEditor(): ReactNode {
    * value another module owns, so an absolute address here would be either *n*
    * addresses or one arbitrary pick.
    */
-  const publicPath = form.slug.trim().length > 0 ? `/${form.slug.trim()}` : null;
+  const addressIn = useCallback(
+    (language: string | null): string | null => {
+      const own = language ? form.translations[language]?.slug.trim() : '';
+      const slug = own || form.slug.trim();
+      if (slug.length === 0) return null;
+      // R19D: the address under the parent's path, by the rule the backend
+      // serves it with (`cmsPagePublicPaths`). Read off each page's own slug —
+      // a channel may serve a page under another, which the editor cannot show
+      // for *n* channels at once, as above. R24: in a language, each ancestor
+      // contributes its slug in that language.
+      const self: CmsPagePathNode = {
+        id: page?.id ?? UNSAVED_PAGE_ID,
+        slug,
+        parentPageId: form.parentPageId,
+        parentPathInUrl: form.parentPathInUrl,
+      };
+      const ancestors = pathAncestors.map((ancestor) => ({
+        ...ancestor,
+        slug: language ? cmsLocalizedPage(ancestor, language).slug : ancestor.slug,
+      }));
+      return `/${cmsPagePublicPaths([...ancestors, self]).get(self.id) ?? slug}`;
+    },
+    [form.slug, form.translations, form.parentPageId, form.parentPathInUrl, page?.id, pathAncestors],
+  );
 
   /** The reserved segment this slug would lose to, or `null` (§5.1, US4.2). */
-  const reservedSegment = (() => {
-    const segment = firstSlugSegment(form.slug);
+  const reservedSegmentOf = (slug: string): string | null => {
+    const segment = firstSlugSegment(slug);
     return segment.length > 0 && reservedSegments.includes(segment) ? segment : null;
-  })();
+  };
 
   useEffect(() => {
     if (!isNew) return;
@@ -157,7 +427,8 @@ export function PageEditor(): ReactNode {
     setActiveLanguage(null);
     setDraftData(null);
     setLanguageContentOverrides({});
-    setSlugEdited(false);
+    setParentLabel('');
+    setExcludedParentIds([]);
     setError(null);
   }, [isNew, id]);
 
@@ -187,17 +458,11 @@ export function PageEditor(): ReactNode {
     return dataFor(page, activeLanguage);
   }, [activeLanguage, draftData, languageContentOverrides, page]);
 
-  const saveMeta = async (contentLanguage: string | null): Promise<CmsPageDetail> => {
-    const meta =
-      contentLanguage && (form.metaTitle || form.metaDescription || form.metaKeywords)
-        ? {
-            [contentLanguage]: {
-              ...(form.metaTitle ? { title: form.metaTitle } : {}),
-              ...(form.metaDescription ? { description: form.metaDescription } : {}),
-              ...(form.metaKeywords ? { keywords: form.metaKeywords } : {}),
-            },
-          }
-        : undefined;
+  const saveMeta = async (): Promise<CmsPageDetail> => {
+    // R24: every language's fields, not the active one's alone — the server
+    // replaces both maps whole.
+    const meta = metaToSave(form.meta, scope.languages);
+    const translations = translationsToSave(form.translations, scope.languages);
 
     if (isNew) {
       return cmsClient.createPage({
@@ -207,7 +472,14 @@ export function PageEditor(): ReactNode {
         description: form.description || null,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
-        ...(meta ? { meta } : {}),
+        meta,
+        translations,
+        parentPageId: form.parentPageId,
+        parentPathInUrl: form.parentPathInUrl,
+        breadcrumbsVisible: form.breadcrumbsVisible,
+        breadcrumbsScheme: form.breadcrumbsScheme,
+        breadcrumbsOverlay: form.breadcrumbsOverlay,
+        shareImageAssetId: form.shareImageAssetId,
       });
     }
 
@@ -219,9 +491,37 @@ export function PageEditor(): ReactNode {
       description: form.description || null,
       salesChannelIds: scope.salesChannelIds,
       languages: scope.languages,
-      ...(meta ? { meta } : {}),
+      meta,
+      translations,
+      parentPageId: form.parentPageId,
+      parentPathInUrl: form.parentPathInUrl,
+      breadcrumbsVisible: form.breadcrumbsVisible,
+      breadcrumbsScheme: form.breadcrumbsScheme,
+      breadcrumbsOverlay: form.breadcrumbsOverlay,
+      shareImageAssetId: form.shareImageAssetId,
       version: page.version,
     });
+  };
+
+  // Issue #1461 (CONTENT-02) — the draft against the last saved version.
+  const savedScope: ScopePickerValue = page
+    ? { salesChannelIds: page.salesChannelIds, languages: page.languages }
+    : { salesChannelIds: [], languages: [] };
+  const dirty =
+    !isDraftEqual(comparableForm(form, scope.languages), comparableForm(formFor(page), scope.languages)) ||
+    !isSameScope(scope, savedScope) ||
+    hasUnsavedCanvas({
+      draft: draftData,
+      activeLanguage,
+      overrides: languageContentOverrides,
+      saved: (language) => (page ? dataFor(page, language) : null),
+    });
+
+  const discard = (): void => {
+    setForm(formFor(page));
+    setScope(savedScope);
+    setDraftData(null);
+    setLanguageContentOverrides({});
   };
 
   const save = async (): Promise<boolean> => {
@@ -246,7 +546,7 @@ export function PageEditor(): ReactNode {
     setSaving(true);
     setError(null);
     try {
-      let saved = await saveMeta(contentLanguage);
+      let saved = await saveMeta();
       if (currentData) {
         saved = await cmsClient.putPageContent(saved.id, contentLanguage, {
           data: currentData,
@@ -276,6 +576,75 @@ export function PageEditor(): ReactNode {
     }
   };
 
+  /** The canvas tabs switch the canvas and the page-fields card together (issue #1513: one strip). */
+  const switchLanguage = (language: string): void => {
+    // Keep unsaved canvas per language — clearing draft without stashing
+    // would drop edits when switching tabs.
+    if (activeLanguage && draftData) {
+      setLanguageContentOverrides((prev) => ({
+        ...prev,
+        [activeLanguage]: draftData,
+      }));
+    }
+    setDraftData(null);
+    setActiveLanguage(language);
+  };
+
+  const setLanguageFields = (language: string, patch: Partial<LanguageFields>): void => {
+    setForm((f) => ({
+      ...f,
+      translations: { ...f.translations, [language]: { ...(f.translations[language] ?? blankLanguageFields), ...patch } },
+    }));
+  };
+
+  const setMetaFields = (language: string, patch: Partial<MetaFields>): void => {
+    setForm((f) => ({
+      ...f,
+      meta: { ...f.meta, [language]: { ...(f.meta[language] ?? blankMetaFields), ...patch } },
+    }));
+  };
+
+  /**
+   * Issue #1513 (CONTENT-10) — one card edits the language the canvas shows.
+   * The page's own values belong to no language: every language falls back to
+   * them field by field (`cmsLocalizedPage`). By convention the card edits them
+   * in the page's first language, but only while that language carries no
+   * translation of its own (a page stored before #1513 can); otherwise the
+   * first language shows its own fields, as every other language does.
+   */
+  const firstLanguage = scope.languages[0] ?? null;
+  const editedLanguage = activeLanguage ?? firstLanguage;
+  const editsPageValues =
+    editedLanguage === null ||
+    (editedLanguage === firstLanguage && !hasOwnTranslation(form.translations[editedLanguage]));
+
+  const bindingFor = (field: LanguageFieldKey): FieldBinding => {
+    if (editedLanguage && !editsPageValues) {
+      const language = editedLanguage;
+      return {
+        value: form.translations[language]?.[field] ?? '',
+        inherited: form[field],
+        onChange: (value) => setLanguageFields(language, { [field]: value }),
+      };
+    }
+    return {
+      value: form[field],
+      inherited: null,
+      onChange: (value) => setForm((f) => ({ ...f, [field]: value })),
+    };
+  };
+
+  /**
+   * A slug follows its name only while nothing about it is stored: a new page,
+   * or a language the page has no saved name or slug for. A stored address
+   * never moves because a page was renamed.
+   */
+  const slugFollowsName = !editsPageValues
+    ? !(editedLanguage && (page?.translations?.[editedLanguage]?.name || page?.translations?.[editedLanguage]?.slug))
+    : isNew;
+
+  const statusBadge = page ? STATUS_BADGES[page.status] : null;
+
   const saveAndExit = async (): Promise<void> => {
     if (await save()) navigate('/cms/pages');
   };
@@ -302,16 +671,18 @@ export function PageEditor(): ReactNode {
   return (
     <PageBuilderEditorLayout
       settingsPanel={settingsPanel}
+      dirty={dirty}
+      onSave={save}
+      onDiscard={discard}
       header={
         <>
           <PageHeader
+            back={{ label: t('pagesList.title'), to: '/cms/pages' }}
             title={isNew ? t('pageEditor.title.new') : form.name || t('pageEditor.title.edit')}
-            description={t('pageEditor.description')}
+            titleActions={statusBadge ? <Badge variant={statusBadge.variant}>{t(statusBadge.labelKey)}</Badge> : undefined}
             actions={
-              <div className="flex gap-2">
-                <Button asChild variant="outline">
-                  <Link to="/cms/pages">{t('common.back')}</Link>
-                </Button>
+              <div className="flex items-center gap-2">
+                <UnsavedChangesHint dirty={dirty} />
                 {!isNew && page?.status !== 'published' ? (
                   <Button type="button" variant="outline" onClick={() => void lifecycle('publish')}>
                     {t('common.publish')}
@@ -343,126 +714,141 @@ export function PageEditor(): ReactNode {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
+          {landedOnCopy ? (
+            <Alert live="polite">
+              <AlertDescription>{t('duplicate.createdDraft')}</AlertDescription>
+            </Alert>
+          ) : null}
         </>
       }
       settings={
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('pageEditor.metadata')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label>{t('fields.name')}</Label>
-                <Input
-                  value={form.name}
-                  onChange={(event) => {
-                    const name = event.target.value;
-                    setForm((f) => ({
-                      ...f,
-                      name,
-                      ...(isNew && !slugEdited ? { slug: slugify(name) } : {}),
-                    }));
-                  }}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.slug')}</Label>
-                <Input
-                  value={form.slug}
-                  onChange={(event) => {
-                    setSlugEdited(true);
-                    setForm((f) => ({ ...f, slug: event.target.value.toLowerCase() }));
-                  }}
-                />
-                <p className="text-xs text-muted-foreground">
-                  <span className="mr-1">{t('pageEditor.publicAddress')}:</span>
-                  {publicPath ? (
-                    <code className="font-mono">{publicPath}</code>
-                  ) : (
-                    <span>{t('pageEditor.publicAddressEmpty')}</span>
-                  )}
-                </p>
-                {/*
-                  A warning and not an error: nothing has failed yet, the
-                  operator is still typing, and this is what US4.2 asks for —
-                  the notice that arrives *before* Save, which is what actually
-                  prevents the mistake. The refusal that follows on Save is the
-                  backstop, and it renders in the destructive banner above.
-                */}
-                {reservedSegment ? (
-                  <Alert variant="warning">
-                    <AlertDescription>
-                      {t('pageEditor.reservedSegmentWarning', { segment: reservedSegment })}
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.status')}</Label>
-                <Select value={page?.status ?? 'draft'} disabled>
-                  <option value="draft">{t('status.draft')}</option>
-                  <option value="published">{t('status.published')}</option>
-                  <option value="archived">{t('status.archived')}</option>
-                </Select>
-              </div>
+          <EditorSection as="h3" title={t('pageEditor.metadata')}>
+            {/*
+              Keyed by language so each one's slug starts following (or not)
+              afresh: the derivation state is per language, as the values are.
+            */}
+            <PageLanguageFields
+              key={editedLanguage ?? ''}
+              language={editedLanguage}
+              ownLanguage={editsPageValues ? null : editedLanguage}
+              name={bindingFor('name')}
+              slug={bindingFor('slug')}
+              description={bindingFor('description')}
+              slugFollowsName={slugFollowsName}
+              address={addressIn(editedLanguage)}
+              reservedSegment={reservedSegmentOf(
+                (editedLanguage ? form.translations[editedLanguage]?.slug.trim() : '') || form.slug,
+              )}
+              nameRef={editsPageValues ? nameRef : undefined}
+            />
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.active}
+                onChange={(event) => setForm({ ...form, active: event.target.checked })}
+              />
+              {t('fields.active')}
+            </label>
+            {editedLanguage ? (
+              <PageSeoFields
+                language={editedLanguage}
+                meta={form.meta[editedLanguage] ?? blankMetaFields}
+                onChange={(patch) => setMetaFields(editedLanguage, patch)}
+              />
+            ) : null}
+          </EditorSection>
+          <EditorSection as="h3" title={t('pageEditor.breadcrumbs.title')}>
+            <div className="space-y-1">
+              <Label htmlFor="cms-page-parent">{t('pageEditor.breadcrumbs.parent')}</Label>
+              <CmsPagePicker
+                id="cms-page-parent"
+                value={form.parentPageId}
+                onChange={(parentPageId) => {
+                  setForm((f) => ({ ...f, parentPageId }));
+                  if (!parentPageId) setParentLabel('');
+                }}
+                excludeIds={excludedParentIds}
+                selectedLabel={parentLabel}
+                placeholder={t('pageEditor.breadcrumbs.parentPlaceholder')}
+                ariaLabel={t('pageEditor.breadcrumbs.parent')}
+              />
+              <p className="text-xs text-muted-foreground">{t('pageEditor.breadcrumbs.parentHelp')}</p>
+            </div>
+            {/* R19D: off by default, so a stored page keeps its flat address. */}
+            <div className="space-y-1">
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
-                  checked={form.active}
-                  onChange={(event) => setForm({ ...form, active: event.target.checked })}
+                  checked={form.parentPathInUrl}
+                  onChange={(event) => setForm({ ...form, parentPathInUrl: event.target.checked })}
                 />
-                {t('fields.active')}
+                {t('pageEditor.parentPathInUrl')}
               </label>
-              <div className="space-y-1">
-                <Label>{t('fields.description')}</Label>
-                <Textarea
-                  value={form.description}
-                  onChange={(event) => setForm({ ...form, description: event.target.value })}
+              <p className="text-xs text-muted-foreground">{t('pageEditor.parentPathInUrlHelp')}</p>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.breadcrumbsVisible}
+                onChange={(event) => setForm({ ...form, breadcrumbsVisible: event.target.checked })}
+              />
+              {t('pageEditor.breadcrumbs.visible')}
+            </label>
+            <div className="space-y-1">
+              <Label htmlFor="cms-page-breadcrumbs-scheme">{t('pageEditor.breadcrumbs.scheme')}</Label>
+              <Select
+                id="cms-page-breadcrumbs-scheme"
+                value={form.breadcrumbsScheme}
+                onChange={(event) =>
+                  setForm({ ...form, breadcrumbsScheme: event.target.value as CmsBreadcrumbsScheme })
+                }
+              >
+                {BREADCRUMB_SCHEME_LABEL_KEYS.map(([scheme, labelKey]) => (
+                  <option key={scheme} value={scheme}>
+                    {t(labelKey)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            {/* R21H (T355): the trail over the first section instead of a band above it; off by default. */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.breadcrumbsOverlay}
+                  onChange={(event) => setForm({ ...form, breadcrumbsOverlay: event.target.checked })}
                 />
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.metaTitle')}</Label>
-                <Input
-                  value={form.metaTitle}
-                  onChange={(event) => setForm({ ...form, metaTitle: event.target.value })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.metaDescription')}</Label>
-                <Textarea
-                  value={form.metaDescription}
-                  onChange={(event) => setForm({ ...form, metaDescription: event.target.value })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.metaKeywords')}</Label>
-                <Input
-                  value={form.metaKeywords}
-                  onChange={(event) => setForm({ ...form, metaKeywords: event.target.value })}
-                />
-              </div>
-            </CardContent>
-          </Card>
-          <ScopePicker value={scope} onChange={setScope} />
+                {t('pageEditor.breadcrumbs.overlay')}
+              </label>
+              <p className="text-xs text-muted-foreground">{t('pageEditor.breadcrumbs.overlayHelp')}</p>
+            </div>
+          </EditorSection>
+          {/* Feature 163 (FR-033): the page's own sharing image; empty falls back to the default. */}
+          <EditorSection as="h3" title={t('pageEditor.share.title')} contentClassName="space-y-1">
+            <Label htmlFor="cms-page-share-image">{t('pageEditor.share.image')}</Label>
+            <AssetFieldPicker
+              id="cms-page-share-image"
+              value={form.shareImageAssetId ?? ''}
+              onChange={(assetId) => setForm((f) => ({ ...f, shareImageAssetId: assetId || null }))}
+              acceptMimePrefix="image/"
+              allowUpload
+              placeholder={t('pageEditor.share.placeholder')}
+              ariaLabel={t('pageEditor.share.image')}
+              chooseLabel={t('pageEditor.share.choose')}
+              changeLabel={t('pageEditor.share.change')}
+              clearLabel={t('pageEditor.share.clear')}
+            />
+            <p className="text-xs text-muted-foreground">{t('pageEditor.share.help')}</p>
+          </EditorSection>
+          <ScopePicker value={scope} onChange={setScope} titleAs="h3" />
         </>
       }
       canvasBar={
         <ContentLanguageTabs
           languages={scope.languages}
           activeLanguage={activeLanguage}
-          onChange={(language) => {
-            // Keep unsaved canvas per language — clearing draft without stashing
-            // would drop edits when switching tabs.
-            if (activeLanguage && draftData) {
-              setLanguageContentOverrides((prev) => ({
-                ...prev,
-                [activeLanguage]: draftData,
-              }));
-            }
-            setDraftData(null);
-            setActiveLanguage(language);
-          }}
+          onChange={switchLanguage}
         />
       }
       builder={
@@ -474,6 +860,8 @@ export function PageEditor(): ReactNode {
           // change (a save) retires its *Restore previous content*.
           resource={{ type: 'cms_page', id: page?.id ?? null }}
           savedVersion={page?.version ?? null}
+          // Feature 163 — the preview wears the brand of the page's first channel.
+          salesChannelId={scope.salesChannelIds[0] ?? null}
           pageContainer
           languages={scope.languages}
           activeLanguage={activeLanguage}
@@ -502,6 +890,142 @@ export function PageEditor(): ReactNode {
         />
       }
     />
+  );
+}
+
+/** One text field as the card edits it: the value, what it inherits while empty, and its writer. */
+interface FieldBinding {
+  value: string;
+  /** The page's own value, shown as the placeholder — `null` where the field *is* the page's value. */
+  inherited: string | null;
+  onChange: (value: string) => void;
+}
+
+interface PageLanguageFieldsProps {
+  /** The language the canvas shows, or `null` before the page has one. */
+  language: string | null;
+  /** The language whose own values these are, or `null` where they are the page's. */
+  ownLanguage: string | null;
+  name: FieldBinding;
+  slug: FieldBinding;
+  description: FieldBinding;
+  slugFollowsName: boolean;
+  /** The address in this language, or `null` while there is no slug. */
+  address: string | null;
+  reservedSegment: string | null;
+  nameRef?: Ref<HTMLInputElement> | undefined;
+}
+
+/**
+ * Name, slug and description in one language (R24; merged by issue #1513).
+ * The labels name the language only where the values are its own, so the
+ * first language reads as what it is: the page's fields.
+ */
+function PageLanguageFields({
+  language,
+  ownLanguage,
+  name,
+  slug,
+  description,
+  slugFollowsName,
+  address,
+  reservedSegment,
+  nameRef,
+}: PageLanguageFieldsProps): ReactNode {
+  const t = useTranslation('cms');
+  // Issue #1513 — the slug follows the name until edited, and is normalised on blur (Tesler, Postel).
+  const slugField = useDerivedKey({
+    source: name.value,
+    value: slug.value,
+    onChange: (next) => slug.onChange(next.toLowerCase()),
+    maxLength: SLUG_MAX_LENGTH,
+    enabled: slugFollowsName,
+  });
+  const label = (pageKey: string, languageKey: string): string =>
+    ownLanguage ? t(languageKey, { language: ownLanguage }) : t(pageKey);
+  const addressId = `cms-page-slug-address-${language ?? 'page'}`;
+  return (
+    <>
+      {ownLanguage ? (
+        <p className="text-xs text-muted-foreground">{t('pageEditor.languageVersion.help')}</p>
+      ) : null}
+      <FormField label={label('fields.name', 'pageEditor.languageVersion.name')}>
+        <Input
+          ref={nameRef}
+          value={name.value}
+          placeholder={name.inherited ?? undefined}
+          onChange={(event) => name.onChange(event.target.value)}
+        />
+      </FormField>
+      <div className="space-y-1">
+        <FormField label={label('fields.slug', 'pageEditor.languageVersion.slug')} describedBy={addressId}>
+          <Input
+            value={slug.value}
+            placeholder={slug.inherited ?? undefined}
+            onChange={slugField.onChange}
+            onBlur={slugField.onBlur}
+          />
+        </FormField>
+        <p id={addressId} className="text-xs text-muted-foreground">
+          <span className="mr-1">{t('pageEditor.publicAddress')}:</span>
+          {address ? <code className="font-mono">{address}</code> : <span>{t('pageEditor.publicAddressEmpty')}</span>}
+        </p>
+        {/*
+          A warning and not an error: nothing has failed yet, the operator is
+          still typing, and this is what US4.2 asks for — the notice that
+          arrives *before* Save, which is what actually prevents the mistake.
+          The refusal that follows on Save is the backstop, and it renders in
+          the destructive banner above.
+        */}
+        {reservedSegment ? (
+          <Alert variant="warning">
+            <AlertDescription>{t('pageEditor.reservedSegmentWarning', { segment: reservedSegment })}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+      <FormField label={label('fields.description', 'pageEditor.languageVersion.description')}>
+        <Textarea
+          value={description.value}
+          placeholder={description.inherited ?? undefined}
+          onChange={(event) => description.onChange(event.target.value)}
+        />
+      </FormField>
+    </>
+  );
+}
+
+interface PageSeoFieldsProps {
+  language: string;
+  meta: MetaFields;
+  onChange: (patch: Partial<MetaFields>) => void;
+}
+
+/**
+ * The language's meta, collapsed (issue #1513, Hick): it is read by search
+ * engines, not by the storefront visitor, and is rarely the reason the editor
+ * is open. A native disclosure, so the keyboard and screen-reader behaviour is
+ * the browser's.
+ */
+function PageSeoFields({ language, meta, onChange }: PageSeoFieldsProps): ReactNode {
+  const t = useTranslation('cms');
+  const label = (key: string): string => t(key, { language });
+  return (
+    <details className="border-t border-border pt-3">
+      <summary className="cursor-pointer rounded-sm text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {t('pageEditor.seo.title')}
+      </summary>
+      <div className="mt-3 space-y-3">
+        <FormField label={label('pageEditor.languageVersion.metaTitle')}>
+          <Input value={meta.title} onChange={(event) => onChange({ title: event.target.value })} />
+        </FormField>
+        <FormField label={label('pageEditor.languageVersion.metaDescription')}>
+          <Textarea value={meta.description} onChange={(event) => onChange({ description: event.target.value })} />
+        </FormField>
+        <FormField label={label('pageEditor.languageVersion.metaKeywords')}>
+          <Input value={meta.keywords} onChange={(event) => onChange({ keywords: event.target.value })} />
+        </FormField>
+      </div>
+    </details>
   );
 }
 

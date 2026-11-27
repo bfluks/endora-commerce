@@ -5,6 +5,7 @@
  */
 
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 export interface SpeculationRulesConfig {
   enabled: boolean;
   /** conservative | moderate | eager */
@@ -16,6 +17,7 @@ export async function getSpeculationRulesConfig(): Promise<SpeculationRulesConfi
   const baseUrl = backendBaseUrl();
   try {
     const res = await fetch(`${baseUrl}/api/v1/storefront/speculation-rules`, {
+      headers: await activeChannelHeaders(),
       cache: 'no-store',
     });
     if (!res.ok) return fallback;

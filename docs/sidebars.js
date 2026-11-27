@@ -31,6 +31,8 @@ const sidebars = {
         'architecture/custom-fields',
         'architecture/overlay-pattern',
         'architecture/customisation-ladder',
+        'architecture/contract-surface',
+        'architecture/schema-extensions',
         'architecture/permissions',
         'architecture/pim-connector',
       ],
@@ -87,7 +89,11 @@ const sidebars = {
       key: 'deployment',
       label: categoryLabel('deployment', 'Deployment'),
       link: { type: 'generated-index', title: 'Deployment' },
-      items: ['deployment/first-deployment-checklist'],
+      items: [
+        'deployment/first-deployment-checklist',
+        'deployment/storefront-supervisor',
+        'deployment/backend-supervisor',
+      ],
     },
   ],
 };

@@ -4,6 +4,7 @@ import { SETTINGS_SCOPE_LABELS, type SettingsScope } from '../types/responsive.j
 import { setStoredScope } from './settings-scope-store.js';
 import { useComponentScope } from './use-component-scope.js';
 import { usePageBuilderPuck } from './use-page-builder-puck.js';
+import { PB_FIELD_INPUT_CLASS } from '../fields/field-classes.js';
 
 const SettingsScopeContext = createContext<{
   scope: SettingsScope;
@@ -50,7 +51,7 @@ export function SettingsScopeSelector(): ReactElement {
       <FieldLabel label="Scope settings" />
       <select
         aria-label="Scope settings"
-        className="_Input-input_bsxfo_26"
+        className={PB_FIELD_INPUT_CLASS}
         style={{ width: '100%', boxSizing: 'border-box' }}
         value={scope}
         onChange={(e): void => setStoredScope(componentId, e.target.value as SettingsScope)}

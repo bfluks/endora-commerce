@@ -1,4 +1,5 @@
 import type { SearchSuggestItem } from '@endora-commerce/contracts';
+import { channelHeaders } from '../channel/channel-header';
 
 /**
  * Storefront client for the search module's typeahead endpoint —
@@ -25,8 +26,9 @@ export interface SuggestOptions {
   limit?: number;
   signal?: AbortSignal;
   /** Forwarded as `X-Sales-Channel` so the browser-side query honours the
-   *  same channel scoping as the server-rendered page. */
-  salesChannelCode?: string;
+   *  same channel scoping as the server-rendered page. Required: a query that
+   *  names no channel is answered on the system default. */
+  salesChannelCode: string | undefined;
 }
 
 export class SearchSuggestError extends Error {
@@ -44,8 +46,10 @@ export async function getSuggestions(opts: SuggestOptions): Promise<SuggestRespo
   const params = new URLSearchParams({ q: opts.q });
   if (opts.limit !== undefined) params.set('limit', String(opts.limit));
 
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (opts.salesChannelCode) headers['X-Sales-Channel'] = opts.salesChannelCode;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...channelHeaders(opts.salesChannelCode),
+  };
 
   const response = await fetch(
     `${opts.apiBaseUrl}/api/v1/search/suggest?${params.toString()}`,
@@ -89,7 +93,7 @@ export interface RecordPhraseOptions {
   /** Result-page count; pass `0` for dead-end phrases. */
   resultCount: number;
   /** Forwarded as `X-Sales-Channel`. Resolved server-side from the page context. */
-  salesChannelCode?: string;
+  salesChannelCode: string | undefined;
 }
 
 /**
@@ -106,8 +110,8 @@ export async function recordPhrase(opts: RecordPhraseOptions): Promise<void> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    ...channelHeaders(opts.salesChannelCode),
   };
-  if (opts.salesChannelCode) headers['X-Sales-Channel'] = opts.salesChannelCode;
   try {
     await fetch(`${opts.apiBaseUrl}/api/v1/search/record`, {
       method: 'POST',

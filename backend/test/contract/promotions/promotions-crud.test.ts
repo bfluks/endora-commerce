@@ -1,9 +1,18 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  promotionListResponseSchema,
+  promotionSchema,
+} from '@endora-commerce/contracts';
+import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { deepStrict, disagreements } from '../../helpers/strict-schema.js';
+
+/** Strict copies: a key a promotions reply carries that the contract does not declare fails (issue #599 §6). */
+const strictPromotion = deepStrict(promotionSchema);
+const strictList = deepStrict(promotionListResponseSchema);
 
 /**
  * Feature 045 / US1 — promotions CRUD contract: create an action-based
@@ -44,6 +53,7 @@ describe('Promotions CRUD (feature 045)', () => {
     expect(body.data.priority).toBe(5);
     expect(body.data.action).toEqual({ type: 'percentage_off_cart', percent: 10 });
     expect(body.data.rule).toMatchObject({ kind: 'condition' });
+    expect(disagreements(strictPromotion, body.data)).toEqual([]);
 
     const get = await h.app.inject({
       method: 'GET',
@@ -51,6 +61,58 @@ describe('Promotions CRUD (feature 045)', () => {
       cookies: adminCookie,
     });
     expect(get.statusCode).toBe(200);
+    expect(disagreements(strictPromotion, (get.json() as { data: unknown }).data)).toEqual([]);
+
+    const list = await h.app.inject({ method: 'GET', url: '/api/v1/admin/promotions', cookies: adminCookie });
+    expect(list.statusCode).toBe(200);
+    expect((list.json() as { data: unknown[] }).data).toHaveLength(1);
+    expect(disagreements(strictList, list.json())).toEqual([]);
+  });
+
+  it('pages the list by name, with the total across every page (issue #1664)', async () => {
+    for (const name of ['Charlie', 'Alpha', 'Bravo']) {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/promotions',
+        cookies: adminCookie,
+        payload: { name, action: { type: 'percentage_off_cart', percent: 5 } },
+      });
+      expect(created.statusCode).toBe(201);
+    }
+    const names = (body: unknown): string[] => (body as { data: Array<{ name: string }> }).data.map((p) => p.name);
+
+    const first = await h.app.inject({ method: 'GET', url: '/api/v1/admin/promotions?page=1&pageSize=2', cookies: adminCookie });
+    expect(first.statusCode).toBe(200);
+    expect(names(first.json())).toEqual(['Alpha', 'Bravo']);
+    expect((first.json() as { meta: unknown }).meta).toEqual({ page: 1, pageSize: 2, total: 3 });
+    expect(disagreements(strictList, first.json())).toEqual([]);
+
+    const second = await h.app.inject({ method: 'GET', url: '/api/v1/admin/promotions?page=2&pageSize=2', cookies: adminCookie });
+    expect(names(second.json())).toEqual(['Charlie']);
+    expect((second.json() as { meta: unknown }).meta).toEqual({ page: 2, pageSize: 2, total: 3 });
+
+    // A caller naming no page size keeps the whole list, as the endpoint answered before.
+    const whole = await h.app.inject({ method: 'GET', url: '/api/v1/admin/promotions', cookies: adminCookie });
+    expect(names(whole.json())).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect((whole.json() as { meta: unknown }).meta).toEqual({ page: 1, pageSize: 3, total: 3 });
+
+    const tooLarge = await h.app.inject({ method: 'GET', url: '/api/v1/admin/promotions?pageSize=500', cookies: adminCookie });
+    expect(tooLarge.statusCode).toBe(400);
+  });
+
+  it('a legacy kind/value promotion is the published shape too', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promotions',
+      cookies: adminCookie,
+      payload: { name: '5% legacy', kind: 'percentage_off', value: 5, minCartSubtotal: 100 },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as { data: { kind: string; value: number; action: unknown } };
+    expect(body.data.kind).toBe('percentage_off');
+    expect(body.data.value).toBe(5);
+    expect(body.data.action).toBeNull();
+    expect(disagreements(strictPromotion, body.data)).toEqual([]);
   });
 
   it('rejects a promotion with neither action nor legacy kind', async () => {

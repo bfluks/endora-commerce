@@ -8,6 +8,7 @@ import { HttpError } from '../../http/error-envelope.js';
 import type { AuditPort } from '../ports/audit.js';
 import type { EventBus } from '../../events/bus.js';
 import { SalesChannel } from './sales-channel.entity.js';
+import type { SalesChannelAccessCacheInvalidation } from './sales-channel-access-cache.js';
 import {
   channelBridges,
   type ChannelBridgeRegistration,
@@ -63,6 +64,30 @@ export interface MembershipMutationOptions {
   fallbackToDefault?: boolean;
   /** Optional admin actor for the audit row. */
   actorAdminUserId?: string | null;
+  /**
+   * Run the bridge statements on this manager — and so inside its open
+   * transaction — instead of a fresh fork (feature 154, research R-8). A caller
+   * creating an Organization binds its channels in the creating transaction,
+   * so "no Organization without a channel" holds by construction: a rolled-back
+   * create leaves no bridge row, and a failed bind rolls the create back.
+   *
+   * When the manager has a transaction open, the writer **enlists** in it
+   * (issue #1926, `specs/186-aggregate-ports/` research R-16.1):
+   *
+   * - each `sales_channel.membership.changed` entry is recorded on this manager
+   *   through `AuditPort.recordWithin`, so it commits or rolls back with the
+   *   caller's write — the caller's transaction flushes it;
+   * - the access-cache drop is deferred through `EventBus.afterScope` until the
+   *   enclosing EventBus scope has succeeded, and runs before that scope's
+   *   events dispatch. A Command's scope encloses its commit; a caller that
+   *   opens its own `transactional` outside a Command wraps it in
+   *   `EventBus.run` to get the same guarantee, or the drop runs at once;
+   * - the event is emitted as before, and is buffered by that scope.
+   *
+   * A manager with no transaction open runs each statement on its own, so the
+   * writer behaves exactly as without one.
+   */
+  em?: EntityManager;
 }
 
 export interface MembershipMutationResult {
@@ -70,6 +95,16 @@ export interface MembershipMutationResult {
   changed: boolean;
   /** Set when the FR-008 fallback was applied. */
   fallbackAppliedToDefault?: boolean;
+  /**
+   * The entity's channel ids before the mutation, sorted — the set
+   * {@link SalesChannelMembershipService.replaceChannelsForEntity} replaced
+   * (or found already in place), from its own read on the manager it writes
+   * on, so inside the caller's transaction when it enlists. Lets a caller
+   * record the previous set without a second read on another connection
+   * (`specs/186-aggregate-ports/`, `organization.sales_channels.set`). Only
+   * `replaceChannelsForEntity` sets it.
+   */
+  previousChannelIds?: string[];
 }
 
 export class SalesChannelMembershipService {
@@ -84,7 +119,53 @@ export class SalesChannelMembershipService {
     private readonly eventBus: EventBus,
     private readonly auditLogService?: AuditPort,
     private readonly bridges: ChannelBridgeRegistry = channelBridges,
+    /**
+     * Feature 154 — the per-Organization permitted-channel cache the access
+     * rule reads. Dropped as part of every committed change of an
+     * Organization's channels, before the event is dispatched (D-93): at once
+     * when the writer's own statements have committed, after the enclosing
+     * scope when it enlisted in a caller's transaction (issue #1926). Optional
+     * so a composition with no access rule — a unit test — keeps working.
+     */
+    private readonly accessCache?: SalesChannelAccessCacheInvalidation,
   ) {}
+
+  /** The manager the statements of one mutation run on. */
+  private emFor(options: MembershipMutationOptions): EntityManager {
+    return options.em ?? this.emFactory();
+  }
+
+  /**
+   * Drop the access cache for an Organization whose channels just changed. The
+   * only bridge that takes part in the access rule is the Organization one
+   * (FR-013/FR-014); every other type costs nothing here.
+   */
+  private async afterChannelsChanged(
+    entityType: ChannelMemberEntityType,
+    entityId: string,
+    options: MembershipMutationOptions,
+  ): Promise<void> {
+    if (entityType !== 'organization' || !this.accessCache) return;
+    const accessCache = this.accessCache;
+    const drop = async (): Promise<void> => {
+      await accessCache.invalidateAfterWrite(entityId);
+    };
+    // Enlisted: the statements are not committed yet, and the cache contract is
+    // "a write that has already committed" — so wait for the scope (#1926).
+    if (this.enlists(options)) await this.eventBus.afterScope(drop);
+    else await drop();
+  }
+
+  /**
+   * True when the mutation runs inside the caller's open transaction, so its
+   * audit entries and its cache drop have to follow that transaction's outcome
+   * rather than the statements' (issue #1926).
+   */
+  private enlists(options: MembershipMutationOptions): options is MembershipMutationOptions & {
+    em: EntityManager;
+  } {
+    return options.em !== undefined && options.em.isInTransaction();
+  }
 
   /**
    * Add `entityId` to `channelId`'s member set for `entityType`. Idempotent —
@@ -98,7 +179,7 @@ export class SalesChannelMembershipService {
     options: MembershipMutationOptions = {},
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
-    const em = this.emFactory();
+    const em = this.emFor(options);
 
     const inserted = await em
       .getConnection()
@@ -117,6 +198,7 @@ export class SalesChannelMembershipService {
     }
 
     await this.auditMembership(channelId, entityType, entityId, 'add', options);
+    await this.afterChannelsChanged(entityType, entityId, options);
     this.emitMembershipChanged(channelId, entityType, entityId, 'add');
     return { changed: true };
   }
@@ -139,7 +221,7 @@ export class SalesChannelMembershipService {
     options: MembershipMutationOptions = {},
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
-    const em = this.emFactory();
+    const em = this.emFor(options);
 
     // Step 1: check existence so the no-op path is idempotent and so FR-008
     // can be evaluated BEFORE we delete anything.
@@ -186,6 +268,7 @@ export class SalesChannelMembershipService {
 
     if (!wouldOrphan) {
       await this.auditMembership(channelId, entityType, entityId, 'remove', options);
+      await this.afterChannelsChanged(entityType, entityId, options);
       this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
       return { changed: true };
     }
@@ -204,6 +287,7 @@ export class SalesChannelMembershipService {
       );
 
     await this.auditMembership(channelId, entityType, entityId, 'remove', options, true);
+    await this.afterChannelsChanged(entityType, entityId, options);
     this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
     return { changed: true, fallbackAppliedToDefault: true };
   }
@@ -219,7 +303,7 @@ export class SalesChannelMembershipService {
     options: MembershipMutationOptions = {},
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
-    const em = this.emFactory();
+    const em = this.emFor(options);
 
     const remaining = await this.countMembershipsForEntity(em, bridge, entityId);
     if (remaining > 0) return { changed: false };
@@ -240,6 +324,7 @@ export class SalesChannelMembershipService {
     // The actor when the caller has one: a create that falls back to Default is
     // still somebody's create, and its audit row should say whose.
     await this.auditMembership(defaultId, entityType, entityId, 'add', options);
+    await this.afterChannelsChanged(entityType, entityId, options);
     this.emitMembershipChanged(defaultId, entityType, entityId, 'add');
     return { changed: true };
   }
@@ -269,7 +354,7 @@ export class SalesChannelMembershipService {
     options: MembershipMutationOptions = {},
   ): Promise<{ copied: number }> {
     const bridge = this.bridges.require(entityType);
-    const em = this.emFactory();
+    const em = this.emFor(options);
     const rows = await em
       .getConnection()
       .execute<Array<{ sales_channel_id: string }>>(
@@ -309,7 +394,7 @@ export class SalesChannelMembershipService {
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
     const desiredIds = [...new Set(channelIds)];
-    const em = this.emFactory();
+    const em = this.emFor(options);
     const existingRows = await em
       .getConnection()
       .execute<Array<{ sales_channel_id: string }>>(
@@ -320,12 +405,14 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
     const existingIds = existingRows.map((row) => row.sales_channel_id);
+    // Sorted by the statement; copied so the caller cannot alter the diff below.
+    const previousChannelIds = [...existingIds];
     const desiredSorted = [...desiredIds].sort();
     if (
       existingIds.length === desiredSorted.length &&
       existingIds.every((id, index) => id === desiredSorted[index])
     ) {
-      return { changed: false };
+      return { changed: false, previousChannelIds };
     }
 
     await em.transactional(async (tx) => {
@@ -350,6 +437,9 @@ export class SalesChannelMembershipService {
       }
     });
 
+    // One drop for the whole replacement, after the statements and before any
+    // of the events below — the set changed once, whatever the row count.
+    await this.afterChannelsChanged(entityType, entityId, options);
     const desiredSet = new Set(desiredIds);
     const existingSet = new Set(existingIds);
     for (const channelId of existingIds) {
@@ -363,7 +453,7 @@ export class SalesChannelMembershipService {
       this.emitMembershipChanged(channelId, entityType, entityId, 'add');
     }
 
-    return { changed: true };
+    return { changed: true, previousChannelIds };
   }
 
   /**
@@ -402,7 +492,7 @@ export class SalesChannelMembershipService {
         [{ path: 'entityId', issue: entityId }],
       );
     }
-    const em = this.emFactory();
+    const em = this.emFor(options);
     const removed = await em
       .getConnection()
       .execute<Array<{ sales_channel_id: string }>>(
@@ -413,6 +503,7 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
     if (removed.length === 0) return { changed: false };
+    await this.afterChannelsChanged(entityType, entityId, options);
     for (const row of removed) {
       await this.auditMembership(row.sales_channel_id, entityType, entityId, 'remove', options);
       this.emitMembershipChanged(row.sales_channel_id, entityType, entityId, 'remove');
@@ -543,6 +634,28 @@ export class SalesChannelMembershipService {
     return ids.filter((id) => boundHere.has(id) || !boundSomewhere.has(id));
   }
 
+  /**
+   * The ids of the channels an entity currently belongs to — the read behind
+   * the access cache (feature 154), which needs the ids and nothing else, so it
+   * skips {@link listChannelsForEntity}'s second query for the channel rows.
+   */
+  async listChannelIdsForEntity(
+    entityType: ChannelMemberEntityType,
+    entityId: string,
+  ): Promise<string[]> {
+    const bridge = this.bridges.require(entityType);
+    const em = this.emFactory();
+    const rows = await em
+      .getConnection()
+      .execute<Array<{ sales_channel_id: string }>>(
+        `select "sales_channel_id" from "${bridge.table}" where "${bridge.entityIdColumn}" = ?`,
+        [entityId],
+        'all',
+        em.getTransactionContext(),
+      );
+    return rows.map((r) => r.sales_channel_id);
+  }
+
   /** Channels an entity currently belongs to. */
   async listChannelsForEntity(
     entityType: ChannelMemberEntityType,
@@ -646,7 +759,7 @@ export class SalesChannelMembershipService {
     fallbackAppliedToDefault?: boolean,
   ): Promise<void> {
     if (!this.auditLogService) return;
-    await this.auditLogService.record({
+    const entry = {
       actorAdminUserId: options.actorAdminUserId ?? null,
       action: SALES_CHANNEL_AUDIT_ACTIONS.MEMBERSHIP_CHANGED,
       objectType: 'sales_channel_membership',
@@ -658,7 +771,11 @@ export class SalesChannelMembershipService {
         op,
         ...(fallbackAppliedToDefault ? { fallbackAppliedToDefault: true } : {}),
       },
-    });
+    };
+    // Enlisted, the entry lives or dies with the caller's write (#1926); on its
+    // own fork it would outlive a rollback and describe a change that never was.
+    if (this.enlists(options)) this.auditLogService.recordWithin(options.em, entry);
+    else await this.auditLogService.record(entry);
   }
 
   private emitMembershipChanged(

@@ -46,9 +46,8 @@ describe('boot-time manifest sync (T019)', () => {
       name: { en: 'Main' },
       defaultLanguage: 'en',
       defaultCurrency: 'USD',
-      isPublic: true,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     return channel;
   }
 
@@ -121,7 +120,7 @@ describe('boot-time manifest sync (T019)', () => {
         salesChannel: channel,
         value: 'https://admin-chosen.example',
       });
-      await em.persistAndFlush(value);
+      await em.persist(value).flush();
 
       // Re-run the reconciler. The admin override must survive.
       await reconciler.apply([settingsManifest, catalogManifest]);

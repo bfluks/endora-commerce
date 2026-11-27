@@ -2,15 +2,20 @@ import { dirname } from 'node:path';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import type { IMigrator } from '@mikro-orm/core';
 import type { Redis } from 'ioredis';
+import { migrateUpVerified } from '../../db/migrate.js';
+import { activeSchemaExtensionContext } from '../../kernel/schema-extensions/registry.js';
 import { settingsManifestWithRecentActivity } from '@endora-commerce/contracts';
 import type {
   ModuleInstallHook,
+  ModuleLifecycleLogger,
   ModuleUninstallHook,
   RegistryState,
   ModuleListItem,
   ModuleListItemFlag,
 } from '@endora-commerce/contracts';
+import { currentPlatformLogger, platformLogger } from '../../kernel/logging.js';
 import { ManifestReconciler } from '../../kernel/settings/manifest-reconciler.js';
+import { SettingsCache } from '../../kernel/settings/settings-cache.js';
 import { Setting } from '../../kernel/settings/setting.entity.js';
 import { SettingGroup } from '../../kernel/settings/setting-group.entity.js';
 import type { AuditPort } from '../../kernel/ports/audit.js';
@@ -87,12 +92,14 @@ export interface OrchestratorDeps {
    * inject a stub here so a revert can be observed without touching schema.
    */
   migratorFor?: (orm: MikroORM) => Promise<IMigrator>;
-  /** Optional logger (Fastify request-logger compatible). Defaults to console. */
-  log?: {
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  };
+  /**
+   * Optional logger (Fastify request-logger compatible). Defaults to the
+   * platform's attached log destination, and to the console when nothing is
+   * attached (issue #825).
+   * The contracts' `ModuleLifecycleLogger`, the same logger the orchestrator
+   * hands to install/uninstall hooks — never a structural copy of it (#84).
+   */
+  log?: ModuleLifecycleLogger;
 }
 
 export interface InstallResult {
@@ -189,7 +196,7 @@ export class ModuleLifecycleOrchestrator {
       // the tree had no `installHook` at all.
       //
       // With `bootConvergedAt` set, the normal body below runs instead, and every
-      // step of it is already safe on a converged database: `getPendingMigrations`
+      // step of it is already safe on a converged database: `getPending`
       // returns none so the rollback set is empty, the settings reconcile is
       // idempotent, the participants upsert-and-prune, and the hook is idempotent
       // by contract (`module-composition.md` item 9). Step 4 clears the marker, so
@@ -271,9 +278,15 @@ export class ModuleLifecycleOrchestrator {
         //    module's migrations also runs any prior pending ones, which is
         //    the expected outcome.
         const migrator = await this.migrator();
-        const pendingBefore = await migrator.getPendingMigrations();
+        const pendingBefore = await migrator.getPending();
         if (pendingBefore.length > 0) {
-          const applied = await migrator.up();
+          // `specs/178-extensible-columns/` FR-025 — verified against the
+          // declared extension columns inside the run's own transaction. A
+          // substituted migrator (`migratorFor`, a test seam) is driven as given.
+          const applied =
+            this.deps.migratorFor === undefined
+              ? await migrateUpVerified(this.deps.orm)
+              : await migrator.up();
           appliedMigrations = applied.map((m) => m.name);
         }
 
@@ -290,7 +303,15 @@ export class ModuleLifecycleOrchestrator {
           entry.recentActivity,
         );
         if (settingsManifest) {
-          const reconciler = new ManifestReconciler(this.deps.em());
+          // Issue #700 — a `string` → `secret` upgrade encrypts the values it
+          // reclassifies, and drops their shared cache entries. A cache built
+          // here reaches Redis; another process's LRU ages out on its own TTL.
+          const reconciler = new ManifestReconciler(this.deps.em(), {
+            secretEncryptionKey: process.env['SETTINGS_SECRET_ENCRYPTION_KEY'] || undefined,
+            cache: new SettingsCache(this.deps.redis),
+            warn: (message) => this.log.warn(message),
+            info: (message) => this.log.info(message),
+          });
           const result = await reconciler.apply([settingsManifest]);
           const r = result.perModule[0];
           if (r) {
@@ -550,8 +571,20 @@ export class ModuleLifecycleOrchestrator {
       let revertedMigrations: string[] = [];
       if (opts.hard) {
         revertedMigrations = await this.revertMigrationsFor(moduleId);
+        // `specs/178-extensible-columns/` FR-034 — the host's table went with
+        // its migrations, and the declared extension columns on it with the
+        // table, so their ledger rows are `dropped`. (A declaring module's own
+        // hard uninstall needs nothing here: its generated step's `down()`,
+        // reverted above, marked its rows `orphaned` and dropped nothing.)
+        await this.markHostedExtensionsDropped(moduleId);
+        // `specs/176-command-hooks-outbox/` FR-036 — the module's undelivered
+        // and delivered `afterCommit` rows go with it. `command_outbox` is a
+        // kernel table its migrations never name, so its rows are removed
+        // here, by the platform, rather than by any `down()`. A soft uninstall
+        // keeps them: a row waits for its handler module to come back.
+        await this.purgeCommandOutboxRows(moduleId);
         // Hard uninstall deletes the row; soft preserves it as 'uninstalled'.
-        await em.removeAndFlush(row);
+        await em.remove(row).flush();
         // Hard-uninstall drops every projection of this module's manifest —
         // its translation bundles and its palette actions. Soft-uninstall
         // preserves them so a re-install picks them up unchanged
@@ -940,10 +973,13 @@ export class ModuleLifecycleOrchestrator {
         const depDisabled = entry.manifest.dependencies.some((d) => !enabledSet.has(d));
         if (depDisabled) flags.push('dep-disabled');
       }
+      const activation = entry.manifest.activation;
       out.push({
         id,
         name: entry.manifest.name,
         description: entry.manifest.description ?? null,
+        // Issue #1809 — the lock reason, so the list can carry it translated.
+        nonDeactivatableReason: activation && 'nonDeactivatable' in activation ? activation.reason : null,
         version: {
           registered: row?.version ?? null,
           onDisk: entry.manifest.version,
@@ -963,6 +999,7 @@ export class ModuleLifecycleOrchestrator {
         id,
         name: id,
         description: null,
+        nonDeactivatableReason: null,
         version: {
           registered: row.version,
           onDisk: null,
@@ -1058,7 +1095,7 @@ export class ModuleLifecycleOrchestrator {
       // left to the entity's field default, like every other column here.
       bootConvergedAt: patch.bootConvergedAt ?? null,
     });
-    await em.persistAndFlush(created);
+    await em.persist(created).flush();
   }
 
   /** Set of moduleIds whose state is 'installed' OR 'disabled' (i.e. present, not removed). */
@@ -1121,7 +1158,7 @@ export class ModuleLifecycleOrchestrator {
   }
 
   private async migrator(): Promise<IMigrator> {
-    const accessor = this.deps.migratorFor ?? (async (orm: MikroORM) => orm.getMigrator());
+    const accessor = this.deps.migratorFor ?? (async (orm: MikroORM) => orm.migrator);
     return accessor(this.deps.orm);
   }
 
@@ -1185,6 +1222,34 @@ export class ModuleLifecycleOrchestrator {
       );
     }
     return participants as readonly LoadedLifecycleParticipant<EntityManager>[];
+  }
+
+  /**
+   * Delete every `command_outbox` row whose handler is `moduleId`'s, in every
+   * state. On the operation's manager, so it commits or rolls back with the
+   * rest of the uninstall.
+   */
+  private async purgeCommandOutboxRows(moduleId: string): Promise<void> {
+    await this.operationEm().execute(`delete from "command_outbox" where "hook_module" = ?`, [moduleId]);
+  }
+
+  /**
+   * Mark the ledger rows of every extension declared on a table `moduleId` owns
+   * as `dropped`. Issues nothing when the module owns no extensible host the
+   * platform has rolled out — every module, while no host is (Phase A).
+   */
+  private async markHostedExtensionsDropped(moduleId: string): Promise<void> {
+    const tables = [...activeSchemaExtensionContext().hosts.values()]
+      .filter((host) => host.ownerModuleId === moduleId)
+      .map((host) => host.table);
+    if (tables.length === 0) return;
+    await this.operationEm()
+      .getConnection()
+      .execute(
+        `update schema_extensions set status = 'dropped', dropped_at = now() ` +
+          `where status <> 'dropped' and host_table in (${tables.map(() => '?').join(', ')})`,
+        tables,
+      );
   }
 
   private async revertMigrationsFor(moduleId: string): Promise<string[]> {
@@ -1263,10 +1328,30 @@ function taggedLogger(
   };
 }
 
+/**
+ * The logger an orchestrator built without one uses — and therefore the one
+ * every install and uninstall hook is handed on the `module:*` path, where
+ * `orchestratorFor` supplies none.
+ *
+ * A line goes to the platform's attached destination when there is one, and
+ * to the console only when there is not (issue #825). An operator command
+ * attaches `attachOperatorDiagnostics(err)` before it opens anything, so a
+ * hook's `log.info(...)` reaches the command's error channel beside the
+ * platform's own lines; written straight to `console.log`, it landed on stdout
+ * in front of `module:install --json`'s document and made it unparseable —
+ * the defect #819 closed for the platform's lines one logger over. A built
+ * server attaches its pino instance, so there the line joins the collected log
+ * instead of being an unstructured stdout write.
+ *
+ * The slot is read **per line**, not when the orchestrator is constructed: the
+ * same reason `platformLogger()` gives — whatever is captured at construction
+ * is whatever was attached then, forever.
+ */
 function consoleLogger(): NonNullable<OrchestratorDeps['log']> {
+  const attached = platformLogger();
   return {
-    info: (m) => console.log(m),
-    warn: (m) => console.warn(m),
-    error: (m) => console.error(m),
+    info: (m) => (currentPlatformLogger() ? attached.info({}, m) : console.log(m)),
+    warn: (m) => (currentPlatformLogger() ? attached.warn({}, m) : console.warn(m)),
+    error: (m) => (currentPlatformLogger() ? attached.error({}, m) : console.error(m)),
   };
 }

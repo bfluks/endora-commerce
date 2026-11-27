@@ -3,7 +3,15 @@ import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { composeCrawlerFile } from '@endora-commerce/contracts/seo';
 
-import type { CrawlerFiles, CrawlerFilesRead } from '../../lib/seo/crawler-policy';
+import {
+  READ_TIMEOUT_MS,
+  STALE_REFRESH_BUDGET_MS,
+  type CrawlerFiles,
+  type CrawlerFilesRead,
+} from '../../lib/seo/crawler-policy';
+// The shared linear-time protocol (issue #953): a test-only module of
+// `@endora-commerce/contracts`, reached through its source path and never published.
+import { GROWTH, LINEAR_BOUND, growthRatio } from '../../../packages/contracts/src/linear-time.cases.js';
 import { CRAWLER_FILES_CAPABILITY_HEADER } from '../../lib/seo/crawler-file-response';
 import { llmsTxtResponse, type UnservedPages } from '../../lib/seo/llms-txt';
 import { renderLlmsTxtBase } from '../../lib/seo/llms-txt-base';
@@ -233,6 +241,75 @@ describe('llms.txt — when it is not served', () => {
   });
 });
 
+/**
+ * A store closed to anonymous visitors (`specs/154-sales-channel-access/`):
+ * nothing on it is public, so the file names the store and says so — no page,
+ * no sitemap, none of the operator's content — and it is served whatever the
+ * default robots says, because it invites nobody anywhere.
+ */
+describe('llms.txt — on a store closed to anonymous visitors', () => {
+  const CLOSED = '# Endora Demo\n\n> The content of this store is available to signed-in customers only.\n';
+
+  it('names the store and says its content is for signed-in customers only', async () => {
+    const { response, pagesAsked } = serve({
+      kind: 'value',
+      value: files({ anonymousAccess: false, llmsTxtAdditional: ADDITIONAL }),
+    });
+    const served = await response;
+    expectServedHeaders(served);
+    const body = await served.text();
+    expect(body).toBe(CLOSED);
+    // No link of any kind, and nothing the operator wrote.
+    expect(body).not.toContain('](');
+    expect(body).not.toContain('About');
+    // Nothing on it depends on which pages are served.
+    expect(pagesAsked).toEqual([]);
+  });
+
+  it('names the store by its host when it has no name', async () => {
+    const served = await serve({
+      kind: 'value',
+      value: files({ anonymousAccess: false, shop: { name: '' } }),
+    }).response;
+    expect((await served.text()).split('\n')[0]).toBe('# localhost:3000');
+  });
+
+  it('is served whatever the default robots says, or whether it could be read', async () => {
+    for (const value of [
+      files({ anonymousAccess: false, index: false, follow: false }),
+      files({ anonymousAccess: false, index: false, follow: false, unreadable: ['policy'] }),
+      files({ anonymousAccess: false, unreadable: ['llmsTxtAdditional'] }),
+    ]) {
+      const served = await serve({ kind: 'value', value }).response;
+      expectServedHeaders(served);
+      expect(await served.text()).toBe(CLOSED);
+    }
+  });
+
+  it('is the closed file at `?part=base` too, and kept by no cache there', async () => {
+    const served = await serve(
+      { kind: 'value', value: files({ anonymousAccess: false, llmsTxtAdditional: ADDITIONAL }) },
+      { path: '/llms.txt?part=base' },
+    ).response;
+    expect(served.status).toBe(200);
+    expect(served.headers.get('cache-control')).toBe('no-store');
+    expect(await served.text()).toBe(CLOSED);
+  });
+
+  it('is unchanged on an open store, and when the backend does not say', async () => {
+    for (const anonymousAccess of [true, undefined]) {
+      const served = await serve({
+        kind: 'value',
+        value: files({
+          llmsTxtAdditional: ADDITIONAL,
+          ...(anonymousAccess === undefined ? {} : { anonymousAccess }),
+        }),
+      }).response;
+      expect(await served.text()).toBe(`${base()}\n${ADDITIONAL}`);
+    }
+  });
+});
+
 describe('llms.txt — when the configuration cannot be read (FR-029, FR-022)', () => {
   it('answers a temporary failure when nothing was ever known — never a file that omits the content', async () => {
     const served = await serve({ kind: 'unknown' }).response;
@@ -425,11 +502,14 @@ describe('llms.txt — the composed file is kept, and never the wrong one', () =
   });
 
   it('answers content made to be slow to trim as fast as any other', async () => {
-    const value = files({ llmsTxtAdditional: `${'\n'.repeat(65_535)}x` });
-    const start = performance.now();
-    const body = await serveValue(value);
-    expect(performance.now() - start).toBeLessThan(250);
-    expect(body.endsWith('\nx\n')).toBe(true);
+    // Compared across sizes, not against a clock (issue #612). Each call gets a
+    // value of its own: the composed file is kept per value.
+    const value = (length: number) => files({ llmsTxtAdditional: `${'\n'.repeat(length - 1)}x` });
+    expect((await serveValue(value(65_536))).endsWith('\nx\n')).toBe(true);
+    const ratio = await growthRatio(serveValue, value, 65_536);
+    expect(ratio, `${GROWTH}× the content took ${ratio.toFixed(2)}× the time per character`).toBeLessThan(
+      LINEAR_BOUND,
+    );
   });
 });
 
@@ -677,18 +757,25 @@ describe('app/llms.txt/route.ts', () => {
       expect(await (await GET(request())).text()).toBe(base());
 
       // The refresh never answers. The request is given the refresh's budget
-      // — a fraction of a second — and then served what was known.
+      // — a fraction of a second — and then served what was known. The clock
+      // is the fake one, so what this proves is which timer lets the request
+      // go, not how fast the host is (issue #612): still waiting just before
+      // the budget is spent, served as soon as it is, and the budget is well
+      // inside the read's own deadline.
       api.blog = () => new Promise<Response>(() => undefined);
-      const realNow = Date.now;
-      const offset = 61_000;
-      vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+      expect(STALE_REFRESH_BUDGET_MS).toBeLessThan(READ_TIMEOUT_MS);
+      vi.useFakeTimers();
       try {
-        const start = performance.now();
-        const later = await GET(request());
-        expect(performance.now() - start).toBeLessThan(1_000);
-        expect(await later.text()).toBe(base());
+        vi.setSystemTime(Date.now() + 61_000);
+        let later: Response | undefined;
+        const pending = GET(request()).then((response) => (later = response));
+        await vi.advanceTimersByTimeAsync(STALE_REFRESH_BUDGET_MS - 1);
+        expect(later, 'served before the refresh budget was spent').toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(later, 'still waiting once the refresh budget was spent').toBeDefined();
+        expect(await (await pending).text()).toBe(base());
       } finally {
-        vi.restoreAllMocks();
+        vi.useRealTimers();
       }
     });
 

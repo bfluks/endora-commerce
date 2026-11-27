@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { FailurePanel } from '../../../../components/checkout/FailurePanel';
 import { PaymentFailurePanel } from '../../../../components/checkout/PaymentFailurePanel';
 import { getMyOrder } from '../../../../lib/api/orders';
@@ -8,13 +7,16 @@ import { offersPaymentRetry, paymentRetryDestination } from '../../../../lib/pay
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
 import { StorefrontApiError } from '../../../../lib/api/client';
-import { tForLocale } from '../../../../lib/i18n/messages';
 import {
   checkoutSuccessUrl,
   parseReturnOutcome,
   paymentReturnUrl,
   resolvePostPaymentLanding,
 } from '../../../../lib/payments/post-payment-landing';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { CHECKOUT_ERRORS } from '../../../../lib/commerce-errors';
+import { urlErrorText } from '../../../../lib/url-error-figures';
+import { ORDER_ERRORS, paymentRetryRefusedHref } from '../../../../lib/orders/order-errors';
 
 /**
  * Checkout Failure Page — **two readers**, told different things (issue #287).
@@ -41,19 +43,35 @@ export const metadata = { robots: { index: false, follow: false } };
 export default async function CheckoutFailurePage({
   searchParams,
 }: {
-  searchParams: Promise<{ reason?: string; id?: string; outcome?: string }>;
+  searchParams: Promise<{
+    reason?: string;
+    id?: string;
+    outcome?: string;
+    /** Issue #791 — the figures beside `reason`, typed values read through `lib/url-typed-values.ts`. */
+    min?: string;
+    minValue?: string;
+    subtotal?: string;
+    available?: string;
+    total?: string;
+    currency?: string;
+  }>;
 }): Promise<ReactNode> {
-  const { reason, id, outcome: rawOutcome } = await searchParams;
+  const { reason, id, outcome: rawOutcome, ...figures } = await searchParams;
   const { locale } = await getServerContext();
 
   // The placement failure: no order was ever created, so there is nothing to
-  // read and nothing to pay.
-  if (!id) return <FailurePanel reason={reason ?? null} locale={locale} />;
+  // read and nothing to pay. Issue #745 — `reason` is a code, worded here; one
+  // this page does not know reads as the generic failure, never as given.
+  // Issue #791 — a minimum or credit-limit refusal names its figures when they
+  // are in shape, and reads as its bare sentence when they are not.
+  if (!id) {
+    return <FailurePanel reason={urlErrorText(CHECKOUT_ERRORS, reason, figures, locale)} locale={locale} />;
+  }
 
   const outcome = parseReturnOutcome(rawOutcome);
   const session = await getSessionCookie();
   if (!session) {
-    redirect(`/login?next=${encodeURIComponent(paymentReturnUrl(id, outcome))}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(paymentReturnUrl(id, outcome))}`);
   }
 
   let order;
@@ -61,7 +79,7 @@ export default async function CheckoutFailurePage({
     order = await getMyOrder(session, id);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) {
-      redirect('/account/orders');
+      return await localeRedirect('/account/orders');
     }
     throw err;
   }
@@ -73,8 +91,8 @@ export default async function CheckoutFailurePage({
   });
   // The payment settled after the buyer was sent here, or the notification is
   // still in flight. Either way this page's verdict is out of date.
-  if (landing.kind === 'success') redirect(checkoutSuccessUrl(order.id));
-  if (landing.kind === 'pending') redirect(paymentReturnUrl(order.id, outcome));
+  if (landing.kind === 'success') return await localeRedirect(checkoutSuccessUrl(order.id));
+  if (landing.kind === 'pending') return await localeRedirect(paymentReturnUrl(order.id, outcome));
 
   return (
     <PaymentFailurePanel
@@ -97,29 +115,21 @@ export default async function CheckoutFailurePage({
  * it: `redirect()` works by throwing, so calling it in the `try` would be
  * caught by the handler meant for API failures.
  *
- * A refusal goes to the order page's own `?error=` channel, which is the
- * platform's sentence about the order rather than about this page.
+ * A refusal goes to the order page's own `?error=` channel, as a code the
+ * order page words (issue #745).
  */
 async function payAgainAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
-  const { locale } = await getServerContext();
-  const t = tForLocale(locale);
 
   let target: string;
   try {
     const result = await retryOrderPayment(session, id);
-    target =
-      paymentRetryDestination(result) ??
-      `/orders/${id}?error=${encodeURIComponent(
-        result.opened ? t('order.payment.retry.failed') : t('order.payment.retry.inProgress'),
-      )}`;
+    target = paymentRetryDestination(result) ?? paymentRetryRefusedHref(id, result.opened);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
-    target = `/orders/${id}?error=${encodeURIComponent(message)}`;
+    target = `/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'PAYMENT_RETRY_FAILED')}`;
   }
-  redirect(target);
+  return await localeRedirect(target);
 }

@@ -5,6 +5,7 @@ import {
   permissionsNotHeld,
   type AdminUserReadPort,
   type UpsertAdminRoleOptions,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
@@ -211,6 +212,7 @@ export class AdminRoleService {
 
   async getById(id: string): Promise<AdminRole> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin role not found.');
     const row = await em.findOne(AdminRole, { id });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin role not found.');
     return row;
@@ -248,7 +250,7 @@ export class AdminRoleService {
     });
     this.#audit(em, 'admin_role.upsert', role.id, null, { code: role.code, name: role.name });
     try {
-      await em.persistAndFlush(role);
+      await em.persist(role).flush();
     } catch (err) {
       if (err instanceof UniqueConstraintViolationException) {
         throw new HttpError(
@@ -291,6 +293,7 @@ export class AdminRoleService {
 
   async remove(id: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin role not found.');
     const role = await em.findOne(AdminRole, { id });
     if (!role) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin role not found.');
     // The platform-administrator role is protected by its code, not by the
@@ -317,7 +320,7 @@ export class AdminRoleService {
     const refusal = roleInUseRefusal(live, assignees.length - live);
     if (refusal) throw refusal;
     this.#audit(em, 'admin_role.delete', role.id, { code: role.code }, null);
-    await em.removeAndFlush(role);
+    await em.remove(role).flush();
   }
 
   /**
