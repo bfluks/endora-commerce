@@ -67,6 +67,10 @@ const state = vi.hoisted(() => ({
   overview: null as unknown,
   failOverview: false,
   refuse: null as null | { url: string; status: number; code: string; message: string },
+  /** While set, every write waits for it: a write in flight. */
+  gate: null as null | Promise<void>,
+  /** Swapped in for the overview once a write has gone through. */
+  after: null as unknown,
 }));
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -79,7 +83,9 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
   };
   const write = (method: string) => async (url: string, body?: unknown, options?: { headers?: unknown }) => {
     state.calls.push({ method, url, body, headers: options?.headers });
+    if (state.gate) await state.gate;
     refuseIf(url);
+    if (state.after) state.overview = state.after;
     return { data: body ?? null };
   };
   return {
@@ -154,6 +160,8 @@ describe('ConfigurationPage (T071)', () => {
     state.overview = overview();
     state.failOverview = false;
     state.refuse = null;
+    state.gate = null;
+    state.after = null;
   });
   afterEach(() => cleanup());
 
@@ -207,7 +215,8 @@ describe('ConfigurationPage (T071)', () => {
   it('shows every role\'s effect: cannot be mapped, sees no products, mapped, mapping without effect (FR-024, FR-026)', async () => {
     render();
     await screen.findByRole('region', { name: k('config.roles.title') });
-    expect(within(roleRow('Platform administrator')).getByText(k('roleEffect.unmappable_unrestricted'))).toBeInTheDocument();
+    expect(within(roleRow('Platform administrator')).getByText(k('roleEffect.unrestricted'))).toBeInTheDocument();
+    expect(within(roleRow('Platform administrator')).getByText(k('config.roles.notMappableBecause'))).toBeInTheDocument();
     expect(within(roleRow('Platform administrator')).queryByRole('combobox')).toBeNull();
     expect(within(roleRow('Sales rep')).getByText(k('roleEffect.sees_no_products'))).toBeInTheDocument();
     expect(within(roleRow('Ops')).getByText(k('roleWarning.mapping_without_effect'))).toBeInTheDocument();
@@ -233,6 +242,8 @@ describe('ConfigurationPage (T071)', () => {
       ),
     );
     fireEvent.change(within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: '' } });
+    const ask = await screen.findByRole('dialog');
+    fireEvent.click(within(ask).getByRole('button', { name: k('config.roles.removeMapping') }));
     await waitFor(() =>
       expect(state.calls).toContainEqual(
         expect.objectContaining({ method: 'PUT', url: `/api/v1/admin/product-visibility/role-mappings/${ROLE_MAPPED}`, body: { target: null } }),
@@ -263,6 +274,7 @@ describe('ConfigurationPage (T071)', () => {
     const after = within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }) as HTMLSelectElement;
     await waitFor(() => expect(after.value).toBe(''));
     expect(after).not.toBeDisabled();
+    expect(after).not.toHaveAttribute('aria-disabled', 'true');
   });
 
   it('reads the configuration again after a mapping is saved (QA)', async () => {
@@ -270,7 +282,99 @@ describe('ConfigurationPage (T071)', () => {
     await screen.findByRole('region', { name: k('config.roles.title') });
     fireEvent.change(within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: CAT_DOMESTIC } });
     await waitFor(() => expect(state.calls.filter((c) => c.method === 'GET' && c.url.endsWith('/overview'))).toHaveLength(2));
-    expect(await screen.findByText(k('config.roles.saved'))).toBeInTheDocument();
+    expect(await screen.findByText(k('config.roles.nowSeesCategory'))).toBeInTheDocument();
+  });
+
+  describe('role mappings, checkpoint 2 fix round', () => {
+    it('ends a mapped role\'s effect in words when the mapping column names the category (no dangling "Category:")', async () => {
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      expect(within(roleRow('Domestic rep')).getByText(k('roleEffect.mappedLimited'))).toBeInTheDocument();
+      expect(within(roleRow('Domestic rep')).queryByText(k('roleEffect.mapped'))).toBeNull();
+    });
+
+    it('says "cannot be mapped" once per row, with its reason', async () => {
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      const row = roleRow('Platform administrator');
+      expect(within(row).getAllByText(/notMappable|unmappable/)).toHaveLength(1);
+    });
+
+    it('labels the roles table by the section heading', async () => {
+      render();
+      const section = await screen.findByRole('region', { name: k('config.roles.title') });
+      expect(within(section).getByRole('table', { name: k('config.roles.title') })).toBeInTheDocument();
+    });
+
+    it('keeps a busy mapping focusable and shows the pending choice; a second change is ignored (WCAG 2.4.3)', async () => {
+      let release = (): void => undefined;
+      state.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      const select = within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }) as HTMLSelectElement;
+      select.focus();
+      fireEvent.change(select, { target: { value: CAT_DOMESTIC } });
+      await waitFor(() => expect(select).toHaveAttribute('aria-disabled', 'true'));
+      expect(select).not.toBeDisabled();
+      expect(select.value).toBe(CAT_DOMESTIC);
+      expect(document.activeElement).toBe(select);
+      fireEvent.change(select, { target: { value: 'unrestricted' } });
+      expect(state.calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
+      expect(select.value).toBe(CAT_DOMESTIC);
+      release();
+      await waitFor(() => expect(select).not.toHaveAttribute('aria-disabled', 'true'));
+    });
+
+    it('lets two rows write at once: one row\'s write does not hold the other (per-role busy)', async () => {
+      let release = (): void => undefined;
+      state.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      fireEvent.change(within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: CAT_DOMESTIC } });
+      const other = within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') });
+      expect(other).not.toHaveAttribute('aria-disabled', 'true');
+      fireEvent.change(other, { target: { value: CAT_EXPORT } });
+      await waitFor(() => expect(state.calls.filter((c) => c.method === 'PUT')).toHaveLength(2));
+      release();
+    });
+
+    it('asks before a mapped role loses its mapping, and writes nothing when the question is cancelled', async () => {
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      const select = within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }) as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: '' } });
+      const ask = await screen.findByRole('dialog');
+      expect(within(ask).getByText(k('config.roles.unmapMessage'))).toBeInTheDocument();
+      fireEvent.click(within(ask).getByRole('button', { name: k('config.cancel') }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(state.calls.some((c) => c.method === 'PUT')).toBe(false);
+      expect(select.value).toBe(CAT_DOMESTIC);
+    });
+
+    it('does not ask when a mapping changes to a category or to unrestricted', async () => {
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      fireEvent.change(within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: 'unrestricted' } });
+      await waitFor(() => expect(state.calls.filter((c) => c.method === 'PUT')).toHaveLength(1));
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('states what the role now sees: all products, or none once unmapped', async () => {
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      fireEvent.change(within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: 'unrestricted' } });
+      expect(await screen.findByText(k('config.roles.nowSeesAll'))).toBeInTheDocument();
+      const o = overview();
+      o.roles = o.roles.map((r) => (r.roleId === ROLE_MAPPED ? { ...r, effect: 'sees_no_products', categoryId: undefined } : r)) as typeof o.roles;
+      state.after = o;
+      fireEvent.change(within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: '' } });
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: k('config.roles.removeMapping') }));
+      expect(await screen.findByText(k('config.roles.nowSeesNothing'))).toBeInTheDocument();
+    });
   });
 
   it('creates a category from its name and conditions, and refuses an empty name in its own words', async () => {
