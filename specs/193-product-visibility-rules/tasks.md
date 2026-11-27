@@ -701,10 +701,46 @@ import_export, contracts, spec).
   `If-Match`; attached ⇒ `change` preview → confirm (shared preview flow with the attach dialog). contracts/admin-api.md updated.
   *(Done: a rule with grouped conditions — API only — is not opened, so a save cannot drop its groups.)*
 
-**Verification**: `pnpm --filter admin exec vitest run test/modules/product_visibility_rules test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx test/modules/catalog/ProductList.visibility-banner.test.tsx test/unit/palette-coverage.test.ts`;
+**Verification**: `pnpm --filter @endora-commerce/mod-product-visibility-rules build` first (the admin tests read the
+module's `dist/admin` through `modules.generated`; rebuild `@endora-commerce/mod-catalog` too after a banner change), then
+`pnpm --filter admin exec vitest run test/modules/product_visibility_rules test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx test/modules/catalog/ProductList.visibility-banner.test.tsx test/unit/palette-coverage.test.ts`;
 `pnpm --filter backend exec vitest run test/unit/product_visibility_rules/activation-texts.test.ts`;
 `pnpm --filter backend run check:admin-zones`; `pnpm --filter backend exec vitest run test/unit/_i18n/registered-bundles-shape.test.ts`;
 `pnpm --filter admin run typecheck && pnpm --filter admin run lint`.
+The two backend `vitest run` commands above need Postgres and Redis through the default config; without them, run them from
+`backend/` as `pnpm exec vitest run --config vitest.unit.config.ts <paths>` (no services).
+
+### Checkpoint 2 fix round
+
+Designer, QA and T103 findings of review checkpoint 2; owner ruling 2026-11-27 on the threshold copy. Each behaviour fix
+landed red test first.
+
+- [x] C2-01 Threshold labels per owner ruling: `gte_zero` "has a catalogue price, including zero (“no fixed price”)",
+  `gt_zero` "catalogue price above zero" (pl and en).
+- [x] C2-02 Roles: the effect cell ends in words ("Limited to one category") beside the mapping column; "Cannot be mapped"
+  once per row with its reason; the table is labelled by the section heading.
+- [x] C2-03 Roles: the mapping select stays focusable while its write is in flight (`aria-disabled`, change ignored), shows
+  the pending choice, reverts on refusal; busy state per role.
+- [x] C2-04 Roles: leaving a mapping for none asks first (kit confirm dialog); the status line says what the role now sees
+  (only {category} / no products / all products). The overview does not say which roles handle quote requests, so every
+  mapped role is asked, with "if" wording (deviation; a pre-write effect needs a contract change).
+- [x] C2-05 Preview flow (attach and change): focus moves to Confirm when ready; buttons and selects `aria-disabled` while
+  busy; refusals said in the always-mounted polite region; "This is taking longer than usual." with "New preview" after
+  ~75 s; one retry on a transport error; "Nothing will change." for 0/0; "Products leaving the channel:".
+- [x] C2-06 Sales channels: a failed read is said once; the attach dialog says when every channel already has a rule.
+- [x] C2-07 Configuration screen: re-reads the overview every ~8 s while a currency is being rebuilt, stops on unmount,
+  says when it is done; read-only reason first; FR-073 off-warning as information; the unmapped notice links to Roles.
+- [x] C2-08 Category and rule dialogs offer only active currencies (a saved inactive one stays shown).
+- [x] C2-09 Repeated buttons have unique names that start with the visible text (rules, channels, categories, price books,
+  conditions); after removing a condition focus moves to the next remove button, else to "add condition".
+- [x] C2-10 Rule editor: starts with one condition; says when no attribute can be used; focuses the first invalid field;
+  Save and "Preview changes" wait (`aria-disabled`, with the reason) until `/attributes` has loaded; refusals in its polite
+  region; after `VERSION_CONFLICT` or a stale change confirm offers "Load the current version" (re-reads, dialog stays open).
+- [x] C2-11 Role zones: the editor link reads "Open product visibility" without manage, points at `#role-<id>`, and that row
+  takes focus; the role editor's existing unsaved-changes prompt intercepts the link. The list zone reserves its line while
+  loading. The shared in-flight overview read is keyed by the signed-in admin's id (no session epoch in the kit).
+- [x] C2-12 Product list banner: one sentence with the category name; a sentence without it when the name is null.
+- [x] C2-13 Nav: "Website rules" entry after "Product visibility", same permission, absent while the module is off.
 
 ### ✅ Review checkpoint 2 — UI block
 
