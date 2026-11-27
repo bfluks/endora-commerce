@@ -99,6 +99,14 @@ describe('ProductsList — the product visibility banner (T076)', () => {
     expect(screen.queryByText(k('productsList.empty.noData.title'))).toBeNull();
   });
 
+  it('does not invite a mapped role whose category shows nothing to create the first product', async () => {
+    answer = listAnswer([], { restricted: true, categoryName: 'domestic' });
+    renderList();
+    await screen.findByTestId('product-visibility-banner');
+    expect(await screen.findByText(k('productsList.visibility.noneVisibleEmpty'))).toBeInTheDocument();
+    expect(screen.queryByText(k('productsList.empty.noData.title'))).toBeNull();
+  });
+
   it('never shows a number of hidden products', async () => {
     answer = listAnswer([product(1)], { restricted: true, categoryName: 'domestic' });
     renderList();
