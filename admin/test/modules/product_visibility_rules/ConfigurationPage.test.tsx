@@ -71,6 +71,7 @@ const state = vi.hoisted(() => ({
   gate: null as null | Promise<void>,
   /** Swapped in for the overview once a write has gone through. */
   after: null as unknown,
+  failChannels: false,
 }));
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -111,6 +112,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
           };
         }
         if (url.includes('/api/v1/admin/sales-channels')) {
+          if (state.failChannels) throw new actual.ApiError(500, { error: { code: 'INTERNAL', message: 'Down.' } } as never);
           return {
             items: [
               { id: CHANNEL_X, code: 'x', name: { 'en-US': 'Channel X' }, active: true },
@@ -136,14 +138,18 @@ const { ConfigurationPage } = await import('../../../../packages/modules/product
 const READ = ['product_visibility:read'];
 const MANAGE = ['product_visibility:read', 'product_visibility:manage'];
 
-function render(permissions: readonly string[] = MANAGE) {
+function render(
+  permissions: readonly string[] = MANAGE,
+  { path = '/product-visibility', buildingPollMs, bundle = {} }: { path?: string; buildingPollMs?: number; bundle?: Record<string, string> } = {},
+) {
   return renderWithI18n(
     withSession(
-      <MemoryRouter>
-        <ConfigurationPage />
+      <MemoryRouter initialEntries={[path]}>
+        <ConfigurationPage {...(buildingPollMs === undefined ? {} : { buildingPollMs })} />
       </MemoryRouter>,
       { session: adminSession({ permissions }) },
     ),
+    { [MODULE]: bundle },
   );
 }
 
@@ -162,6 +168,7 @@ describe('ConfigurationPage (T071)', () => {
     state.refuse = null;
     state.gate = null;
     state.after = null;
+    state.failChannels = false;
   });
   afterEach(() => cleanup());
 
@@ -193,7 +200,7 @@ describe('ConfigurationPage (T071)', () => {
     render();
     const section = await screen.findByRole('region', { name: k('config.designations.title') });
     const eur = within(section).getByText('EUR').closest('[data-currency-row]') as HTMLElement;
-    fireEvent.click(within(eur).getByRole('button', { name: k('config.designations.change') }));
+    fireEvent.click(within(eur).getByRole('button', { name: k('config.designations.changeFor') }));
     const dialog = await screen.findByRole('dialog');
     const book = await within(dialog).findByLabelText(k('config.designations.field.book'), { exact: false });
     await waitFor(() => expect(within(book).getAllByRole('option').map((o) => o.textContent)).toEqual(
@@ -377,6 +384,113 @@ describe('ConfigurationPage (T071)', () => {
     });
   });
 
+  describe('the configuration screen, checkpoint 2 fix round', () => {
+    const reads = (): number => state.calls.filter((c) => c.method === 'GET' && c.url.endsWith('/overview')).length;
+
+    it('shows the permanent off-warning as information, and only the unmapped notice as a warning, linking to the roles', async () => {
+      render();
+      const off = (await screen.findByText(k('config.offWarning'))).closest('[data-slot="alert"]') as HTMLElement;
+      expect(off).toHaveAttribute('data-variant', 'default');
+      const notice = screen.getByText(k('config.roles.unmappedNotice')).closest('[data-slot="alert"]') as HTMLElement;
+      expect(notice).toHaveAttribute('data-variant', 'warning');
+      expect(within(notice).getByRole('link', { name: k('config.roles.unmappedLink') })).toHaveAttribute('href', '#visibility-roles');
+    });
+
+    it('puts the read-only reason first', async () => {
+      render(READ);
+      const reason = await screen.findByText(k('config.readOnly.permission'));
+      const off = screen.getByText(k('config.offWarning'));
+      expect(reason.compareDocumentPosition(off) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('focuses the role row a #role-<id> link points at', async () => {
+      render(MANAGE, { path: `/product-visibility#role-${ROLE_REP}` });
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      await waitFor(() => expect(document.activeElement).toBe(roleRow('Sales rep')));
+    });
+
+    it('reads the overview again while a currency is being rebuilt, and says when it is done', async () => {
+      const view = render(MANAGE, { buildingPollMs: 20 });
+      await screen.findByRole('region', { name: k('config.designations.title') });
+      await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(3));
+      const done = overview();
+      done.currencies = done.currencies.map((c) => ({ ...c, building: false }));
+      state.overview = done;
+      expect(await screen.findByText(k('config.designations.built'))).toBeInTheDocument();
+      expect(screen.getByText(k('config.designations.built')).closest('[role="status"]')).not.toBeNull();
+      const settled = reads();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(reads()).toBe(settled);
+      view.unmount();
+    });
+
+    it('stops reading the overview again once the screen unmounts', async () => {
+      const view = render(MANAGE, { buildingPollMs: 20 });
+      await screen.findByRole('region', { name: k('config.designations.title') });
+      view.unmount();
+      const settled = reads() + 1;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(reads()).toBeLessThanOrEqual(settled);
+    });
+
+    it('offers only active currencies in the category dialog', async () => {
+      const o = overview();
+      o.currencies = [...o.currencies, { code: 'CZK', active: false, designation: null, designationStatus: null, servedGeneration: 1, building: false }];
+      state.overview = o;
+      render();
+      const section = await screen.findByRole('region', { name: k('config.categories.title') });
+      fireEvent.click(within(section).getByRole('button', { name: k('config.categories.add') }));
+      const dialog = await screen.findByRole('dialog');
+      const codes = within(within(dialog).getByLabelText(k('config.categories.field.currency'))).getAllByRole('option').map((o2) => (o2 as HTMLOptionElement).value);
+      expect(codes).toEqual(['', 'PLN', 'EUR']);
+    });
+
+    it('gives repeated buttons unique names that start with the visible text', async () => {
+      render(MANAGE, {
+        bundle: {
+          'config.categories.deleteNamed': 'Delete category {name}',
+          'config.categories.editNamed': 'Edit category {name}',
+          'config.designations.change': 'Change price book',
+          'config.designations.changeFor': 'Change price book {currency}',
+          'config.designations.clear': 'Use the base book',
+          'config.designations.clearFor': 'Use the base book for {currency}',
+        },
+      });
+      const categories = await screen.findByRole('region', { name: k('config.categories.title') });
+      expect(within(categories).getByRole('button', { name: 'Delete category domestic' })).toBeInTheDocument();
+      expect(within(categories).getByRole('button', { name: 'Edit category export' })).toBeInTheDocument();
+      const designations = screen.getByRole('region', { name: k('config.designations.title') });
+      expect(within(designations).getByRole('button', { name: 'Change price book EUR' })).toHaveTextContent('Change price book');
+      expect(within(designations).getByRole('button', { name: 'Use the base book for EUR' })).toHaveTextContent('Use the base book');
+    });
+
+    it('moves focus on after a category condition is removed', async () => {
+      render();
+      const section = await screen.findByRole('region', { name: k('config.categories.title') });
+      fireEvent.click(within(section).getByRole('button', { name: k('config.categories.add') }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: k('config.categories.addCondition') }));
+      const removes = within(dialog).getAllByRole('button', { name: k('config.categories.removeConditionN') });
+      expect(removes).toHaveLength(2);
+      fireEvent.click(removes[0]!);
+      await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('config.categories.addCondition') })));
+    });
+
+    it('separates a condition\'s currency and threshold with " · "', async () => {
+      render();
+      const section = await screen.findByRole('region', { name: k('config.categories.title') });
+      const row = within(section).getByText('domestic').closest('[data-category-row]') as HTMLElement;
+      expect(row.textContent).toContain(`PLN · ${k('threshold.gt_zero')}`);
+    });
+
+    it('says once when the sales channels could not be loaded', async () => {
+      state.failChannels = true;
+      render();
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      expect(await screen.findAllByText(k('config.error.channels'))).toHaveLength(1);
+    });
+  });
+
   it('creates a category from its name and conditions, and refuses an empty name in its own words', async () => {
     render();
     const section = await screen.findByRole('region', { name: k('config.categories.title') });
@@ -405,7 +519,7 @@ describe('ConfigurationPage (T071)', () => {
     render();
     const section = await screen.findByRole('region', { name: k('config.categories.title') });
     const row = within(section).getByText('domestic').closest('[data-category-row]') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: k('config.categories.delete') }));
+    fireEvent.click(within(row).getByRole('button', { name: k('config.categories.deleteNamed') }));
     const confirm = await screen.findByRole('dialog');
     fireEvent.click(within(confirm).getByRole('button', { name: k('config.categories.delete') }));
     expect(await screen.findByText('Roles are mapped to this visibility category.')).toBeInTheDocument();
@@ -418,7 +532,7 @@ describe('ConfigurationPage (T071)', () => {
     expect(screen.getByText(k('config.readOnly.permission'))).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: k('config.categories.add') })).toBeNull();
-    expect(screen.queryByRole('button', { name: k('config.designations.change') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('config.designations.changeFor') })).toBeNull();
     expect(within(roleRow('Domestic rep')).getByText('domestic')).toBeInTheDocument();
   });
 
@@ -439,7 +553,7 @@ describe('ConfigurationPage (T071)', () => {
     await screen.findByRole('region', { name: k('config.roles.title') });
     expect(screen.getByText(k('config.readOnly.restricted'))).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).toBeNull();
-    expect(screen.queryByRole('button', { name: k('config.designations.change') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('config.designations.changeFor') })).toBeNull();
   });
 
   it('shows a skeleton while loading, and an error with a retry when the read fails', async () => {
