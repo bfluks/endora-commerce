@@ -28,6 +28,30 @@ const EVIL = '<img src=x onerror="window.__pwned=1">';
 let building = false;
 let selfEffect: ProductVisibilityOverviewResponse['roles'][number]['effect'] = 'unmappable_unrestricted';
 
+/** T103 — what `GET /product-rules/:id` answers: RULE_A governs CHANNEL_X, RULE_EVIL governs nothing. */
+const savedRules: Record<string, unknown> = {
+  [RULE_A]: {
+    id: RULE_A,
+    name: 'Flag A',
+    version: 2,
+    definition: { match: 'all', conditions: [{ kind: 'attribute_boolean', attributeKey: 'flag_a', value: true }] },
+    attachments: [{ salesChannelId: CHANNEL_X, attachedAt: '2026-11-20T10:00:00.000Z' }],
+  },
+  [RULE_EVIL]: {
+    id: RULE_EVIL,
+    name: EVIL,
+    version: 1,
+    definition: {
+      match: 'any',
+      conditions: [
+        { kind: 'attribute_choice', attributeKey: 'segment', optionKeys: ['retail', 'gone_option'] },
+        { kind: 'catalogue_price', currencyCode: 'PLN', threshold: 'gte_zero' },
+      ],
+    },
+    attachments: [],
+  },
+};
+
 function overview(): ProductVisibilityOverviewResponse {
   return {
     currencies: [{ code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building }],
@@ -68,11 +92,22 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
             data: {
               items: [
                 { key: 'flag_a', labelDefault: 'Flag A', label: { en: 'Flag A' }, kind: 'boolean', options: [] },
-                { key: 'segment', labelDefault: 'Segment', label: { en: 'Segment' }, kind: 'choice', options: ['retail', 'export'] },
+                {
+                  key: 'segment',
+                  labelDefault: 'Segment',
+                  label: { en: 'Segment' },
+                  kind: 'choice',
+                  options: [
+                    { key: 'retail', labelDefault: 'Retail (default)', label: { 'en-US': 'Retail' } },
+                    { key: 'export', labelDefault: 'Export', label: {} },
+                  ],
+                },
               ],
             },
           };
         }
+        const rule = /\/product-rules\/([^/]+)$/.exec(url);
+        if (rule) return { data: savedRules[rule[1]!] };
         if (url.includes('/website-rules/previews/')) {
           const next = state.previewAnswers.length > 1 ? state.previewAnswers.shift() : state.previewAnswers[0];
           return { data: { ...next, expiresAt: '2026-11-27T12:00:00.000Z' } };
@@ -90,8 +125,8 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         }
         return { data: null };
       },
-      post: async (url: string, body?: unknown) => {
-        state.calls.push({ method: 'POST', url, body });
+      post: async (url: string, body?: unknown, options?: { headers?: unknown }) => {
+        state.calls.push({ method: 'POST', url, body, headers: options?.headers });
         refuseIf('POST', url);
         if (url.endsWith('/website-rules/previews')) return { data: { previewId: PREVIEW } };
         if (url.endsWith('/confirm')) return { data: { status: 'applied' } };
@@ -125,6 +160,14 @@ function render(permissions: readonly string[] = MANAGE) {
       { session: adminSession({ permissions }) },
     ),
   );
+}
+
+async function openEditor(ruleName: string): Promise<HTMLElement> {
+  render();
+  const rules = await screen.findByRole('region', { name: k('rules.list.title') });
+  const row = within(rules).getByText(ruleName).closest('[data-rule-row]') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button', { name: k('rules.edit') }));
+  return screen.findByRole('dialog');
 }
 
 async function openAttach(): Promise<HTMLElement> {
@@ -380,5 +423,164 @@ describe('WebsiteRulesPage (T073)', () => {
     expect(screen.queryByRole('button', { name: k('rules.detach') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.delete') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.rename') })).toBeNull();
+  });
+
+  describe('a saved rule (T103, FR-053, US4-5)', () => {
+    it('shows a choice attribute\'s options by their labels in the operator\'s language and sends their keys', async () => {
+      render();
+      const rules = await screen.findByRole('region', { name: k('rules.list.title') });
+      fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Retail' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') }));
+      const attribute = await within(dialog).findByLabelText(k('rules.editor.field.attribute'));
+      await waitFor(() => expect(within(attribute).getAllByRole('option').length).toBeGreaterThan(1));
+      fireEvent.change(attribute, { target: { value: 'segment' } });
+      // A label in the operator's language (`en` reads `en-US`), else the default label.
+      expect(within(dialog).queryByText('retail')).toBeNull();
+      fireEvent.click(within(dialog).getByLabelText('Retail'));
+      expect(within(dialog).getByLabelText('Export')).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+      await waitFor(() =>
+        expect(state.calls).toContainEqual(
+          expect.objectContaining({
+            method: 'POST',
+            url: '/api/v1/admin/product-visibility/product-rules',
+            body: { name: 'Retail', definition: { match: 'all', conditions: [{ kind: 'attribute_choice', attributeKey: 'segment', optionKeys: ['retail'] }] } },
+          }),
+        ),
+      );
+    });
+
+    it('opens an unattached rule with its conditions and saves a change directly against the version it read', async () => {
+      const dialog = await openEditor(EVIL);
+      expect(state.calls).toContainEqual(expect.objectContaining({ method: 'GET', url: `/api/v1/admin/product-visibility/product-rules/${RULE_EVIL}` }));
+      expect(await within(dialog).findByLabelText('Retail')).toBeChecked();
+      // A saved value the attribute no longer offers is still shown by its key, so it can be removed.
+      expect(within(dialog).getByLabelText('gone_option')).toBeChecked();
+      expect(within(dialog).getByLabelText(k('rules.editor.field.match'))).toHaveValue('any');
+      expect(within(dialog).getByLabelText(k('rules.editor.field.threshold'))).toHaveValue('gte_zero');
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.preview') })).toBeNull();
+      fireEvent.click(within(dialog).getByLabelText('gone_option'));
+      fireEvent.click(within(dialog).getByLabelText('Export'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+      await waitFor(() =>
+        expect(state.calls).toContainEqual({
+          method: 'PATCH',
+          url: `/api/v1/admin/product-visibility/product-rules/${RULE_EVIL}`,
+          body: {
+            definition: {
+              match: 'any',
+              conditions: [
+                { kind: 'attribute_choice', attributeKey: 'segment', optionKeys: ['retail', 'export'] },
+                { kind: 'catalogue_price', currencyCode: 'PLN', threshold: 'gte_zero' },
+              ],
+            },
+          },
+          headers: { 'If-Match': '"1"' },
+        }),
+      );
+      expect(state.calls.some((c) => c.url.endsWith('/website-rules/previews'))).toBe(false);
+    });
+
+    it('shows the server\'s sentence when the rule changed since it was read', async () => {
+      state.refuse = { method: 'PATCH', url: `/product-rules/${RULE_EVIL}`, status: 409, code: 'VERSION_CONFLICT', message: 'The product rule changed since it was read.' };
+      const dialog = await openEditor(EVIL);
+      await within(dialog).findByLabelText('Retail');
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+      expect(await within(dialog).findByText('The product rule changed since it was read.')).toBeInTheDocument();
+    });
+
+    it('changes an attached rule only through a preview of the governed channels, then a confirm (FR-053)', async () => {
+      state.previewAnswers = [
+        { status: 'pending', counts: {} },
+        { status: 'ready', counts: { [CHANNEL_X]: { join: 4, leave: 9 } } },
+      ];
+      const dialog = await openEditor('Flag A');
+      expect(await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'))).toHaveValue('true');
+      expect(within(dialog).getByText(k('rules.editor.governed'))).toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: k('rules.editor.save') })).toBeNull();
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+      fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.booleanValue')), { target: { value: 'false' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      await waitFor(() =>
+        expect(state.calls).toContainEqual({
+          method: 'POST',
+          url: '/api/v1/admin/product-visibility/website-rules/previews',
+          body: { kind: 'change', productRuleId: RULE_A, definition: { match: 'all', conditions: [{ kind: 'attribute_boolean', attributeKey: 'flag_a', value: false }] } },
+          headers: { 'If-Match': '"2"' },
+        }),
+      );
+      expect(within(dialog).getByTestId('preview-status')).toHaveAttribute('aria-live', 'polite');
+      const confirm = await within(dialog).findByRole('button', { name: k('rules.attach.confirm') });
+      const row = within(dialog).getByText('Channel X').closest('[data-preview-row]') as HTMLElement;
+      expect(row).toHaveTextContent('4');
+      expect(row).toHaveTextContent('9');
+      expect(state.calls.some((c) => c.method === 'PATCH')).toBe(false);
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(state.calls).toContainEqual(expect.objectContaining({ method: 'POST', url: `/api/v1/admin/product-visibility/website-rules/previews/${PREVIEW}/confirm` })),
+      );
+      expect(await screen.findByText(k('rules.editor.changeApplied'))).toBeInTheDocument();
+    });
+
+    it('drops a preview when a condition changes after it, and offers a new one', async () => {
+      state.previewAnswers = [{ status: 'ready', counts: { [CHANNEL_X]: { join: 1, leave: 0 } } }];
+      const dialog = await openEditor('Flag A');
+      await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      await within(dialog).findByRole('button', { name: k('rules.attach.confirm') });
+      fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.match')), { target: { value: 'any' } });
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+      expect(within(dialog).getByRole('button', { name: k('rules.attach.preview') })).toBeInTheDocument();
+    });
+
+    it('says a stale or expired change preview is spent and offers a new one; a capped one shows the server\'s sentence', async () => {
+      state.refuse = { method: 'POST', url: '/confirm', status: 409, code: 'WEBSITE_RULE_PREVIEW_STALE', message: 'This preview is no longer current.' };
+      let dialog = await openEditor('Flag A');
+      await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: k('rules.attach.confirm') }));
+      expect(await within(dialog).findByText('This preview is no longer current.')).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: k('rules.attach.preview') })).toBeInTheDocument();
+      cleanup();
+
+      state.previewAnswers = [{ status: 'expired', counts: {} }];
+      dialog = await openEditor('Flag A');
+      await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByText(k('previewStatus.expired'))).toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+      cleanup();
+
+      state.refuse = { method: 'POST', url: '/website-rules/previews', status: 409, code: 'WEBSITE_RULE_PREVIEW_LIMIT', message: 'Too many previews are waiting.' };
+      dialog = await openEditor('Flag A');
+      await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByText('Too many previews are waiting.')).toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+    });
+
+    it('says when a failed preview could not be prepared', async () => {
+      state.previewAnswers = [{ status: 'failed', counts: {} }];
+      const dialog = await openEditor('Flag A');
+      await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByText(k('previewStatus.failed'))).toBeInTheDocument();
+    });
+
+    it('says when the rule could not be loaded, and offers nothing to save', async () => {
+      state.refuse = { method: 'GET', url: `/product-rules/${RULE_A}`, status: 404, code: 'NOT_FOUND', message: 'Product rule not found.' };
+      const dialog = await openEditor('Flag A');
+      expect(await within(dialog).findByText(k('rules.editor.loadFailed'))).toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: k('rules.editor.save') })).toBeNull();
+      expect(within(dialog).queryByRole('button', { name: k('rules.attach.preview') })).toBeNull();
+    });
+
+    it('offers no edit to an operator holding only the read permission', async () => {
+      render(['product_visibility:read']);
+      await screen.findByRole('region', { name: k('rules.list.title') });
+      expect(screen.queryByRole('button', { name: k('rules.edit') })).toBeNull();
+    });
   });
 });

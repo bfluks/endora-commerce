@@ -96,9 +96,15 @@ describe('website rule (spec 193, T056)', () => {
       const rule = await createRule();
       const attributes = await call(h, 'GET', '/attributes');
       expect(attributes.status).toBe(200);
-      const color = (attributes.body.data.items as Array<{ key: string; kind: string; options: string[] }>).find((a) => a.key === 'color');
+      type Option = { key: string; labelDefault: string; label: Record<string, string> };
+      const color = (attributes.body.data.items as Array<{ key: string; kind: string; options: Option[] }>).find((a) => a.key === 'color');
       expect(color).toMatchObject({ kind: 'choice' });
-      expect(color!.options).toEqual(expect.arrayContaining(['red', 'green', 'blue']));
+      expect(color!.options.map((o) => o.key)).toEqual(expect.arrayContaining(['red', 'green', 'blue']));
+      // T103 — each option carries its labels, so the editor shows a label and sends the key.
+      for (const option of color!.options) {
+        expect(typeof option.labelDefault).toBe('string');
+        expect(option.label).toEqual(expect.any(Object));
+      }
       expect((attributes.body.data.items as Array<{ key: string }>).some((a) => a.key === 'internal_sku_notes')).toBe(false);
       const overview = await call(h, 'GET', '/overview');
       expect(overview.body.data.productRules).toEqual(expect.arrayContaining([expect.objectContaining({ id: rule.id, version: 1 })]));
@@ -123,6 +129,41 @@ describe('website rule (spec 193, T056)', () => {
         { path: 'definition.conditions.0.attributeKey', issue: 'unknown_attribute' },
         { path: 'definition.conditions.1.optionKeys', issue: 'unknown_option' },
       ]);
+    });
+
+    it('T103: reads a saved rule — definition, version and the channels it governs — with the read permission', async () => {
+      const channel = await createChannel(h, 'wr-read');
+      const rule = await createRule();
+      const reader = await roleWith(h, ['product_visibility:read'], 'pvr_read');
+      const unattached = await call(h, 'GET', `/product-rules/${rule.id}`, { cookies: reader.cookies });
+      expect(unattached.status, JSON.stringify(unattached.body)).toBe(200);
+      expect(unattached.headers['etag']).toBe('"1"');
+      expect(unattached.body.data).toEqual({ id: rule.id, name: rule.name, version: 1, definition: BLUE, attachments: [] });
+
+      await confirmAndApply(await readyPreview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] }));
+      const attached = await call(h, 'GET', `/product-rules/${rule.id}`);
+      expect(attached.status).toBe(200);
+      expect(attached.body.data.attachments).toEqual([{ salesChannelId: channel, attachedAt: expect.any(String) }]);
+
+      for (const id of [randomUUID(), 'not-a-uuid']) {
+        const missing = await call(h, 'GET', `/product-rules/${id}`);
+        expect(missing.status).toBe(404);
+        expect(missing.body.error.code).toBe(ERROR_CODES.NOT_FOUND);
+        expect(missing.body.error.details ?? []).toEqual([]);
+      }
+      const nobody = await roleWith(h, [], 'pvr_none');
+      expect((await call(h, 'GET', `/product-rules/${rule.id}`, { cookies: nobody.cookies })).status).toBe(403);
+    });
+
+    it('T103: an unattached rule’s definition saves directly against the version read; a stale version is refused', async () => {
+      const rule = await createRule();
+      const saved = await call(h, 'PATCH', `/product-rules/${rule.id}`, { payload: { definition: RED }, ifMatch: '"1"' });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      expect(saved.body.data).toMatchObject({ version: 2, definition: RED });
+      const stale = await call(h, 'PATCH', `/product-rules/${rule.id}`, { payload: { definition: BLUE }, ifMatch: '"1"' });
+      expect(stale.status).toBe(409);
+      expect(stale.body.error.code).toBe(ERROR_CODES.VERSION_CONFLICT);
+      expect((await call(h, 'GET', `/product-rules/${rule.id}`)).body.data.definition).toEqual(RED);
     });
 
     it('refuses a duplicate name', async () => {
@@ -361,6 +402,23 @@ describe('website rule (spec 193, T056)', () => {
       expect(await admissions(h, channel)).not.toContain(blue);
       const overview = await call(h, 'GET', '/overview');
       expect(overview.body.data.productRules.find((r: { id: string }) => r.id === rule.id).version).toBe(2);
+    });
+
+    it('T103: a change preview taken against a version that moved is refused, so a stale edit cannot overwrite a newer one', async () => {
+      const channel = await createChannel(h, 'wr-change-stale');
+      const rule = await createRule();
+      await confirmAndApply(await readyPreview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] }));
+      // Another administrator's change lands first: version 1 → 2.
+      const first = await call(h, 'POST', '/website-rules/previews', { payload: { kind: 'change', productRuleId: rule.id, definition: RED }, ifMatch: '"1"' });
+      expect(first.status, JSON.stringify(first.body)).toBe(202);
+      await websiteRules(h).runPreview(first.body.data.previewId);
+      await confirmAndApply(first.body.data.previewId);
+
+      const stale = await call(h, 'POST', '/website-rules/previews', { payload: { kind: 'change', productRuleId: rule.id, definition: BLUE }, ifMatch: '"1"' });
+      expect(stale.status).toBe(409);
+      expect(stale.body.error.code).toBe(ERROR_CODES.VERSION_CONFLICT);
+      const current = await call(h, 'POST', '/website-rules/previews', { payload: { kind: 'change', productRuleId: rule.id, definition: BLUE }, ifMatch: '"2"' });
+      expect(current.status, JSON.stringify(current.body)).toBe(202);
     });
 
     it('detach keeps the membership, clears the channel’s admissions and ungoverns the channel (FR-058)', async () => {

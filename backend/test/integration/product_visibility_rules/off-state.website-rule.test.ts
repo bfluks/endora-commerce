@@ -80,6 +80,7 @@ describe('product_visibility_rules off-state — website rule (spec 193, T061)',
       // harness's before / restored passes change nothing.
       routes: [
         { url: `${BASE}/attributes`, cookies: ADMIN },
+        { url: `${BASE}/product-rules/${ruleId}`, cookies: ADMIN },
         { method: 'POST', url: `${BASE}/product-rules`, cookies: ADMIN, payload: { name: '', definition: {} } },
         { method: 'PATCH', url: `${BASE}/product-rules/${UNKNOWN}`, cookies: ADMIN, payload: { name: 'Renamed while off' } },
         { method: 'DELETE', url: `${BASE}/product-rules/${UNKNOWN}`, cookies: ADMIN },
