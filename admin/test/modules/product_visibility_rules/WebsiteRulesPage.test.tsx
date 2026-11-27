@@ -26,6 +26,8 @@ const PREVIEW = '00000000-0000-4000-8000-0000000000d1';
 const EVIL = '<img src=x onerror="window.__pwned=1">';
 
 let building = false;
+/** Extra attachments: CHANNEL_Y too, so every channel has a rule. */
+let allGoverned = false;
 let selfEffect: ProductVisibilityOverviewResponse['roles'][number]['effect'] = 'unmappable_unrestricted';
 
 /** T103 — what `GET /product-rules/:id` answers: RULE_A governs CHANNEL_X, RULE_EVIL governs nothing. */
@@ -61,7 +63,10 @@ function overview(): ProductVisibilityOverviewResponse {
       { id: RULE_A, name: 'Flag A', version: 2 },
       { id: RULE_EVIL, name: EVIL, version: 1 },
     ],
-    websiteRuleAttachments: [{ salesChannelId: CHANNEL_X, productRuleId: RULE_A, attachedAt: '2026-11-20T10:00:00.000Z' }],
+    websiteRuleAttachments: [
+      { salesChannelId: CHANNEL_X, productRuleId: RULE_A, attachedAt: '2026-11-20T10:00:00.000Z' },
+      ...(allGoverned ? [{ salesChannelId: CHANNEL_Y, productRuleId: RULE_A, attachedAt: '2026-11-21T10:00:00.000Z' }] : []),
+    ],
   };
 }
 
@@ -69,6 +74,11 @@ const state = vi.hoisted(() => ({
   calls: [] as Array<{ method: string; url: string; body?: unknown; headers?: unknown }>,
   previewAnswers: [] as Array<{ status: string; counts: Record<string, { join: number; leave: number }> }>,
   refuse: null as null | { method: string; url: string; status: number; code: string; message: string },
+  /** While set, a confirm waits for it. */
+  confirmGate: null as null | Promise<void>,
+  /** How many preview reads fail in transport (no answer) before one answers. */
+  transportFailures: 0,
+  failChannels: false,
 }));
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -109,10 +119,15 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         const rule = /\/product-rules\/([^/]+)$/.exec(url);
         if (rule) return { data: savedRules[rule[1]!] };
         if (url.includes('/website-rules/previews/')) {
+          if (state.transportFailures > 0) {
+            state.transportFailures -= 1;
+            throw new TypeError('Failed to fetch');
+          }
           const next = state.previewAnswers.length > 1 ? state.previewAnswers.shift() : state.previewAnswers[0];
           return { data: { ...next, expiresAt: '2026-11-27T12:00:00.000Z' } };
         }
         if (url.includes('/api/v1/admin/sales-channels')) {
+          if (state.failChannels) throw new actual.ApiError(500, { error: { code: 'INTERNAL', message: 'Down.' } } as never);
           return {
             items: [
               { id: CHANNEL_X, code: 'x', name: { 'en-US': 'Channel X' }, active: true },
@@ -129,7 +144,10 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         state.calls.push({ method: 'POST', url, body, headers: options?.headers });
         refuseIf('POST', url);
         if (url.endsWith('/website-rules/previews')) return { data: { previewId: PREVIEW } };
-        if (url.endsWith('/confirm')) return { data: { status: 'applied' } };
+        if (url.endsWith('/confirm')) {
+          if (state.confirmGate) await state.confirmGate;
+          return { data: { status: 'applied' } };
+        }
         return { data: { id: RULE_A, version: 1, ...(body as object) } };
       },
       patch: async (url: string, body?: unknown, options?: { headers?: unknown }) => {
@@ -151,14 +169,15 @@ const { WebsiteRulesPage } = await import('../../../../packages/modules/product_
 
 const MANAGE = ['product_visibility:read', 'product_visibility:manage'];
 
-function render(permissions: readonly string[] = MANAGE) {
+function render(permissions: readonly string[] = MANAGE, props: { slowAfterMs?: number } = {}, bundle: Record<string, string> = {}) {
   return renderWithI18n(
     withSession(
       <MemoryRouter>
-        <WebsiteRulesPage pollIntervalMs={5} />
+        <WebsiteRulesPage pollIntervalMs={5} {...props} />
       </MemoryRouter>,
       { session: adminSession({ permissions }) },
     ),
+    { [MODULE]: bundle },
   );
 }
 
@@ -166,12 +185,12 @@ async function openEditor(ruleName: string): Promise<HTMLElement> {
   render();
   const rules = await screen.findByRole('region', { name: k('rules.list.title') });
   const row = within(rules).getByText(ruleName).closest('[data-rule-row]') as HTMLElement;
-  fireEvent.click(within(row).getByRole('button', { name: k('rules.edit') }));
+  fireEvent.click(within(row).getByRole('button', { name: k('rules.editNamed') }));
   return screen.findByRole('dialog');
 }
 
-async function openAttach(): Promise<HTMLElement> {
-  render();
+async function openAttach(props: { slowAfterMs?: number } = {}): Promise<HTMLElement> {
+  render(MANAGE, props);
   const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
   fireEvent.click(within(governed).getByRole('button', { name: k('rules.attach.open') }));
   const dialog = await screen.findByRole('dialog');
@@ -189,6 +208,10 @@ describe('WebsiteRulesPage (T073)', () => {
       { status: 'ready', counts: { [CHANNEL_Y]: { join: 12, leave: 3 } } },
     ];
     state.refuse = null;
+    state.confirmGate = null;
+    state.transportFailures = 0;
+    state.failChannels = false;
+    allGoverned = false;
     selfEffect = 'unmappable_unrestricted';
     delete (window as unknown as { __pwned?: number }).__pwned;
   });
@@ -378,7 +401,7 @@ describe('WebsiteRulesPage (T073)', () => {
     render();
     const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
     const row = (await within(governed).findByText('Channel X')).closest('[data-attachment-row]') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: k('rules.detach') }));
+    fireEvent.click(within(row).getByRole('button', { name: k('rules.detachFrom') }));
     const confirm = await screen.findByRole('dialog');
     fireEvent.click(within(confirm).getByRole('button', { name: k('rules.detach') }));
     await waitFor(() =>
@@ -391,7 +414,7 @@ describe('WebsiteRulesPage (T073)', () => {
     render();
     const rules = await screen.findByRole('region', { name: k('rules.list.title') });
     const row = within(rules).getByText('Flag A').closest('[data-rule-row]') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: k('rules.delete') }));
+    fireEvent.click(within(row).getByRole('button', { name: k('rules.deleteNamed') }));
     const confirm = await screen.findByRole('dialog');
     fireEvent.click(within(confirm).getByRole('button', { name: k('rules.delete') }));
     expect(await screen.findByText('This product rule governs a sales channel.')).toBeInTheDocument();
@@ -410,7 +433,7 @@ describe('WebsiteRulesPage (T073)', () => {
     await screen.findByRole('region', { name: k('rules.list.title') });
     expect(screen.queryByRole('button', { name: k('rules.editor.new') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.attach.open') })).toBeNull();
-    expect(screen.queryByRole('button', { name: k('rules.detach') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.detachFrom') })).toBeNull();
   });
 
   it('is read-only for a manage holder whose own role is restricted (TM-4 c) (QA)', async () => {
@@ -420,9 +443,122 @@ describe('WebsiteRulesPage (T073)', () => {
     expect(screen.getByText(k('config.readOnly.restricted'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: k('rules.editor.new') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.attach.open') })).toBeNull();
-    expect(screen.queryByRole('button', { name: k('rules.detach') })).toBeNull();
-    expect(screen.queryByRole('button', { name: k('rules.delete') })).toBeNull();
-    expect(screen.queryByRole('button', { name: k('rules.rename') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.detachFrom') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.deleteNamed') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.renameNamed') })).toBeNull();
+  });
+
+  describe('preview flow, checkpoint 2 fix round', () => {
+    it('moves focus to Confirm when the preview is ready', async () => {
+      const dialog = await openAttach();
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      const confirm = await within(dialog).findByRole('button', { name: k('rules.attach.confirm') });
+      await waitFor(() => expect(document.activeElement).toBe(confirm));
+    });
+
+    it('keeps the buttons and selects focusable while busy: aria-disabled, not disabled', async () => {
+      state.previewAnswers = [{ status: 'pending', counts: {} }];
+      const dialog = await openAttach();
+      const preview = within(dialog).getByRole('button', { name: k('rules.attach.preview') });
+      fireEvent.click(preview);
+      await waitFor(() => expect(preview).toHaveAttribute('aria-disabled', 'true'));
+      expect(preview).not.toBeDisabled();
+      cleanup();
+
+      let release = (): void => undefined;
+      state.confirmGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      state.previewAnswers = [{ status: 'ready', counts: { [CHANNEL_Y]: { join: 1, leave: 0 } } }];
+      const again = await openAttach();
+      fireEvent.click(within(again).getByRole('button', { name: k('rules.attach.preview') }));
+      const confirm = await within(again).findByRole('button', { name: k('rules.attach.confirm') });
+      fireEvent.click(confirm);
+      const channel = within(again).getByLabelText(k('rules.attach.field.channel'), { exact: false });
+      await waitFor(() => expect(confirm).toHaveAttribute('aria-disabled', 'true'));
+      expect(confirm).not.toBeDisabled();
+      expect(channel).toHaveAttribute('aria-disabled', 'true');
+      expect(channel).not.toBeDisabled();
+      expect(within(again).getByRole('button', { name: k('config.cancel') })).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.change(channel, { target: { value: '' } });
+      expect((channel as HTMLSelectElement).value).toBe(CHANNEL_Y);
+      release();
+    });
+
+    it('says a refusal in the always-mounted polite region, not in a freshly mounted alert', async () => {
+      state.refuse = { method: 'POST', url: '/confirm', status: 409, code: 'WEBSITE_RULE_PREVIEW_STALE', message: 'This preview is no longer current.' };
+      const dialog = await openAttach();
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: k('rules.attach.confirm') }));
+      await waitFor(() => expect(within(dialog).getByTestId('preview-status')).toHaveTextContent('This preview is no longer current.'));
+      expect(within(dialog).getAllByText('This preview is no longer current.')).toHaveLength(1);
+      expect(within(dialog).queryByRole('alert')).toBeNull();
+    });
+
+    it('says when a preview takes longer than usual, and offers a new preview', async () => {
+      state.previewAnswers = [{ status: 'pending', counts: {} }];
+      const dialog = await openAttach({ slowAfterMs: 30 });
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByText(k('preview.slow'))).toBeInTheDocument();
+      const creates = (): number => state.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/website-rules/previews')).length;
+      expect(creates()).toBe(1);
+      fireEvent.click(within(dialog).getByRole('button', { name: k('preview.again') }));
+      await waitFor(() => expect(creates()).toBe(2));
+    });
+
+    it('asks once more after a transport error before it gives up', async () => {
+      state.transportFailures = 1;
+      state.previewAnswers = [{ status: 'ready', counts: { [CHANNEL_Y]: { join: 2, leave: 1 } } }];
+      const dialog = await openAttach();
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByRole('button', { name: k('rules.attach.confirm') })).toBeInTheDocument();
+      cleanup();
+
+      state.transportFailures = 2;
+      const failing = await openAttach();
+      fireEvent.click(within(failing).getByRole('button', { name: k('rules.attach.preview') }));
+      await waitFor(() => expect(within(failing).getByTestId('preview-status')).toHaveTextContent(k('rules.attach.previewFailed')));
+      expect(within(failing).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+    });
+
+    it('says "nothing will change" for a preview with nothing joining or leaving', async () => {
+      state.previewAnswers = [{ status: 'ready', counts: { [CHANNEL_Y]: { join: 0, leave: 0 } } }];
+      const dialog = await openAttach();
+      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+      expect(await within(dialog).findByText(k('rules.attach.nothingChanges'))).toBeInTheDocument();
+    });
+
+    it('says when every sales channel already has a rule', async () => {
+      allGoverned = true;
+      render();
+      const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
+      fireEvent.click(within(governed).getByRole('button', { name: k('rules.attach.open') }));
+      const dialog = await screen.findByRole('dialog');
+      expect(await within(dialog).findByText(k('rules.attach.allGoverned'))).toBeInTheDocument();
+    });
+
+    it('says when the sales channels could not be loaded, once', async () => {
+      state.failChannels = true;
+      render();
+      await screen.findByRole('region', { name: k('rules.channels.title') });
+      expect(await screen.findAllByText(k('config.error.channels'))).toHaveLength(1);
+    });
+
+    it('gives repeated row buttons unique names that start with the visible text', async () => {
+      render(MANAGE, {}, {
+        'rules.detach': 'Detach rule',
+        'rules.detachFrom': 'Detach rule from {channel}',
+        'rules.deleteNamed': 'Delete rule {name}',
+        'rules.editNamed': 'Edit conditions of {name}',
+        'rules.renameNamed': 'Rename rule {name}',
+      });
+      const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
+      expect(await within(governed).findByRole('button', { name: 'Detach rule from Channel X' })).toHaveTextContent('Detach rule');
+      const rules = screen.getByRole('region', { name: k('rules.list.title') });
+      expect(within(rules).getByRole('button', { name: 'Delete rule Flag A' })).toBeInTheDocument();
+      expect(within(rules).getByRole('button', { name: 'Edit conditions of Flag A' })).toBeInTheDocument();
+      expect(within(rules).getByRole('button', { name: 'Rename rule Flag A' })).toBeInTheDocument();
+    });
   });
 
   describe('a saved rule (T103, FR-053, US4-5)', () => {
@@ -599,7 +735,7 @@ describe('WebsiteRulesPage (T073)', () => {
     it('offers no edit to an operator holding only the read permission', async () => {
       render(['product_visibility:read']);
       await screen.findByRole('region', { name: k('rules.list.title') });
-      expect(screen.queryByRole('button', { name: k('rules.edit') })).toBeNull();
+      expect(screen.queryByRole('button', { name: k('rules.editNamed') })).toBeNull();
     });
   });
 });
