@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   PRODUCT_RULE_MAX_CONDITIONS,
@@ -10,13 +10,15 @@ import {
 } from '@endora-commerce/contracts';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
-import { Alert, AlertDescription, Button, Checkbox, FormField, Input, Label, Select } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Checkbox, FormField, InlineStatus, Input, Label, Select, useInlineStatus } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
-import { INERT_CLASS, localized, refusalMessage, thresholdLabels } from '../lib/labels.js';
+import { INERT_CLASS, localized, refusalCode, refusalMessage, STALE_RULE_CODES, thresholdLabels } from '../lib/labels.js';
 import { usePreviewFlow } from '../lib/use-preview-flow.js';
 import { PreviewPanel } from './PreviewPanel.js';
 
 type Attribute = ProductRuleAttributesResponse['items'][number];
+
+const EMPTY_ATTRIBUTE_CONDITION: ConditionDraft = { kind: 'attribute', attributeKey: '', value: '', optionKeys: [] };
 
 type ConditionDraft =
   | { kind: 'attribute'; attributeKey: string; value: '' | 'true' | 'false'; optionKeys: string[] }
@@ -78,10 +80,23 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
   const [attributesFailed, setAttributesFailed] = useState(false);
   const [name, setName] = useState('');
   const [match, setMatch] = useState<'all' | 'any'>('all');
-  const [conditions, setConditions] = useState<ConditionDraft[]>([]);
+  // A new rule starts with one condition to fill in, not an empty list (Tesler).
+  const [conditions, setConditions] = useState<ConditionDraft[]>(editing ? [] : [EMPTY_ATTRIBUTE_CONDITION]);
   const [errors, setErrors] = useState<{ name?: string; conditions?: string; each: Array<string | undefined> } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [refusal, setRefusal] = useState<string | null>(null);
+  // Refusals are said in this always-mounted polite region (SC 4.1.3), not a freshly mounted alert.
+  const status = useInlineStatus();
+  const { show: showStatus } = status;
+  /** A save was refused because the rule moved since it was read: offer to load it again. */
+  const [conflict, setConflict] = useState(false);
+  /** Bumped to read the saved rule again ("Load the current version"). */
+  const [readTicket, setReadTicket] = useState(0);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const addAttributeRef = useRef<HTMLButtonElement | null>(null);
+  /** After a removal: the index whose remove button takes focus, else "add condition". */
+  const focusAfterRemoval = useRef<number | null>(null);
+  /** Bumped by a refused validation: focus moves to the first invalid field. */
+  const [invalidTicket, setInvalidTicket] = useState(0);
   const flow = usePreviewFlow(pollIntervalMs, slowAfterMs);
   const { reset: resetPreview } = flow;
 
@@ -111,14 +126,39 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
         setMatch(rule.definition.match);
         // A grouped definition (API only) is not something this editor builds; it is not opened.
         setConditions(rule.definition.conditions.flatMap((c) => (c.kind === 'group' ? [] : [toDraft(c)])));
+        setConflict(false);
+        if (readTicket > 0) showStatus(t('rules.editor.reloaded'), 'info');
       })
       .catch(() => {
-        if (live) setSavedFailed(true);
+        if (!live) return;
+        // A first read that fails leaves nothing to edit; a re-read keeps what is on screen.
+        if (readTicket === 0) setSavedFailed(true);
+        else showStatus(t('rules.editor.loadFailed'), 'error');
       });
     return (): void => {
       live = false;
     };
-  }, [ruleId]);
+  }, [ruleId, readTicket, showStatus, t]);
+
+  // Focus after a removal: the next condition's remove button, else "add condition" (SC 2.4.3).
+  useEffect(() => {
+    const index = focusAfterRemoval.current;
+    if (index === null) return;
+    focusAfterRemoval.current = null;
+    const buttons = formRef.current?.querySelectorAll<HTMLButtonElement>('[data-remove-condition]');
+    (buttons?.[index] ?? buttons?.[index - 1] ?? addAttributeRef.current)?.focus();
+  }, [conditions]);
+
+  // Focus after a refused validation: the first invalid field (SC 3.3.1).
+  useEffect(() => {
+    if (invalidTicket === 0) return;
+    const form = formRef.current;
+    const target =
+      form?.querySelector<HTMLElement>('[aria-invalid="true"]') ??
+      form?.querySelector<HTMLElement>('[data-invalid-group] input') ??
+      addAttributeRef.current;
+    target?.focus();
+  }, [invalidTicket]);
 
   const governed = saved !== null && saved.attachments.length > 0;
   const grouped = saved !== null && saved.definition.conditions.some((c) => c.kind === 'group');
@@ -190,15 +230,19 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
     if (!ready || governed || saving || waiting) return;
     const { definition, found } = build();
     setErrors(found);
-    if (!definition) return;
+    if (!definition) {
+      setInvalidTicket((n) => n + 1);
+      return;
+    }
     setSaving(true);
-    setRefusal(null);
+    status.clear();
     try {
       if (saved) await productVisibilityClient.updateRule(saved, { definition });
       else await productVisibilityClient.createRule({ name: name.trim(), definition });
       await onSaved('saved');
     } catch (err) {
-      setRefusal(refusalMessage(err, t('config.error.write')));
+      showStatus(refusalMessage(err, t('config.error.write')), 'error');
+      setConflict(editing && STALE_RULE_CODES.has(refusalCode(err) ?? ''));
     } finally {
       setSaving(false);
     }
@@ -208,12 +252,17 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
     if (!saved || flow.busy || waiting) return;
     const { definition, found } = build();
     setErrors(found);
-    if (!definition) return;
+    if (!definition) {
+      setInvalidTicket((n) => n + 1);
+      return;
+    }
     await flow.start(() => productVisibilityClient.createPreview({ kind: 'change', productRuleId: saved.id, definition }, saved.version));
   };
 
   const applying = flow.preview.phase === 'applying';
   const locked = saving || applying || !ready;
+  /** The rule moved since it was read (a refused save, or a stale change preview): offer a re-read. */
+  const stale = editing && (conflict || STALE_RULE_CODES.has(flow.refusalCode ?? ''));
   // T103 — until the attribute list answers, a saved attribute condition cannot be shown by its
   // label nor checked, so Save and Preview wait (aria-disabled, with the reason beside them).
   const waiting = attributes === null && !attributesFailed;
@@ -289,12 +338,15 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
           <AlertDescription>{t('rules.editor.grouped')}</AlertDescription>
         </Alert>
       ) : (
-        <form id={formId} noValidate onSubmit={(e): void => void submit(e)} className="space-y-4">
-          {refusal ? (
-            <Alert variant="destructive">
-              <AlertDescription>{refusal}</AlertDescription>
-            </Alert>
-          ) : null}
+        <form ref={formRef} id={formId} noValidate onSubmit={(e): void => void submit(e)} className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <InlineStatus {...status.props} />
+            {stale ? (
+              <Button type="button" size="sm" variant="outline" onClick={(): void => setReadTicket((n) => n + 1)}>
+                {t('rules.editor.reload')}
+              </Button>
+            ) : null}
+          </div>
           {attributesFailed ? (
             <Alert variant="warning">
               <AlertDescription>{t('rules.editor.attributesFailed')}</AlertDescription>
@@ -317,6 +369,9 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
             </FormField>
             <fieldset className="space-y-3">
               <legend className="text-sm font-medium">{t('rules.editor.conditions')}</legend>
+              {attributes !== null && attributes.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t('rules.editor.noAttributes')}</p>
+              ) : null}
               {conditions.map((condition, index) => (
                 <div key={index} className="space-y-2 rounded-md border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
@@ -327,8 +382,12 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
                       type="button"
                       variant="ghost"
                       size="sm"
-                      aria-label={t('rules.editor.removeCondition')}
-                      onClick={(): void => setConditions((prev) => prev.filter((_, i) => i !== index))}
+                      data-remove-condition
+                      aria-label={t('rules.editor.removeConditionN', { n: index + 1 })}
+                      onClick={(): void => {
+                        focusAfterRemoval.current = index;
+                        setConditions((prev) => prev.filter((_, i) => i !== index));
+                      }}
                     >
                       <X aria-hidden="true" />
                     </Button>
@@ -380,11 +439,12 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
               ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button
+                  ref={addAttributeRef}
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={atLimit}
-                  onClick={(): void => setConditions((prev) => [...prev, { kind: 'attribute', attributeKey: '', value: '', optionKeys: [] }])}
+                  onClick={(): void => setConditions((prev) => [...prev, EMPTY_ATTRIBUTE_CONDITION])}
                 >
                   <Plus aria-hidden="true" />
                   {t('rules.editor.addAttribute')}
@@ -406,6 +466,11 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
             </fieldset>
           </fieldset>
           {governed ? <PreviewPanel flow={flow} channelName={channelName ?? ((id: string): string => id)} /> : null}
+          {waiting ? (
+            <p id={waitingId} className="text-xs text-muted-foreground">
+              {t('rules.editor.waitingAttributes')}
+            </p>
+          ) : null}
         </form>
       )}
     </ModalDialog>
@@ -470,7 +535,7 @@ function AttributeConditionFields({
         </FormField>
       ) : null}
       {attribute?.kind === 'choice' ? (
-        <fieldset className="space-y-1" aria-describedby={error ? `${groupId}-error` : undefined}>
+        <fieldset className="space-y-1" data-invalid-group={error ? true : undefined} aria-describedby={error ? `${groupId}-error` : undefined}>
           <legend className="text-sm font-medium">{t('rules.editor.field.options')}</legend>
           {options.map((option) => {
             const id = `${groupId}-${option.key}`;

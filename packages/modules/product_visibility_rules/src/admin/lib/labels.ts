@@ -93,6 +93,18 @@ export function refusalMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** The code of an API refusal (`VERSION_CONFLICT`, …), or `null` for a failure that carries none. */
+export function refusalCode(err: unknown): string | null {
+  if (err instanceof ApiError) {
+    const code = err.envelope?.error?.code;
+    if (typeof code === 'string' && code !== '') return code;
+  }
+  return null;
+}
+
+/** The refusals after which the rule shown is no longer the one stored (T103). */
+export const STALE_RULE_CODES: ReadonlySet<string> = new Set(['VERSION_CONFLICT', 'WEBSITE_RULE_PREVIEW_STALE']);
+
 /**
  * A per-language text in the operator's language: an exact tag, else the same language under any
  * region (`pl` matches `pl-PL` and the other way round), else `undefined`. Stores key these by

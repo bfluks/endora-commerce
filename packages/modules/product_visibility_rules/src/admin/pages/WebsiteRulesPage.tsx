@@ -251,7 +251,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000, slowAfterMs = PREVIEW_
 
           {dialog === 'new' ? (
             <RuleEditorDialog
-              currencies={overview.currencies.map((c) => c.code)}
+              currencies={overview.currencies.filter((c) => c.active).map((c) => c.code)}
               onClose={(): void => setDialog(null)}
               onSaved={async (): Promise<void> => {
                 setDialog(null);
@@ -280,7 +280,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000, slowAfterMs = PREVIEW_
             <RuleEditorDialog
               key={dialog.edit.id}
               ruleId={dialog.edit.id}
-              currencies={overview.currencies.map((c) => c.code)}
+              currencies={overview.currencies.filter((c) => c.active).map((c) => c.code)}
               channelName={nameOfChannel}
               pollIntervalMs={pollIntervalMs}
               slowAfterMs={slowAfterMs}

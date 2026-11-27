@@ -3,7 +3,7 @@ import type { WebsiteRulePreviewResponse } from '@endora-commerce/contracts';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { productVisibilityClient } from '../api.js';
-import { previewStatusLabels, refusalMessage } from './labels.js';
+import { previewStatusLabels, refusalCode, refusalMessage } from './labels.js';
 
 export type PreviewCounts = WebsiteRulePreviewResponse['counts'];
 
@@ -19,6 +19,8 @@ export interface PreviewFlow {
   readonly preview: PreviewState;
   /** The server's sentence for a refused create, poll or confirm; `null` when there is none. */
   readonly refusal: string | null;
+  /** The refusal's code (`WEBSITE_RULE_PREVIEW_STALE`, …); `null` when there is none. */
+  readonly refusalCode: string | null;
   /** Creating, counting or applying: the preview button waits. */
   readonly busy: boolean;
   /** The counts of a ready (or applying) preview — the only state in which a confirm is offered. */
@@ -55,13 +57,20 @@ function isTransient(err: unknown): boolean {
   return !(err instanceof ApiError) || err.status >= 500;
 }
 
+interface Refusal {
+  readonly message: string;
+  readonly code: string | null;
+}
+
+const refusalOf = (err: unknown, fallback: string): Refusal => ({ message: refusalMessage(err, fallback), code: refusalCode(err) });
+
 /** About 75 s: a preview still pending after that says so and offers a new one (Doherty, Peak-End). */
 export const PREVIEW_SLOW_AFTER_MS = 75_000;
 
 export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PREVIEW_SLOW_AFTER_MS): PreviewFlow {
   const t = useTranslation('product_visibility_rules');
   const [preview, setPreview] = useState<PreviewState>({ phase: 'idle' });
-  const [refusal, setRefusal] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [slow, setSlow] = useState(false);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const lastCreate = useRef<(() => Promise<{ previewId: string }>) | null>(null);
@@ -111,7 +120,7 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
               return;
             }
             setSlow(false);
-            setRefusal(refusalMessage(err, t('rules.attach.previewFailed')));
+            setRefusal(refusalOf(err, t('rules.attach.previewFailed')));
             setPreview({ phase: 'ended', status: null });
           });
       }, pollIntervalMs);
@@ -135,7 +144,7 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
         poll(previewId, mine);
       } catch (err) {
         if (mine !== ticket.current) return;
-        setRefusal(refusalMessage(err, t('rules.attach.previewFailed')));
+        setRefusal(refusalOf(err, t('rules.attach.previewFailed')));
         setPreview({ phase: 'ended', status: null });
       }
     },
@@ -152,7 +161,7 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
         await onApplied();
       } catch (err) {
         // Stale (expired, rule moved, channel taken) or already governed: this preview is spent.
-        setRefusal(refusalMessage(err, t('config.error.write')));
+        setRefusal(refusalOf(err, t('config.error.write')));
         setPreview({ phase: 'ended', status: null });
       }
     },
@@ -171,7 +180,7 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
   const busy = preview.phase === 'creating' || preview.phase === 'pending' || preview.phase === 'applying';
   const counts = preview.phase === 'ready' || preview.phase === 'applying' ? preview.counts : null;
   const statusText = ((): string => {
-    if (refusal !== null) return refusal;
+    if (refusal !== null) return refusal.message;
     if (preview.phase === 'creating' || preview.phase === 'pending') {
       return slow && preview.phase === 'pending' ? t('preview.slow') : previewStatusLabels.label(t, 'pending');
     }
@@ -180,5 +189,5 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
     return '';
   })();
 
-  return { preview, refusal, busy, counts, statusText, slow: slow && preview.phase === 'pending', confirmRef, again, start, confirm, reset, stop };
+  return { preview, refusal: refusal?.message ?? null, refusalCode: refusal?.code ?? null, busy, counts, statusText, slow: slow && preview.phase === 'pending', confirmRef, again, start, confirm, reset, stop };
 }
