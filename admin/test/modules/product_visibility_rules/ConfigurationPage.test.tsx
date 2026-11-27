@@ -307,6 +307,12 @@ describe('ConfigurationPage (T071)', () => {
       expect(within(row).getAllByText(/notMappable|unmappable/)).toHaveLength(1);
     });
 
+    it('names the "remove mapping" button by its role', async () => {
+      render(MANAGE, { bundle: { 'config.roles.removeMapping': 'Remove mapping', 'config.roles.removeMappingOf': 'Remove mapping of {role}' } });
+      await screen.findByRole('region', { name: k('config.roles.title') });
+      expect(within(roleRow('Ops')).getByRole('button', { name: 'Remove mapping of Ops' })).toHaveTextContent('Remove mapping');
+    });
+
     it('labels the roles table by the section heading', async () => {
       render();
       const section = await screen.findByRole('region', { name: k('config.roles.title') });
@@ -342,11 +348,17 @@ describe('ConfigurationPage (T071)', () => {
       render();
       await screen.findByRole('region', { name: k('config.roles.title') });
       fireEvent.change(within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: CAT_DOMESTIC } });
+      const first = within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') });
       const other = within(roleRow('Domestic rep')).getByRole('combobox', { name: k('config.roles.mappingFor') });
       expect(other).not.toHaveAttribute('aria-disabled', 'true');
       fireEvent.change(other, { target: { value: CAT_EXPORT } });
       await waitFor(() => expect(state.calls.filter((c) => c.method === 'PUT')).toHaveLength(2));
+      // Both rows are busy at once: one row's write does not clear the other's.
+      expect(first).toHaveAttribute('aria-disabled', 'true');
+      expect(other).toHaveAttribute('aria-disabled', 'true');
       release();
+      await waitFor(() => expect(first).not.toHaveAttribute('aria-disabled', 'true'));
+      expect(other).not.toHaveAttribute('aria-disabled', 'true');
     });
 
     it('asks before a mapped role loses its mapping, and writes nothing when the question is cancelled', async () => {
@@ -473,6 +485,19 @@ describe('ConfigurationPage (T071)', () => {
       const removes = within(dialog).getAllByRole('button', { name: k('config.categories.removeConditionN') });
       expect(removes).toHaveLength(2);
       fireEvent.click(removes[0]!);
+      await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('config.categories.addCondition') })));
+    });
+
+    it('moves focus to "add condition" when the last of several category conditions is removed', async () => {
+      render();
+      const section = await screen.findByRole('region', { name: k('config.categories.title') });
+      fireEvent.click(within(section).getByRole('button', { name: k('config.categories.add') }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: k('config.categories.addCondition') }));
+      fireEvent.click(within(dialog).getByRole('button', { name: k('config.categories.addCondition') }));
+      const removes = within(dialog).getAllByRole('button', { name: k('config.categories.removeConditionN') });
+      expect(removes).toHaveLength(3);
+      fireEvent.click(removes[2]!);
       await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('config.categories.addCondition') })));
     });
 

@@ -516,6 +516,8 @@ describe('WebsiteRulesPage (T073)', () => {
       expect(creates()).toBe(1);
       fireEvent.click(within(dialog).getByRole('button', { name: k('preview.again') }));
       await waitFor(() => expect(creates()).toBe(2));
+      // The button leaves with the slow state: focus goes to the (waiting) preview button, not the page.
+      expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
     });
 
     it('asks once more after a transport error before it gives up', async () => {
@@ -784,6 +786,16 @@ describe('WebsiteRulesPage (T073)', () => {
         await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') })));
       });
 
+      it('moves focus to "add condition" when the last of several conditions is removed', async () => {
+        const dialog = await openNew();
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addPrice') }));
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addPrice') }));
+        const removes = within(dialog).getAllByRole('button', { name: k('rules.editor.removeConditionN') });
+        expect(removes).toHaveLength(3);
+        fireEvent.click(removes[2]!);
+        await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') })));
+      });
+
       it('offers only active currencies for a price condition', async () => {
         const dialog = await openNew();
         fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addPrice') }));
@@ -823,6 +835,8 @@ describe('WebsiteRulesPage (T073)', () => {
           await waitFor(() => expect(state.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/product-rules/${RULE_EVIL}`))).toHaveLength(2));
           expect(screen.getByRole('dialog')).toBe(dialog);
           await waitFor(() => expect(within(dialog).queryByRole('button', { name: k('rules.editor.reload') })).toBeNull());
+          // The button leaves once the rule is re-read: focus goes to the first field, not the page.
+          await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText(k('rules.editor.field.match'))));
           fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
           await waitFor(() => expect(state.calls).toContainEqual(expect.objectContaining({ method: 'PATCH', headers: { 'If-Match': '"5"' } })));
         } finally {
